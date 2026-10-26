@@ -13,13 +13,13 @@
     },
     "repo": "Homebrew/brew"
   },
-  "checked_at": "2026-10-26T18:56:21+00:00",
+  "checked_at": "2026-10-26T19:00:00+00:00",
   "core": {
     "default_branch": "main",
-    "head_date": "2026-10-26T18:51:37Z",
-    "head_message": "Merge pull request #321417 from Homebrew/bump-baguette-0.2.11",
-    "head_sha": "4eb2e290b81f28d91622fb22b8d86d78badec906",
-    "head_url": "https://github.com/Homebrew/homebrew-core/commit/4eb2e290b81f28d91622fb22b8d86d78badec906",
+    "head_date": "2026-10-26T18:54:31Z",
+    "head_message": "Merge pull request #321440 from Homebrew/bump-rocksdb-11.12",
+    "head_sha": "789f68cc9f3a91be54591baba1e2e55a8f1ca0e9",
+    "head_url": "https://github.com/Homebrew/homebrew-core/commit/789f68cc9f3a91be54591baba1e2e55a8f1ca0e9",
     "release": null,
     "repo": "Homebrew/homebrew-core"
   }
