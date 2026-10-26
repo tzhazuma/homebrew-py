@@ -118,3 +118,26 @@ The fork branch remains at `tzhazuma/brew:python-port-rfc` and the proposal text
 kept in `docs/python-port-rfc.md` for a human follow-up (fill the template, disclose
 AI usage, run applicable checks). No attempt was made to evade the bot by
 misrepresenting authorship.
+
+## GitHub repository, CI and upstream tracking
+
+- Repository: <https://github.com/tzhazuma/homebrew-py>
+- CI run (latest at the time of writing): <https://github.com/tzhazuma/homebrew-py/actions/runs/40382704108>
+  - `test (ubuntu-latest, py3.9)` — success
+  - `test (ubuntu-latest, py3.12)` — success
+  - `test (macos-latest, py3.12)` — success
+- Upstream tracking workflow dispatch:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40382724086> — success.
+  It detected a new homebrew-core HEAD and opened
+  <https://github.com/tzhazuma/homebrew-py/issues/1>.
+- Weekly local reminder: Monday 09:00 Asia/Shanghai (DSH schedule
+  `schedule-d10d92c4-71a3-4de1-8f49-5016c0c51d3a`).
+
+## Upstream RFC PR outcome
+
+The draft RFC PR <https://github.com/Homebrew/brew/pull/24362> was created, then
+automatically closed by Homebrew's PR-template bot (missing template, possible
+AI authorship warning). The fork branch `tzhazuma/brew:python-port-rfc` remains
+available. A human follow-up would need to fill the upstream
+`PULL_REQUEST_TEMPLATE.md`, disclose AI usage as required, and run applicable
+checks; no attempt was made to bypass that human-review gate.

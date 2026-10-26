@@ -139,7 +139,13 @@ pytest -q
 python scripts/track_upstream.py --state .upstream-state.json --report .upstream-report.md
 ```
 
-- 本地 DSH 会话还设置了每周提醒，用于跟进上游变更并更新公式语料/解析器。
+- 本地 DSH 会话还设置了每周提醒（周一 09:00 Asia/Shanghai），用于跟进上游变更并更新
+  公式语料/解析器。
+
+验证记录：CI 矩阵 3/3 通过（Ubuntu Python 3.9、Ubuntu Python 3.12、macOS Python
+3.12）；`Track Homebrew upstream` workflow 手动触发成功，并已自动创建
+[issue #1](https://github.com/tzhazuma/homebrew-py/issues/1) 记录检测到的
+homebrew-core 变更。
 
 ## 上游 PR
 
