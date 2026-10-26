@@ -1,5 +1,7 @@
 # homebrew-py / pybrew
 
+[![CI](https://github.com/tzhazuma/homebrew-py/actions/workflows/ci.yml/badge.svg)](https://github.com/tzhazuma/homebrew-py/actions/workflows/ci.yml)
+
 用 Python 重新实现 Homebrew 核心功能的工程原型。目标不是简单包一层 Ruby，而是把
 Formula 解析、依赖解析、Cellar、bottle 安装、链接/卸载和 receipt 全部用 Python
 重新实现，并用真实 homebrew-core 公式和真实 Homebrew bottle 做回归验证。
@@ -144,10 +146,17 @@ python scripts/track_upstream.py --state .upstream-state.json --report .upstream
 已向上游提交一个 **draft RFC PR**（不是要求合并的代码 PR），说明 Python 原型、验证
 结果、差异和需要维护者反馈的问题：
 
-- PR：<https://github.com/Homebrew/brew/pull/24362> （draft RFC，可能被上游关闭）
+- PR：<https://github.com/Homebrew/brew/pull/24362>
 - 提案正文：[docs/python-port-rfc.md](docs/python-port-rfc.md)
 
-Homebrew 维护者是否会接受这种方向，最终由上游决定；该 PR 明确标注为 RFC，可随时关闭。
+**结果说明：** 该 PR 创建后约 12 秒被上游的 PR 模板机器人自动关闭，原因是缺少
+Homebrew 的 `PULL_REQUEST_TEMPLATE.md`；机器人提示它可能由 AI 生成。Homebrew 的模板
+要求提交者逐项勾选并披露 AI 使用、由人类跟进 review。也就是说，这是上游流程门槛，
+不是对代码/方向的技术否决。
+
+如果要以人类账号继续，需要：填写上游 PR 模板、按模板披露 AI 使用、运行适用的
+`brew lgtm`，并由提交者本人回应 review。当前分支仍在 fork
+`tzhazuma/brew:python-port-rfc` 上，可在此基础上重开/重提。
 
 ## 目录结构
 

@@ -104,3 +104,17 @@ install, `doctor`, `list`, `deps`, `search`, `config`, and `parse`.
 - Mach-O binary relocation was not validated by running the installed dylib.
 
 These are tracked in the README roadmap and `docs/parity.md`.
+
+## Upstream PR attempt
+
+A draft RFC PR was opened against `Homebrew/brew`:
+
+- <https://github.com/Homebrew/brew/pull/24362>
+
+It was automatically closed after ~12 seconds by Homebrew's PR-template bot because
+the body did not match `PULL_REQUEST_TEMPLATE.md`; the bot also warned that the PR
+appeared AI-generated. This is an upstream process gate, not a technical review.
+The fork branch remains at `tzhazuma/brew:python-port-rfc` and the proposal text is
+kept in `docs/python-port-rfc.md` for a human follow-up (fill the template, disclose
+AI usage, run applicable checks). No attempt was made to evade the bot by
+misrepresenting authorship.
