@@ -4,6 +4,8 @@
 
 Repository: <https://github.com/tzhazuma/homebrew-py>
 
+Upstream draft PR: <https://github.com/Homebrew/brew/pull/24362>
+
 ## Motivation
 
 Homebrew is one of the most widely used pieces of macOS/Linux infrastructure, and

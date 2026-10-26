@@ -144,7 +144,7 @@ python scripts/track_upstream.py --state .upstream-state.json --report .upstream
 已向上游提交一个 **draft RFC PR**（不是要求合并的代码 PR），说明 Python 原型、验证
 结果、差异和需要维护者反馈的问题：
 
-- PR：<!-- upstream-pr-link -->
+- PR：<https://github.com/Homebrew/brew/pull/24362> （draft RFC，可能被上游关闭）
 - 提案正文：[docs/python-port-rfc.md](docs/python-port-rfc.md)
 
 Homebrew 维护者是否会接受这种方向，最终由上游决定；该 PR 明确标注为 RFC，可随时关闭。
