@@ -1,0 +1,314 @@
+{
+  "abseil": {
+    "bottle_tags_in_source": null,
+    "build_dependencies": [
+      "cmake",
+      "googletest"
+    ],
+    "dependencies": [],
+    "desc": "C++ Common Libraries",
+    "homebrew_api_sha256": "593fc7901a8949808a470c6b505b095cb0944367e64b2db876ea73661e59b3e7",
+    "homepage": "https://abseil.io",
+    "keg_only": false,
+    "license": "Apache-2.0",
+    "name": "abseil",
+    "revision": 0,
+    "ruby_source_sha256": "593fc7901a8949808a470c6b505b095cb0944367e64b2db876ea73661e59b3e7",
+    "test_dependencies": [
+      "cmake"
+    ],
+    "uses_from_macos": [],
+    "version": "20260817.0"
+  },
+  "aom": {
+    "bottle_tags_in_source": null,
+    "build_dependencies": [
+      "cmake",
+      "pkgconf",
+      "nasm"
+    ],
+    "dependencies": [
+      "libvmaf"
+    ],
+    "desc": "Codec library for encoding and decoding AV1 video streams",
+    "homebrew_api_sha256": "dda1dcc7b80de8001fe5c41e1abf6df7c47be5186a8571a4dc7ab25b0f822005",
+    "homepage": "https://aomedia.googlesource.com/aom",
+    "keg_only": false,
+    "license": "BSD-2-Clause",
+    "name": "aom",
+    "revision": 0,
+    "ruby_source_sha256": "dda1dcc7b80de8001fe5c41e1abf6df7c47be5186a8571a4dc7ab25b0f822005",
+    "test_dependencies": [],
+    "uses_from_macos": [],
+    "version": "3.15.2"
+  },
+  "autoconf": {
+    "bottle_tags_in_source": null,
+    "build_dependencies": [],
+    "dependencies": [
+      "m4"
+    ],
+    "desc": "Automatic configure script builder",
+    "homebrew_api_sha256": "cab75402095f9a65be6a5d3fc11a2f7a6a7fdf04189abee37bfc1c6e5adff499",
+    "homepage": "https://www.gnu.org/software/autoconf/",
+    "keg_only": false,
+    "license": "GPL-3.0-or-later AND (GPL-3.0-or-later WITH Autoconf-exception-3.0)",
+    "name": "autoconf",
+    "revision": 0,
+    "ruby_source_sha256": "cab75402095f9a65be6a5d3fc11a2f7a6a7fdf04189abee37bfc1c6e5adff499",
+    "test_dependencies": [],
+    "uses_from_macos": [
+      "perl"
+    ],
+    "version": "2.73"
+  },
+  "bash": {
+    "bottle_tags_in_source": null,
+    "build_dependencies": [],
+    "dependencies": [
+      "ncurses",
+      "readline",
+      "gettext"
+    ],
+    "desc": "Bourne-Again SHell, a UNIX command interpreter",
+    "homebrew_api_sha256": "1e439a2d96db5460f5146e0652f480da856e8640eb59eec02f7ff5a46c107788",
+    "homepage": "https://www.gnu.org/software/bash/",
+    "keg_only": false,
+    "license": "GPL-3.0-or-later",
+    "name": "bash",
+    "revision": 0,
+    "ruby_source_sha256": "1e439a2d96db5460f5146e0652f480da856e8640eb59eec02f7ff5a46c107788",
+    "test_dependencies": [],
+    "uses_from_macos": [],
+    "version": "5.3.20"
+  },
+  "cmake": {
+    "bottle_tags_in_source": null,
+    "build_dependencies": [],
+    "dependencies": [],
+    "desc": "Cross-platform make",
+    "homebrew_api_sha256": "bfea34dcaa8182ea7896c21ea8b8eedd30d52f482aae3364cab2f61aa825c800",
+    "homepage": "https://www.cmake.org/",
+    "keg_only": false,
+    "license": "BSD-3-Clause",
+    "name": "cmake",
+    "revision": 0,
+    "ruby_source_sha256": "bfea34dcaa8182ea7896c21ea8b8eedd30d52f482aae3364cab2f61aa825c800",
+    "test_dependencies": [],
+    "uses_from_macos": [
+      "ncurses"
+    ],
+    "version": "4.4.4"
+  },
+  "curl": {
+    "bottle_tags_in_source": null,
+    "build_dependencies": [
+      "pkgconf"
+    ],
+    "dependencies": [
+      "brotli",
+      "libnghttp2",
+      "libnghttp3",
+      "libngtcp2",
+      "libpsl",
+      "libssh2",
+      "openssl@4",
+      "zstd"
+    ],
+    "desc": "Get a file from an HTTP, HTTPS or FTP server",
+    "homebrew_api_sha256": "0d69822fa0db39c5730b76f619da1f1e0162e21a70a3477ea6730ee2b7ded0aa",
+    "homepage": "https://curl.se",
+    "keg_only": true,
+    "license": "curl",
+    "name": "curl",
+    "revision": 0,
+    "ruby_source_sha256": "33e932ab597435e4b7013abdcea8c1737e12db3fe77e4cf475d15fc831a1cf9a",
+    "test_dependencies": [
+      "pkgconf"
+    ],
+    "uses_from_macos": [
+      "krb5",
+      "openldap"
+    ],
+    "version": "8.23.0"
+  },
+  "git": {
+    "bottle_tags_in_source": null,
+    "build_dependencies": [
+      "gettext",
+      "pkgconf"
+    ],
+    "dependencies": [
+      "pcre2",
+      "gettext"
+    ],
+    "desc": "Distributed revision control system",
+    "homebrew_api_sha256": "df39658f97fd2bb62ab681628d14c7e41b6c2dfbe220778c3d3b2712ff16b0a4",
+    "homepage": "https://git-scm.com",
+    "keg_only": false,
+    "license": "GPL-2.0-only AND GPL-2.0-or-later AND LGPL-2.1-or-later AND BSD-3-Clause AND MIT",
+    "name": "git",
+    "revision": 1,
+    "ruby_source_sha256": "df39658f97fd2bb62ab681628d14c7e41b6c2dfbe220778c3d3b2712ff16b0a4",
+    "test_dependencies": [],
+    "uses_from_macos": [
+      "curl",
+      "expat"
+    ],
+    "version": "2.56.0"
+  },
+  "hello": {
+    "bottle_tags_in_source": null,
+    "build_dependencies": [],
+    "dependencies": [],
+    "desc": "Program providing model for GNU coding standards and practices",
+    "homebrew_api_sha256": "5b7509fca45647cc02a4cf9bb7937809f32e8ccb014f255d45dcede17e38bcbf",
+    "homepage": "https://www.gnu.org/software/hello/",
+    "keg_only": false,
+    "license": "GPL-3.0-or-later",
+    "name": "hello",
+    "revision": 0,
+    "ruby_source_sha256": "5b7509fca45647cc02a4cf9bb7937809f32e8ccb014f255d45dcede17e38bcbf",
+    "test_dependencies": [],
+    "uses_from_macos": [],
+    "version": "2.12.3"
+  },
+  "jq": {
+    "bottle_tags_in_source": null,
+    "build_dependencies": [],
+    "dependencies": [
+      "oniguruma"
+    ],
+    "desc": "Lightweight and flexible command-line JSON processor",
+    "homebrew_api_sha256": "0081a3a8d8afaa165b4bfa9b222723916b56f4d04b975d7aad35e8cdad0b0296",
+    "homepage": "https://jqlang.github.io/jq/",
+    "keg_only": false,
+    "license": "MIT",
+    "name": "jq",
+    "revision": 0,
+    "ruby_source_sha256": "0081a3a8d8afaa165b4bfa9b222723916b56f4d04b975d7aad35e8cdad0b0296",
+    "test_dependencies": [],
+    "uses_from_macos": [],
+    "version": "1.8.2"
+  },
+  "libslirp": {
+    "bottle_tags_in_source": null,
+    "build_dependencies": [
+      "meson",
+      "ninja",
+      "pkgconf"
+    ],
+    "dependencies": [
+      "glib"
+    ],
+    "desc": "General purpose TCP-IP emulator",
+    "homebrew_api_sha256": "1a7a8773e583777d2b4b63e4d3616d66c68ee9cac2864ba060af0907efa75b3b",
+    "homepage": "https://gitlab.freedesktop.org/slirp/libslirp",
+    "keg_only": false,
+    "license": "BSD-3-Clause",
+    "name": "libslirp",
+    "revision": 0,
+    "ruby_source_sha256": "1a7a8773e583777d2b4b63e4d3616d66c68ee9cac2864ba060af0907efa75b3b",
+    "test_dependencies": [],
+    "uses_from_macos": [],
+    "version": "4.9.6"
+  },
+  "openssl@3": {
+    "bottle_tags_in_source": null,
+    "build_dependencies": [],
+    "dependencies": [
+      "ca-certificates"
+    ],
+    "desc": "Cryptography and SSL/TLS Toolkit",
+    "homebrew_api_sha256": "ff38ac43aa86a0484a12bace87feca515c745b3caf38a5b0738288b56fb86c97",
+    "homepage": "https://openssl-library.org",
+    "keg_only": true,
+    "license": "Apache-2.0",
+    "name": "openssl@3",
+    "revision": 0,
+    "ruby_source_sha256": "ff38ac43aa86a0484a12bace87feca515c745b3caf38a5b0738288b56fb86c97",
+    "test_dependencies": [],
+    "uses_from_macos": [],
+    "version": "3.5.9"
+  },
+  "python@3.12": {
+    "bottle_tags_in_source": null,
+    "build_dependencies": [
+      "pkgconf"
+    ],
+    "dependencies": [
+      "mpdecimal",
+      "openssl@3",
+      "sqlite",
+      "xz"
+    ],
+    "desc": "Interpreted, interactive, object-oriented programming language",
+    "homebrew_api_sha256": "c4f505d395c0b49bb4fb3b3ba4aa6394c46c3dcdb364a9ad11f9cb22c17e5ce9",
+    "homepage": "https://www.python.org/",
+    "keg_only": false,
+    "license": "Python-2.0",
+    "name": "python@3.12",
+    "revision": 0,
+    "ruby_source_sha256": "c4f505d395c0b49bb4fb3b3ba4aa6394c46c3dcdb364a9ad11f9cb22c17e5ce9",
+    "test_dependencies": [],
+    "uses_from_macos": [
+      "bzip2",
+      "expat",
+      "libedit",
+      "libffi",
+      "libxcrypt",
+      "ncurses"
+    ],
+    "version": "3.12.16"
+  },
+  "sqlite": {
+    "bottle_tags_in_source": null,
+    "build_dependencies": [],
+    "dependencies": [
+      "readline"
+    ],
+    "desc": "Command-line interface for SQLite",
+    "homebrew_api_sha256": "cb22e585906d9ef444d357c8ae68e64697365447011333bd336d5fb15838a116",
+    "homepage": "https://sqlite.org/index.html",
+    "keg_only": true,
+    "license": "blessing",
+    "name": "sqlite",
+    "revision": 0,
+    "ruby_source_sha256": "cb22e585906d9ef444d357c8ae68e64697365447011333bd336d5fb15838a116",
+    "test_dependencies": [],
+    "uses_from_macos": [],
+    "version": "3.54.1"
+  },
+  "tree": {
+    "bottle_tags_in_source": null,
+    "build_dependencies": [],
+    "dependencies": [],
+    "desc": "Display directories as trees (with optional color/HTML output)",
+    "homebrew_api_sha256": "aaae9ad92c8ca1b6990b5f17a428a54844d097a7477bb97c21120a8ebb510297",
+    "homepage": "https://oldmanprogrammer.net/source.php?dir=projects/tree",
+    "keg_only": false,
+    "license": "GPL-2.0-or-later",
+    "name": "tree",
+    "revision": 0,
+    "ruby_source_sha256": "aaae9ad92c8ca1b6990b5f17a428a54844d097a7477bb97c21120a8ebb510297",
+    "test_dependencies": [],
+    "uses_from_macos": [],
+    "version": "2.3.2"
+  },
+  "zlib": {
+    "bottle_tags_in_source": null,
+    "build_dependencies": [],
+    "dependencies": [],
+    "desc": "General-purpose lossless data-compression library",
+    "homebrew_api_sha256": "87cffca5f0c2604eee8c111143e6908c2d39b570b14fc419318734c24519e0bf",
+    "homepage": "https://zlib.net/",
+    "keg_only": true,
+    "license": "Zlib",
+    "name": "zlib",
+    "revision": 0,
+    "ruby_source_sha256": "87cffca5f0c2604eee8c111143e6908c2d39b570b14fc419318734c24519e0bf",
+    "test_dependencies": [],
+    "uses_from_macos": [],
+    "version": "1.3.2"
+  }
+}

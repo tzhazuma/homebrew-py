@@ -1,0 +1,26 @@
+{
+  "brew": {
+    "default_branch": "main",
+    "head_date": "2026-10-26T07:44:47Z",
+    "head_message": "Merge pull request #24355 from Homebrew/homebrew-enterprise-guides",
+    "head_sha": "c6069d2a943b71b0a90d91fc1ac93cb9c1634dcc",
+    "head_url": "https://github.com/Homebrew/brew/commit/c6069d2a943b71b0a90d91fc1ac93cb9c1634dcc",
+    "release": {
+      "name": "7.0.11",
+      "published_at": "2026-10-26T08:20:07Z",
+      "tag": "7.0.11",
+      "url": "https://github.com/Homebrew/brew/releases/tag/7.0.11"
+    },
+    "repo": "Homebrew/brew"
+  },
+  "checked_at": "2026-10-26T18:56:21+00:00",
+  "core": {
+    "default_branch": "main",
+    "head_date": "2026-10-26T18:51:37Z",
+    "head_message": "Merge pull request #321417 from Homebrew/bump-baguette-0.2.11",
+    "head_sha": "4eb2e290b81f28d91622fb22b8d86d78badec906",
+    "head_url": "https://github.com/Homebrew/homebrew-core/commit/4eb2e290b81f28d91622fb22b8d86d78badec906",
+    "release": null,
+    "repo": "Homebrew/homebrew-core"
+  }
+}

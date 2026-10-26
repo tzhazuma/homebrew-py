@@ -1,0 +1,16 @@
+Third-party material in this repository
+========================================
+
+tests/fixtures/core_formulas/*.rb
+---------------------------------
+These formula files are unmodified copies from Homebrew/homebrew-core and are
+used only as parser/parity fixtures. Homebrew is distributed under the BSD
+2-Clause License; see https://github.com/Homebrew/brew/blob/master/LICENSE.txt.
+
+The expected metadata in tests/fixtures/core_formulas/expected.json was
+generated from `brew info --json=v2` (Homebrew 7.0.9) on 2026-10-26 and is
+included for reproducibility.
+
+The pybrew implementation itself is an independent, clean-room Python
+implementation of the public Homebrew command-line behaviour, formula DSL and
+on-disk layout. It does not contain Homebrew's Ruby source code.

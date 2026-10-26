@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pybrew"
+version = "0.1.0"
+description = "A clean-room, Python reimplementation of Homebrew's core package manager (prototype)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "BSD-2-Clause" }
+authors = [{ name = "tzhazuma" }]
+keywords = ["homebrew", "package-manager", "macos", "python", "port"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "License :: OSI Approved :: BSD License",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Topic :: System :: Software Distribution",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4"]
+
+[project.scripts]
+pybrew = "pybrew.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/tzhazuma/homebrew-py"
+Repository = "https://github.com/tzhazuma/homebrew-py"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+markers = [
+  "network: tests that require network access (deselect with -m 'not network')",
+  "real_bottle: tests that use a real cached Homebrew bottle when available",
+]
