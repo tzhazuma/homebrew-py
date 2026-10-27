@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
+from .api import cask_from_api, fetch_cask
 from .cask import Artifact, Cask, CaskError, parse_cask_file
 from .download import Downloader, sha256_file
 from .errors import ChecksumMismatch, DownloadError, PybrewError
@@ -28,8 +29,9 @@ class CaskNotFound(PybrewError):
 
 
 class CaskLoader:
-    def __init__(self, taps: Iterable[Tap]):
+    def __init__(self, taps: Iterable[Tap], allow_api: bool = False):
         self.taps = list(taps)
+        self.allow_api = allow_api
         self._cache: dict[str, tuple[Tap, Path]] = {}
 
     def names(self) -> list[str]:
@@ -67,7 +69,12 @@ class CaskLoader:
             return False
 
     def load(self, token: str) -> Cask:
-        tap, path = self._locate(token)
+        try:
+            tap, path = self._locate(token)
+        except CaskNotFound:
+            if self.allow_api:
+                return fetch_cask(token)
+            raise
         return parse_cask_file(path, tap=tap.name)
 
     def search(self, pattern: str) -> list[Cask]:

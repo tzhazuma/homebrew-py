@@ -8,11 +8,13 @@ usable on a machine without a homebrew-core checkout.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import urllib.error
 import urllib.request
 from typing import Any, Optional
 
 from .download import USER_AGENT
+from .cask import Artifact, Cask
 from .errors import DownloadError, FormulaNotFound
 from .models import BottleFile, BottleSpec, Dependency, Formula, SourceSpec
 
@@ -91,3 +93,71 @@ def formula_from_api(data: dict[str, Any], tap: Optional[str] = None) -> Formula
 def fetch_formula(name: str, api_url: str = DEFAULT_API, timeout: int = 30) -> Formula:
     data = _request_json(f"{api_url.rstrip('/')}/{name}.json", timeout=timeout)
     return formula_from_api(data)
+
+
+def cask_from_api(data: dict[str, Any], tap: Optional[str] = None) -> Cask:
+    """Convert a formulae.brew.sh cask JSON object into a :class:`Cask`."""
+
+    cask = Cask(token=str(data["token"]))
+    cask.tap = tap or data.get("tap") or "homebrew/cask"
+    cask.version = str(data.get("version")) if data.get("version") is not None else None
+    cask.sha256 = data.get("sha256")
+    cask.url = data.get("url")
+    names = data.get("name") or []
+    if isinstance(names, list):
+        cask.name = ", ".join(str(item) for item in names) or None
+    else:
+        cask.name = str(names)
+    cask.desc = data.get("desc")
+    cask.homepage = data.get("homepage")
+    cask.auto_updates = bool(data.get("auto_updates"))
+    cask.caveats = data.get("caveats")
+    depends = data.get("depends_on") or {}
+    if isinstance(depends, dict):
+        cask.depends_on = {str(key): value for key, value in depends.items()}
+    conflicts = data.get("conflicts_with") or {}
+    if isinstance(conflicts, dict):
+        cask.conflicts_with = {str(key): value for key, value in conflicts.items()}
+
+    for entry in data.get("artifacts") or []:
+        if not isinstance(entry, dict):
+            continue
+        for key, value in entry.items():
+            if key == "uninstall":
+                for item in value if isinstance(value, list) else [value]:
+                    if isinstance(item, dict):
+                        cask.uninstall.update({str(k): v for k, v in item.items()})
+            elif key == "zap":
+                for item in value if isinstance(value, list) else [value]:
+                    if isinstance(item, dict):
+                        trash = item.get("trash")
+                        if isinstance(trash, list):
+                            cask.zap.extend(str(path) for path in trash)
+                        elif trash:
+                            cask.zap.append(str(trash))
+            elif key in ("app", "binary", "pkg", "suite", "artifact", "installer", "appimage"):
+                if isinstance(value, list):
+                    sources = [str(item) for item in value if isinstance(item, str)]
+                else:
+                    sources = [str(value)]
+                if not sources:
+                    continue
+                target = entry.get("target")
+                target_string = str(target) if target else None
+                if target_string:
+                    # API cask targets are absolute system paths; keep only the
+                    # basename so pybrew installs inside its own prefix.
+                    if key == "app":
+                        target_string = Path(target_string).name
+                    else:
+                        target_string = Path(target_string.replace("$HOMEBREW_PREFIX", "")).name
+                for source in sources:
+                    cask.artifacts.append(
+                        Artifact(key, source, target_string if key in ("app", "binary") else None)
+                    )
+    return cask
+
+
+def fetch_cask(token: str, api_url: str = "https://formulae.brew.sh/api/cask", timeout: int = 30) -> Cask:
+    data = _request_json(f"{api_url.rstrip('/')}/{token}.json", timeout=timeout)
+    return cask_from_api(data)

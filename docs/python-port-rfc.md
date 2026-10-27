@@ -46,7 +46,8 @@ A clean-room Python 3.9+ package (`pybrew`) with no runtime dependencies:
   start/stop/restart/list services through an injectable `launchctl` runner;
 - cask support for zip/dmg archives with `.app`, `binary` and `suite` artifacts,
   receipts, uninstall and zap; `.pkg` payloads can be expanded into an explicit
-  `--pkg-root` without running package scripts;
+  `--pkg-root` without running package scripts; optional formulae.brew.sh cask
+  API fallback so tapping homebrew-cask is not required;
 - services on macOS (launchd) and Linux (systemd user units);
 - tap management (`tap`/`untap`/list, local and GitHub URLs);
 - `info`, `search`, `list`, `deps`, `install`, `uninstall`, `link`, `unlink`,
@@ -55,7 +56,7 @@ A clean-room Python 3.9+ package (`pybrew`) with no runtime dependencies:
 
 ## Validation
 
-- 76 tests pass (`pytest -q`).
+- 78 tests pass (`pytest -q`).
 - 15 real homebrew-core formulae (bash, git, curl, openssl@3, python@3.12, ...)
   parse to exactly the desc/homepage/license/version/dependency values returned
   by `brew info --json=v2` (Homebrew 7.0.9).

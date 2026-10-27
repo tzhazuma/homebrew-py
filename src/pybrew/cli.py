@@ -66,6 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
     info.add_argument("formulae", nargs="+")
     info.add_argument("--json", action="store_true", help="emit brew-compatible JSON")
     info.add_argument("--api", action="store_true", help="fall back to formulae.brew.sh")
+    info.add_argument("--cask", action="store_true", help="show cask information")
 
     search = subparsers.add_parser("search", parents=[common], help="search formulae")
     search.add_argument("pattern")
@@ -73,6 +74,7 @@ def build_parser() -> argparse.ArgumentParser:
     listing = subparsers.add_parser("list", parents=[common], help="list installed formulae")
     listing.add_argument("--versions", action="store_true", help="show all installed versions")
     listing.add_argument("--json", action="store_true")
+    listing.add_argument("--cask", action="store_true", help="list installed casks")
 
     deps = subparsers.add_parser("deps", parents=[common], help="show dependencies")
     deps.add_argument("formula")
@@ -132,6 +134,7 @@ def build_parser() -> argparse.ArgumentParser:
         action_parser.add_argument("--json", action="store_true")
         action_parser.add_argument("--appdir", type=Path)
         action_parser.add_argument("--pkg-root", type=Path)
+        action_parser.add_argument("--api", action="store_true", help="fall back to formulae.brew.sh")
 
     outdated = subparsers.add_parser("outdated", parents=[common], help="list outdated formulae")
     outdated.add_argument("--json", action="store_true")
@@ -234,6 +237,18 @@ def _formula_json(formula: Formula, config: Config) -> dict[str, Any]:
 # -- command implementations --------------------------------------------
 def cmd_info(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
+    if getattr(args, "cask", False):
+        cask_loader = _cask_loader(config, allow_api=bool(getattr(args, "api", False)))
+        casks = [cask_loader.load(token) for token in args.formulae]
+        if args.json:
+            print(json.dumps({"casks": [cask.to_api_json() for cask in casks]}, indent=2))
+            return 0
+        for cask in casks:
+            print(f"{cask.token}: {cask.version}")
+            print(f"  {cask.name or ''}")
+            print(f"  {cask.desc or ''}")
+            print(f"  {cask.homepage or ''}")
+        return 0
     loader = _loader(config)
     formulae = [_load_formula(name, loader, use_api=args.api) for name in args.formulae]
     if args.json:
@@ -283,6 +298,14 @@ def cmd_search(args: argparse.Namespace) -> int:
 
 def cmd_list(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
+    if getattr(args, "cask", False):
+        rows = CaskInstaller(config).list_installed()
+        if args.json:
+            print(json.dumps({"casks": rows}, indent=2))
+            return 0
+        for row in rows:
+            print(f"{row['token']} {row['version']}")
+        return 0
     cellar = Cellar(config)
     installed = cellar.installed()
     if args.json:
@@ -351,7 +374,7 @@ def cmd_install(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     config.ensure()
     if getattr(args, "cask", False):
-        cask_loader = _cask_loader(config)
+        cask_loader = _cask_loader(config, allow_api=bool(getattr(args, "api", False)))
         cask_installer = CaskInstaller(
             config,
             appdir=getattr(args, "appdir", None),
@@ -403,7 +426,7 @@ def cmd_install(args: argparse.Namespace) -> int:
 def cmd_uninstall(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     if getattr(args, "cask", False):
-        cask_loader = _cask_loader(config)
+        cask_loader = _cask_loader(config, allow_api=bool(getattr(args, "api", False)))
         cask_installer = CaskInstaller(config)
         exit_code = 0
         for token in args.formulae:
@@ -483,8 +506,8 @@ def cmd_untap(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cask_loader(config: Config) -> CaskLoader:
-    return CaskLoader(discover_taps(config.taps))
+def _cask_loader(config: Config, allow_api: bool = False) -> CaskLoader:
+    return CaskLoader(discover_taps(config.taps), allow_api=allow_api)
 
 
 def cmd_outdated(args: argparse.Namespace) -> int:
@@ -560,7 +583,7 @@ def cmd_reinstall(args: argparse.Namespace) -> int:
 
 def cmd_cask(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
-    loader = _cask_loader(config)
+    loader = _cask_loader(config, allow_api=bool(getattr(args, "api", False)))
     if getattr(args, "action", None) is None:
         args.action = "list"
         args.tokens = []

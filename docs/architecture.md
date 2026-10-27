@@ -122,8 +122,10 @@ end-to-end. Unsupported Ruby constructs fail with the line number.
 ## Casks
 
 `cask.py` parses the cask DSL, including `arch`/`sha256 arm,intel`,
-`on_<macos>` conditionals and default `language` blocks. `cask_installer.py`
-downloads the URL, verifies SHA-256, then handles zip, tar and dmg containers:
+`on_<macos>` conditionals and default `language` blocks. When no local
+homebrew-cask tap exists, `--api` loads the same cask metadata from
+formulae.brew.sh. `cask_installer.py` downloads the URL, verifies SHA-256, then
+handles zip, tar, dmg and pkg containers:
 `.app` bundles are copied to `<prefix>/Applications`, `binary` artifacts are
 symlinked into `<prefix>/bin`, and receipts live in
 `<prefix>/Caskroom/<token>/<version>/.metadata/receipt.json`. Uninstall removes

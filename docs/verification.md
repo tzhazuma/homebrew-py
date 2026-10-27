@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-76 passed in 38.32s
+78 passed in 26.36s
 ```
 
 Breakdown of the feature slices:
@@ -33,7 +33,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py
-12 passed      # includes real dmg and pkg payload tests on macOS and install --cask
+14 passed      # real dmg/pkg payload, install --cask, cask API mapping
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py
 5 passed       # autotools, CMake, Cargo, inreplace, conditionals
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
@@ -114,6 +114,9 @@ This is a real homebrew-core formula, not a synthetic fixture.
   and its payload installed under an explicit `--pkg-root`; uninstall removes the
   files. Package scripts are intentionally not executed.
 - Unsafe zip members (`../`) are rejected before extraction.
+- formulae.brew.sh cask JSON is mapped to the same `Cask` model (`--api`),
+  including app targets, binary targets, uninstall and zap; the loader can fall
+  back to the API when no local cask tap exists.
 
 ## Services verification
 

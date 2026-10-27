@@ -219,3 +219,51 @@ def test_cask_pkg_payload(tmp_path: Path) -> None:
     assert (pkg_root / "usr" / "local" / "share" / "pkgtest" / "hello.txt").read_text() == "pkg payload\n"
     installer.uninstall("pkgtest")
     assert not (pkg_root / "usr" / "local" / "share" / "pkgtest" / "hello.txt").exists()
+
+
+def test_cask_from_api_and_loader_fallback(tmp_path: Path, monkeypatch) -> None:
+    from pybrew.api import cask_from_api
+    from pybrew.cask_installer import CaskLoader
+
+    payload = {
+        "token": "apicask",
+        "name": ["API Cask", "Alias"],
+        "desc": "from api",
+        "homepage": "https://example.com",
+        "url": "https://example.com/API-2.0.zip",
+        "version": "2.0",
+        "sha256": "a" * 64,
+        "auto_updates": True,
+        "depends_on": {"macos": {}},
+        "conflicts_with": {"cask": ["other"]},
+        "artifacts": [
+            {"uninstall": [{"quit": "com.example.api"}]},
+            {"app": ["API Cask.app"], "target": "/Applications/API Cask.app"},
+            {"binary": ["API Cask.app/Contents/MacOS/api"], "target": "$HOMEBREW_PREFIX/bin/api"},
+            {"zap": [{"trash": ["~/Library/Caches/com.example.api"]}]},
+        ],
+    }
+    cask = cask_from_api(payload, tap="homebrew/cask")
+    assert cask.token == "apicask"
+    assert cask.version == "2.0"
+    assert cask.name == "API Cask, Alias"
+    assert cask.artifacts[0].kind == "app"
+    assert cask.artifacts[0].target == "API Cask.app"
+    assert cask.artifacts[1].kind == "binary"
+    assert cask.artifacts[1].target == "api"
+    assert cask.uninstall["quit"] == "com.example.api"
+    assert cask.zap == ["~/Library/Caches/com.example.api"]
+
+    monkeypatch.setattr("pybrew.cask_installer.fetch_cask", lambda token: cask)
+    loader = CaskLoader([], allow_api=True)
+    assert loader.load("apicask").token == "apicask"
+
+
+def test_info_and_list_cask_commands(run_cli, sample) -> None:
+    assert run_cli("install", "--cask", "testapp").returncode == 0
+    listing = run_cli("list", "--cask", "--json")
+    assert listing.returncode == 0, listing.stderr
+    assert any(row["token"] == "testapp" for row in json.loads(listing.stdout)["casks"])
+    info = run_cli("info", "--cask", "--json", "testapp")
+    assert info.returncode == 0, info.stderr
+    assert json.loads(info.stdout)["casks"][0]["token"] == "testapp"
