@@ -36,7 +36,8 @@ asks three concrete questions:
   version/dependency values returned by `brew info --json=v2` (Homebrew 7.0.9).
 - A real cached `libslirp 4.9.6` Homebrew bottle installs offline; synthetic
   autotools, CMake and Cargo builds, zip/dmg cask installs, launchd plist
-  generation and tap clone/update are covered by tests.
+  generation and tap clone/update are covered by tests; a real meson 1.12.1
+  project was also built manually.
 - No Homebrew Ruby code is copied or executed; the prototype is BSD-2-Clause.
 
 ## AI disclosure and review

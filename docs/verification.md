@@ -220,6 +220,22 @@ A fake `meson` executable on PATH handles `setup`/`compile`/`install`, records t
 verifies the install DSL, argument expansion and PATH handling without requiring
 meson in CI.
 
+A real `meson 1.12.1` was installed into a temporary target and used for an
+end-to-end build:
+
+```console
+$ PATH=/tmp/pybrew-meson/bin:$PATH PYTHONPATH=src python -m pybrew \
+    --prefix /tmp/pybrew-meson-prefix --tap /tmp/meson-tap \
+    --cache /tmp/pybrew-meson-cache install --build-from-source meson-hello
+Installed: meson-hello 1.0 (/tmp/pybrew-meson-prefix/Cellar/meson-hello/1.0)
+$ /tmp/pybrew-meson-prefix/bin/hello-real-meson
+hello from real meson
+```
+
+The formula used `meson setup build *std_meson_args`, `meson compile -C build`
+and `meson install -C build`; the installed binary is linked via
+`prefix/bin`.
+
 ## HEAD install
 
 A synthetic formula adds a `head do url ... sha256 ... end` block; `install --HEAD`
@@ -286,8 +302,6 @@ install, `doctor`, `list`, `deps`, `search`, `config`, and `parse`.
 - Live download from ghcr.io is not part of the offline suite; the real bottle
   test intentionally uses a cached artefact. Live download is recorded manually
   above.
-- Meson builds are implemented via `std_meson_args` but meson is not installed in
-  this environment, so only helper expansion is covered.
 - Cask package scripts and system-wide `.pkg` installation.
 - `brew lgtm`, advanced Brewfile options, analytics.
 

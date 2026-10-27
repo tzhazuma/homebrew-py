@@ -40,8 +40,8 @@ A clean-room Python 3.9+ package (`pybrew`) with no runtime dependencies:
   `*std_configure_args`, `*std_cmake_args`, `*std_meson_args`, `*std_cargo_args`),
   `inreplace`, `ENV` mutation, `bin.install`/`prefix.install` and simple
   `if OS.mac?`/`on_macos` branches; autotools, CMake and Cargo are covered by
-  tests, and unsupported Ruby/build steps fail explicitly instead of pretending
-  to succeed;
+  tests, a real meson 1.12.1 project was built manually, and unsupported
+  Ruby/build steps fail explicitly instead of pretending to succeed;
 - Homebrew services: parse `service do` blocks, generate launchd plists, and
   start/stop/restart/list services through an injectable `launchctl` runner;
 - cask support for zip/dmg archives with `.app`, `binary` and `suite` artifacts,
