@@ -71,3 +71,17 @@ def test_cleanup_prunes_old_cache(run_cli, sample) -> None:
     real = run_cli("cleanup", "--prune-cache", "--cache-age-days", "30")
     assert real.returncode == 0, real.stderr
     assert not old_file.exists()
+
+
+def test_pin_prevents_outdated_and_unpin(run_cli, sample) -> None:
+    assert run_cli("install", "hello", bottle_tag=sample.tag).returncode == 0
+    assert run_cli("pin", "hello").returncode == 0
+    _bump_formula(sample)
+    assert run_cli("outdated").stdout.strip() == ""
+    pinned = run_cli("list", "--pinned")
+    assert "hello" in pinned.stdout
+    assert run_cli("unpin", "hello").returncode == 0
+    outdated = run_cli("outdated")
+    assert "hello 1.0 < 2.0" in outdated.stdout
+    missing = run_cli("pin", "ghost")
+    assert missing.returncode == 1

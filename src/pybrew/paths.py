@@ -168,6 +168,10 @@ class Config:
         return self.var / "pybrew" / "locks"
 
     @property
+    def pinned_dir(self) -> Path:
+        return self.var / "pybrew" / "pinned"
+
+    @property
     def downloads(self) -> Path:
         return self.cache / "downloads"
 
@@ -193,6 +197,7 @@ class Config:
             self.opt,
             self.var,
             self.lock_dir,
+            self.pinned_dir,
             self.downloads,
             self.taps_root,
             self.caskroom,

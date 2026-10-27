@@ -57,13 +57,13 @@ A clean-room Python 3.9+ package (`pybrew`) with no runtime dependencies:
 
 ## Validation
 
-- 88 tests pass (`pytest -q`).
+- 89 tests pass (`pytest -q`).
 - 15 real homebrew-core formulae (bash, git, curl, openssl@3, python@3.12, ...)
   parse to exactly the desc/homepage/license/version/dependency values returned
   by `brew info --json=v2` (Homebrew 7.0.9).
 - A real cached Homebrew `libslirp 4.9.6` bottle installs offline into a temporary
   prefix; the resulting keg contains the real dylib, headers, pkg-config file and
-  receipt.
+  receipt. A live ghcr.io download of the same bottle also succeeded.
 - Synthetic tests cover checksum failure, malicious tar paths, link conflicts,
   keg-only formulae, dependency ordering and uninstall.
 - Build tests compile real autotools, CMake and Cargo fixtures and verify the

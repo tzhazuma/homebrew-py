@@ -19,7 +19,16 @@ from .doctor import diagnose, diagnose_issues
 from .download import Downloader
 from .errors import FormulaNotFound, PybrewError, UsageError
 from .installer import InstallOptions, Installer
-from .maintenance import cleanup, cleanup_cache, find_outdated, reinstall, upgrade_formula
+from .maintenance import (
+    cleanup,
+    cleanup_cache,
+    find_outdated,
+    pin,
+    pinned_names,
+    reinstall,
+    unpin,
+    upgrade_formula,
+)
 from .models import Formula, candidate_bottle_tags
 from .paths import Config
 from .ruby_parser import parse_formula_file
@@ -76,6 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     listing.add_argument("--versions", action="store_true", help="show all installed versions")
     listing.add_argument("--json", action="store_true")
     listing.add_argument("--cask", action="store_true", help="list installed casks")
+    listing.add_argument("--pinned", action="store_true", help="list pinned formulae")
 
     deps = subparsers.add_parser("deps", parents=[common], help="show dependencies")
     deps.add_argument("formula")
@@ -159,6 +169,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     reinstall_cmd = subparsers.add_parser("reinstall", parents=[common], help="reinstall formulae")
     reinstall_cmd.add_argument("formulae", nargs="+")
+
+    pin_cmd = subparsers.add_parser("pin", parents=[common], help="pin a formula at its current version")
+    pin_cmd.add_argument("formulae", nargs="+")
+    unpin_cmd = subparsers.add_parser("unpin", parents=[common], help="unpin a formula")
+    unpin_cmd.add_argument("formulae", nargs="+")
 
     bundle = subparsers.add_parser("bundle", parents=[common], help="install/check a Brewfile")
     bundle_actions = bundle.add_subparsers(dest="bundle_action", required=True)
@@ -317,6 +332,10 @@ def cmd_search(args: argparse.Namespace) -> int:
 
 def cmd_list(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
+    if getattr(args, "pinned", False):
+        for name in sorted(pinned_names(config)):
+            print(name)
+        return 0
     if getattr(args, "cask", False):
         rows = CaskInstaller(config).list_installed()
         if args.json:
@@ -582,6 +601,32 @@ def cmd_shellenv(args: argparse.Namespace) -> int:
         print(f'export HOMEBREW_CELLAR="{cellar}";')
         print(f'export PATH="{prefix}/bin:{prefix}/sbin:$PATH";')
     return 0
+
+
+def cmd_pin(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    installed = Cellar(config).installed()
+    exit_code = 0
+    for name in args.formulae:
+        if not installed.get(name):
+            print(f"Error: {name} is not installed", file=sys.stderr)
+            exit_code = 1
+            continue
+        path = pin(config, name)
+        print(f"Pinned {name} ({path})")
+    return exit_code
+
+
+def cmd_unpin(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    exit_code = 0
+    for name in args.formulae:
+        if unpin(config, name):
+            print(f"Unpinned {name}")
+        else:
+            print(f"{name} is not pinned")
+            exit_code = 1
+    return exit_code
 
 
 def cmd_outdated(args: argparse.Namespace) -> int:
@@ -882,6 +927,8 @@ _COMMANDS = {
     "untap": cmd_untap,
     "cask": cmd_cask,
     "bundle": cmd_bundle,
+    "pin": cmd_pin,
+    "unpin": cmd_unpin,
     "shellenv": cmd_shellenv,
     "outdated": cmd_outdated,
     "upgrade": cmd_upgrade,

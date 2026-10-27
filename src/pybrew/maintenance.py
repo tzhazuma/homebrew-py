@@ -25,11 +25,35 @@ class OutdatedFormula:
         return {"name": self.name, "installed": self.installed, "current": self.current}
 
 
+def pinned_names(config: Config) -> set[str]:
+    if not config.pinned_dir.is_dir():
+        return set()
+    return {path.name for path in config.pinned_dir.iterdir() if path.is_file()}
+
+
+def pin(config: Config, name: str) -> Path:
+    config.pinned_dir.mkdir(parents=True, exist_ok=True)
+    path = config.pinned_dir / name
+    path.write_text("pinned by pybrew\n")
+    return path
+
+
+def unpin(config: Config, name: str) -> bool:
+    path = config.pinned_dir / name
+    if not path.exists():
+        return False
+    path.unlink()
+    return True
+
+
 def find_outdated(config: Config, loader: FormulaLoader) -> list[OutdatedFormula]:
     cellar = Cellar(config)
     installed = cellar.installed()
+    pinned = pinned_names(config)
     result: list[OutdatedFormula] = []
     for name, versions in sorted(installed.items()):
+        if name in pinned:
+            continue
         try:
             formula = loader.load(name)
         except Exception:

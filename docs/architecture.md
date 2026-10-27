@@ -162,6 +162,11 @@ the parsed entries; `bundle dump` writes taps/formulae/casks back to a Brewfile.
 Advanced Brewfile options are not parsed yet. `cleanup --prune-cache` removes
 downloads older than `--cache-age-days` (default 120) in addition to stale kegs.
 
+## Pinning
+
+`pin` records a formula under `var/pybrew/pinned`; `outdated` and all-formula
+upgrades skip pinned formulae until `unpin`. `list --pinned` shows the set.
+
 ## Safety model
 
 - Default prefix is `~/.pybrew`; operating on `/opt/homebrew` or `/usr/local`

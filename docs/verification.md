@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-88 passed in 24.73s
+89 passed in 24.85s
 ```
 
 Breakdown of the feature slices:
@@ -41,7 +41,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_taps.py
 4 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_maintenance.py
-5 passed
+6 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bundle.py
 3 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cli.py
@@ -82,8 +82,20 @@ Verified in the resulting keg:
 - `INSTALL_RECEIPT.json` with `poured_from_bottle: true` and `runtime_dependencies: ["glib"]`
 - text placeholders (`@@HOMEBREW_PREFIX@@`) relocated, including `lib/pkgconfig/slirp.pc`
 
-The bottle was read from `~/Library/Caches/Homebrew/downloads`, so the test is
-offline and does not re-download the artefact.
+The offline test reads the bottle from `~/Library/Caches/Homebrew/downloads`.
+A separate live verification downloaded the same bottle from ghcr.io through
+pybrew's anonymous OCI token flow:
+
+```console
+$ PYTHONPATH=src python -m pybrew --prefix /tmp/pybrew-ghcr \
+    --tap tests/fixtures/core_formulas --cache /tmp/pybrew-ghcr-cache \
+    install --ignore-dependencies libslirp
+Poured from bottle: libslirp 4.9.6 (/tmp/pybrew-ghcr/Cellar/libslirp/4.9.6)
+```
+
+The cached blob SHA-256 matched the formula, the keg receipt says
+`poured_from_bottle: true`, and `file` identifies the installed dylib as a
+Mach-O arm64 shared library.
 
 ## Real source build (GNU hello)
 
@@ -168,6 +180,8 @@ Unsupported Brewfile lines fail with a line number.
   overwrite without `--force`, and the result can be fed back to `bundle check`.
 - `cleanup --prune-cache --cache-age-days 30` removes old cached downloads; both
   dry-run and real runs are covered.
+- `pin` prevents `outdated` reporting, `list --pinned` shows it, and `unpin`
+  restores outdated detection.
 
 ## Additional maintenance checks
 

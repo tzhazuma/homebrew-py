@@ -8,11 +8,11 @@ Formula 解析、依赖解析、Cellar、bottle 安装、链接/卸载和 receip
 
 > **状态：v0.1 原型（可运行、可测试）**
 >
-> - 88 个测试全部通过（`pytest -q`）
+> - 89 个测试全部通过（`pytest -q`）
 > - 15 个真实 homebrew-core 公式（bash、git、curl、openssl@3、python@3.12 等）与
 >   `brew info --json=v2` 的元数据逐项对比通过
 > - 使用真实 `hello 2.12.3` Formula 完成 autotools 源码构建并运行成功
-> - 使用本机缓存的真实 `libslirp 4.9.6` Homebrew bottle 完成安装验证
+> - 使用本机缓存的真实 `libslirp 4.9.6` Homebrew bottle 完成安装验证；也完成了 live ghcr.io OCI 下载验证
 > - 支持 tap 管理、cask（zip/dmg 的 app/binary/suite）和 macOS launchd services
 > - 支持 ghcr.io OCI bottle 下载（匿名 token）、SHA-256 校验、路径重定位、receipt、
 >   opt 链接和回滚
@@ -102,7 +102,7 @@ Installer(config, loader).install(formula, InstallOptions())
 | Cask | ✅ zip/dmg/pkg 子集 | app/binary/suite 安装、receipt、uninstall、`--zap`；`pkg` 可展开 payload 到 `--pkg-root`；支持 `--api`、`outdated`/`upgrade`、`uninstall quit/delete`；不执行安装脚本/不做系统级安装 |
 | Services | ✅ launchd + systemd | macOS 生成 launchd plist；Linux 生成 systemd user unit；start/stop/restart/list/info |
 | Cask/Services/Tap 命令 | ✅ | 集成到 `pybrew` CLI |
-| 维护命令 | ✅ | `outdated`、`upgrade`（含 `--dry-run`）、`cleanup`（含 `--prune-cache`）、`reinstall`、`doctor --json`、`services cleanup`、`tap --update`、`shellenv` |
+| 维护命令 | ✅ | `outdated`、`upgrade`（含 `--dry-run`）、`cleanup`（含 `--prune-cache`）、`reinstall`、`doctor --json`、`pin`/`unpin`、`services cleanup`、`tap --update`、`shellenv` |
 | Brewfile | ✅ 基础 | `bundle install/check/list/dump`，支持 `tap`/`brew`/`cask` 行 |
 | 完整 pkg cask 脚本/系统安装 / analytics / 高级 bundle 选项 | ❌ | 路线图 |
 
@@ -145,7 +145,7 @@ Installer(config, loader).install(formula, InstallOptions())
 
 ```bash
 pytest -q
-# 88 passed
+# 89 passed
 ```
 
 测试覆盖：
@@ -161,7 +161,7 @@ pytest -q
 - `test_cask.py`：真实 cask（rectangle/iterm2/VSCode）解析、zip/dmg 安装/卸载/zap、pkg payload、`install --cask`、API 映射、outdated/upgrade、uninstall quit/delete
 - `test_services.py`：launchd plist + systemd unit、伪造 launchctl/systemctl 的 start/stop/list、orphan cleanup
 - `test_taps.py`：本地 git tap 的 clone/update/untap/update-all
-- `test_maintenance.py`：outdated、upgrade --dry-run、cleanup（含 cache）、reinstall
+- `test_maintenance.py`：outdated、upgrade --dry-run、cleanup（含 cache）、reinstall、pin/unpin
 - `test_bundle.py`：Brewfile install/check/list/dump
 
 详细结果见 [docs/verification.md](docs/verification.md)，与 Ruby Homebrew 的差异见
