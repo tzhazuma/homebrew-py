@@ -215,9 +215,9 @@ misrepresenting authorship.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `8392dea` (minimal Brewfile bundle support)
-- CI run for the Brewfile bundle feature commit `8392dea`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40490793638>
+- Latest feature commit: `e4cdb81` (bundle dump + cache pruning)
+- CI run for the bundle-dump/cache-pruning feature commit `e4cdb81`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40543271082>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
