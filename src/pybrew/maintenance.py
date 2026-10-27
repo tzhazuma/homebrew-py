@@ -71,11 +71,20 @@ def upgrade_formula(
     dry_run: bool = False,
     verbose: bool = False,
 ) -> list[str]:
+    cellar = Cellar(config)
+    old_versions = list(cellar.installed().get(formula.name, []))
     installer = Installer(config, loader)
     results = installer.install(
         formula,
-        InstallOptions(dry_run=dry_run, verbose=verbose),
+        InstallOptions(dry_run=dry_run, verbose=verbose, overwrite=True),
     )
+    if not dry_run:
+        for version in old_versions:
+            if version == formula.pkg_version:
+                continue
+            keg = config.keg_path(formula.name, version)
+            if keg.exists():
+                cellar.remove_keg(keg)
     return [f"{result.name} {result.version}" for result in results if not result.skipped or dry_run]
 
 

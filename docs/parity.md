@@ -48,7 +48,7 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 | Casks | Yes | zip/dmg app/binary/suite, receipts, uninstall/zap + quit/delete; pkg payload via `--pkg-root`; API; outdated/upgrade |
 | Tap management | `brew tap` | `tap`/`untap`/list/`--update` with GitHub or local git URLs |
 | Services | Yes | macOS launchd + Linux systemd user units; start/stop/restart/list/info/run |
-| Outdated / upgrade / cleanup / reinstall / pin | Yes | Basic: outdated/upgrade/cleanup (kegs + cache)/reinstall + pin/unpin |
+| Outdated / upgrade / cleanup / reinstall / pin | Yes | outdated; upgrade installs new keg, rewrites links, removes old kegs; cleanup; reinstall; pin |
 | Bundle | Yes | Brewfile install/check/list/dump, tap URL, link:false |
 | Analytics | Yes | No |
 | Formula tests | `brew test` | Not executed |
@@ -91,5 +91,5 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 4. On this machine brew is x86_64 under Rosetta; corpus expectations therefore
    set `PYBREW_TARGET_ARCH=x86_64`, while native pybrew/pytest is arm64. The
    parser supports both.
-5. Cask package scripts/system-wide installs, advanced Brewfile options,
-   analytics and deeper `brew upgrade` semantics remain roadmap items.
+5. Cask package scripts/system-wide installs, advanced Brewfile options and
+   analytics remain roadmap items.

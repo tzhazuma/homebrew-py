@@ -85,3 +85,21 @@ def test_pin_prevents_outdated_and_unpin(run_cli, sample) -> None:
     assert "hello 1.0 < 2.0" in outdated.stdout
     missing = run_cli("pin", "ghost")
     assert missing.returncode == 1
+
+
+def test_real_upgrade_removes_old_keg(run_cli, sample) -> None:
+    import shutil
+
+    assert run_cli("install", "hello", bottle_tag=sample.tag).returncode == 0
+    old_bottle = sample.root / "bottles" / f"hello-1.0.{sample.tag}.bottle.tar.gz"
+    new_bottle = sample.root / "bottles" / f"hello-2.0.{sample.tag}.bottle.tar.gz"
+    shutil.copyfile(old_bottle, new_bottle)
+    _bump_formula(sample)
+    proc = run_cli("upgrade", "hello", bottle_tag=sample.tag)
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "Upgraded: hello 2.0" in proc.stdout
+    assert (sample.prefix / "Cellar" / "hello" / "2.0").is_dir()
+    assert not (sample.prefix / "Cellar" / "hello" / "1.0").exists()
+    link = sample.prefix / "bin" / "hello"
+    assert link.is_symlink()
+    assert "hello/2.0" in str(link.readlink())
