@@ -109,6 +109,11 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--no-link", action="store_true", help="do not create symlinks")
     install.add_argument("--HEAD", dest="head", action="store_true", help="build the head revision")
 
+    fetch_cmd = subparsers.add_parser("fetch", parents=[common], help="download formula/cask artifacts")
+    fetch_cmd.add_argument("formulae", nargs="+")
+    fetch_cmd.add_argument("--cask", action="store_true")
+    fetch_cmd.add_argument("--api", action="store_true")
+
     uninstall = subparsers.add_parser("uninstall", parents=[common], help="uninstall formulae")
     uninstall.add_argument("formulae", nargs="+")
     uninstall.add_argument("--force", action="store_true")
@@ -324,6 +329,60 @@ def cmd_info(args: argparse.Namespace) -> int:
         if formula.dependencies:
             print("Dependencies: " + ", ".join(sorted({dep.name for dep in formula.dependencies})))
     return 0
+
+
+def cmd_fetch(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    downloader = Downloader(config.downloads, config.bottle_dirs, bool(getattr(args, "verbose", False)))
+    exit_code = 0
+    if getattr(args, "cask", False):
+        cask_loader = _cask_loader(config, allow_api=bool(getattr(args, "api", False)))
+        for token in args.formulae:
+            try:
+                cask = cask_loader.load(token)
+                if not cask.url or not cask.sha256:
+                    raise UsageError(f"{token}: cask has no url/sha256")
+                cached = downloader.find_cached(cask.sha256)
+                if cached:
+                    print(cached)
+                    continue
+                path = downloader.fetch(cask.url, cask.sha256, hint=f"{token}-cask")
+            except PybrewError as error:
+                print(f"Error: {error}", file=sys.stderr)
+                exit_code = 1
+                continue
+            print(path)
+        return exit_code
+    loader = _loader(config)
+    for name in args.formulae:
+        try:
+            formula = _load_formula(name, loader, use_api=args.api)
+            bottle = formula.bottle_for_tag(config.bottle_tag)
+            if bottle is not None:
+                tag, bottle_file = bottle
+                cached = downloader.find_cached(bottle_file.sha256)
+                if cached:
+                    print(cached)
+                    continue
+                path = downloader.fetch(
+                    formula.bottle_url(tag, bottle_file),
+                    bottle_file.sha256,
+                    hint=f"{formula.name}--{formula.pkg_version}.{tag}.bottle.tar.gz",
+                )
+            else:
+                if not formula.stable.url or not formula.stable.sha256:
+                    raise UsageError(f"{name}: no bottle and no source url/sha256")
+                path = downloader.fetch(
+                    formula.stable.url,
+                    formula.stable.sha256,
+                    hint=f"{formula.name}-source",
+                )
+        except PybrewError as error:
+            print(f"Error: {error}", file=sys.stderr)
+            exit_code = 1
+            continue
+        print(path)
+    return exit_code
 
 
 def cmd_search(args: argparse.Namespace) -> int:
@@ -960,6 +1019,7 @@ def cmd_parse(args: argparse.Namespace) -> int:
 _COMMANDS = {
     "info": cmd_info,
     "search": cmd_search,
+    "fetch": cmd_fetch,
     "list": cmd_list,
     "deps": cmd_deps,
     "install": cmd_install,

@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-98 passed in 37.42s
+99 passed in 27.87s
 ```
 
 Breakdown of the feature slices:
@@ -228,6 +228,11 @@ head binary into the keg, and the resulting binary contains the head marker.
   installed while keeping installed services.
 - `tap --update` updates every installed tap from its git remote.
 - `shellenv` prints HOMEBREW_PREFIX/HOMEBREW_CELLAR/PATH for bash/zsh/fish.
+
+## Fetch
+
+`fetch hello` downloads the bottle to the cache and leaves the Cellar untouched;
+`fetch --cask testapp` downloads the cask zip and leaves no Caskroom entry.
 
 ## Cask CLI aliases
 

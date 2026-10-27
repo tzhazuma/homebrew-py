@@ -118,3 +118,17 @@ def test_cask_flags_on_search_outdated_upgrade(run_cli, sample) -> None:
     upgraded = run_cli("upgrade", "--cask", "testapp")
     assert upgraded.returncode == 0, upgraded.stderr
     assert "Upgraded: testapp 2.0" in upgraded.stdout
+
+
+def test_fetch_formula_and_cask(run_cli, sample) -> None:
+    proc = run_cli("fetch", "hello", bottle_tag=sample.tag)
+    assert proc.returncode == 0, proc.stderr
+    bottle_path = Path(proc.stdout.strip())
+    assert bottle_path.is_file()
+    assert not (sample.prefix / "Cellar" / "hello").exists()
+
+    cask = run_cli("fetch", "--cask", "testapp")
+    assert cask.returncode == 0, cask.stderr
+    cask_path = Path(cask.stdout.strip())
+    assert cask_path.is_file()
+    assert not (sample.prefix / "Caskroom").exists()

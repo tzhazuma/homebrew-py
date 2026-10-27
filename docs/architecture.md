@@ -168,6 +168,12 @@ downloads older than `--cache-age-days` (default 120) in addition to stale kegs.
 `pin` records a formula under `var/pybrew/pinned`; `outdated` and all-formula
 upgrades skip pinned formulae until `unpin`. `list --pinned` shows the set.
 
+## Fetch
+
+`fetch` resolves a formula's bottle (or source) and downloads it through the
+normal cache/SHA-256 path without installing anything; `fetch --cask` does the
+same for a local cask artifact.
+
 ## Safety model
 
 - Default prefix is `~/.pybrew`; operating on `/opt/homebrew` or `/usr/local`
