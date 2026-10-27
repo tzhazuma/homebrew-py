@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-101 passed in 25.22s
+102 passed in 22.97s
 ```
 
 Breakdown of the feature slices:
@@ -33,7 +33,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py
-16 passed      # real dmg/pkg payload, install --cask, API, outdated/upgrade, uninstall actions
+17 passed      # real dmg/pkg payload, install --cask, API, outdated/upgrade, uninstall actions
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py
 8 passed       # autotools, CMake, Cargo, meson(fake), inreplace, conditionals, resources, HEAD
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
@@ -241,6 +241,11 @@ head binary into the keg, and the resulting binary contains the head marker.
 `cat hello`/`cat --cask testapp` print local formula/cask source, `home` prints
 homepages, and `edit` is tested with `EDITOR=true` to avoid an interactive
 editor.
+
+## Cask reinstall
+
+`cask reinstall testapp` and `reinstall --cask testapp` remove and reinstall the
+cask, recreating the app and receipt.
 
 ## Cask CLI aliases
 

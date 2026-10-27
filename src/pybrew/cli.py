@@ -160,6 +160,7 @@ def build_parser() -> argparse.ArgumentParser:
         ("zap", "remove a cask's trash paths"),
         ("outdated", "list outdated casks"),
         ("upgrade", "upgrade casks"),
+        ("reinstall", "reinstall casks"),
     ):
         action_parser = cask_actions.add_parser(action_name, help=action_help)
         action_parser.add_argument("tokens", nargs="*")
@@ -194,6 +195,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     reinstall_cmd = subparsers.add_parser("reinstall", parents=[common], help="reinstall formulae")
     reinstall_cmd.add_argument("formulae", nargs="+")
+    reinstall_cmd.add_argument("--cask", action="store_true")
 
     pin_cmd = subparsers.add_parser("pin", parents=[common], help="pin a formula at its current version")
     pin_cmd.add_argument("formulae", nargs="+")
@@ -884,6 +886,21 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
 def cmd_reinstall(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     config.ensure()
+    if getattr(args, "cask", False):
+        cask_loader = _cask_loader(config)
+        installer = CaskInstaller(config)
+        exit_code = 0
+        for token in args.formulae:
+            try:
+                cask = cask_loader.load(token)
+                installer.uninstall(token, cask=cask)
+                installer.install(cask, force=True)
+            except PybrewError as error:
+                print(f"Error: {error}", file=sys.stderr)
+                exit_code = 1
+                continue
+            print(f"Reinstalled cask: {token}")
+        return exit_code
     loader = _loader(config)
     exit_code = 0
     for name in args.formulae:
@@ -935,6 +952,21 @@ def cmd_cask(args: argparse.Namespace) -> int:
         for row in rows:
             print(f"{row['token']} {row['installed']} < {row['current']}")
         return 0
+    if args.action == "reinstall":
+        if not args.tokens:
+            raise UsageError("cask reinstall needs at least one token")
+        exit_code = 0
+        for token in args.tokens:
+            try:
+                cask = loader.load(token)
+                installer.uninstall(token, cask=cask)
+                result = installer.install(cask, force=True)
+            except PybrewError as error:
+                print(f"Error: {error}", file=sys.stderr)
+                exit_code = 1
+                continue
+            print(f"Reinstalled cask: {result.token} {result.version}")
+        return exit_code
     if args.action == "upgrade":
         tokens = args.tokens or [
             row["token"] for row in installer.find_outdated(loader)

@@ -315,3 +315,14 @@ def test_cask_uninstall_quit_and_delete(run_cli, sample, tmp_path) -> None:
     assert proc.returncode == 0, proc.stderr
     assert 'tell application id "com.example.test" to quit' in log.read_text()
     assert not leftover.exists()
+
+
+def test_cask_reinstall(run_cli, sample) -> None:
+    assert run_cli("cask", "install", "testapp").returncode == 0
+    proc = run_cli("cask", "reinstall", "testapp")
+    assert proc.returncode == 0, proc.stderr
+    assert "Reinstalled cask: testapp 1.0" in proc.stdout
+    assert (sample.prefix / "Applications" / "Test.app").is_dir()
+    alias = run_cli("reinstall", "--cask", "testapp")
+    assert alias.returncode == 0, alias.stderr
+    assert "Reinstalled cask: testapp" in alias.stdout
