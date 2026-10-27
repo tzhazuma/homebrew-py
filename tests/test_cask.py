@@ -296,13 +296,17 @@ def test_cask_uninstall_quit_and_delete(run_cli, sample, tmp_path) -> None:
     cask_file.write_text(
         cask_file.read_text().replace(
             'uninstall quit: "com.example.test"',
-            f'uninstall quit: "com.example.test", delete: ["{leftover}"]',
+            f'uninstall quit: "com.example.test", pkgutil: "com.example.test", delete: ["{leftover}"]',
         )
     )
     fake = tmp_path / "fake-osascript"
     log = tmp_path / "osascript.log"
     fake.write_text('#!/bin/sh\necho "$@" >> "$FAKE_OSASCRIPT_LOG"\nexit 0\n')
     fake.chmod(0o755)
+    fake_pkgutil = tmp_path / "fake-pkgutil"
+    pkgutil_log = tmp_path / "pkgutil.log"
+    fake_pkgutil.write_text('#!/bin/sh\necho "$@" >> "$FAKE_PKGUTIL_LOG"\nexit 0\n')
+    fake_pkgutil.chmod(0o755)
     proc = run_cli(
         "cask",
         "uninstall",
@@ -310,10 +314,13 @@ def test_cask_uninstall_quit_and_delete(run_cli, sample, tmp_path) -> None:
         extra_env={
             "PYBREW_OSASCRIPT": str(fake),
             "FAKE_OSASCRIPT_LOG": str(log),
+            "PYBREW_PKGUTIL": str(fake_pkgutil),
+            "FAKE_PKGUTIL_LOG": str(pkgutil_log),
         },
     )
     assert proc.returncode == 0, proc.stderr
     assert 'tell application id "com.example.test" to quit' in log.read_text()
+    assert "--forget com.example.test" in pkgutil_log.read_text()
     assert not leftover.exists()
 
 

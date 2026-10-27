@@ -131,7 +131,7 @@ handles zip, tar, dmg and pkg containers:
 symlinked into `<prefix>/bin`, and receipts live in
 `<prefix>/Caskroom/<token>/<version>/.metadata/receipt.json`. Uninstall removes
 receipt-tracked paths and executes the safe subset of cask uninstall actions
-(`quit` via osascript on macOS, `delete` for leftovers); `launchctl`, `pkgutil`,
+(`quit` via osascript, `pkgutil --forget`, `delete` for leftovers); `launchctl`,
 login items and scripts are deliberately not executed. `--zap` removes the
 cask's declared trash paths after checking they stay inside the user
 home/prefix/temp roots. `.pkg` payloads are expanded under `--pkg-root`.

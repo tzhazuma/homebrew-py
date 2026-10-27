@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-104 passed in 25.93s
+104 passed in 25.70s
 ```
 
 Breakdown of the feature slices:
@@ -146,8 +146,9 @@ This is a real homebrew-core formula, not a synthetic fixture.
   back to the API when no local cask tap exists.
 - Cask `outdated` and `upgrade` are covered: upgrading replaces the app/binary
   artifacts, keeps shared paths, and removes the superseded Caskroom version.
-- Cask uninstall runs `quit` through a fake osascript and removes a `delete`
-  leftover inside the temporary root; unsupported actions are skipped.
+- Cask uninstall runs `quit` through a fake osascript, `pkgutil --forget` through
+  a fake pkgutil, and removes a `delete` leftover inside the temporary root;
+  other actions are skipped.
 
 ## Services verification
 

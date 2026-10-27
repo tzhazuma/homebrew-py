@@ -99,7 +99,7 @@ Installer(config, loader).install(formula, InstallOptions())
 | Cellar / 链接 | ✅ | `Cellar/<name>/<version>`、`opt` 链接、bin/lib/share/... 相对符号链接、冲突检测、`--overwrite`、卸载清理 |
 | Source 安装 | ✅ 常用子集 | `system`（含 `std_configure_args`/`std_cmake_args`/`std_meson_args`/`std_cargo_args`）、`inreplace`、`ENV`、`bin.install`/`prefix.install`、`resource(...).stage`、`--HEAD` 源码安装、`if OS.mac?`/`on_macos`；autotools/cmake/cargo 有真实构建测试；不支持的 Ruby 会明确报错 |
 | Tap 管理 | ✅ | `tap`/`untap`/`tap --list`/`tap --update`/`update`，支持 GitHub 与本地 git URL，自动发现 Formula/Casks |
-| Cask | ✅ zip/dmg/pkg 子集 | app/binary/suite 安装、receipt、uninstall、`--zap`；`pkg` 可展开 payload 到 `--pkg-root`；支持 `--api`、`outdated`/`upgrade`/`reinstall`（含 `--cask` 别名）、`search --cask`、`uninstall quit/delete`；不执行安装脚本/不做系统级安装 |
+| Cask | ✅ zip/dmg/pkg 子集 | app/binary/suite 安装、receipt、uninstall、`--zap`；`pkg` 可展开 payload 到 `--pkg-root`；支持 `--api`、`outdated`/`upgrade`/`reinstall`（含 `--cask` 别名）、`search --cask`、`uninstall quit/delete/pkgutil`；不执行安装脚本/不做系统级安装 |
 | Services | ✅ launchd + systemd | macOS 生成 launchd plist；Linux 生成 systemd user unit；start/stop/restart/list/info |
 | Cask/Services/Tap 命令 | ✅ | 集成到 `pybrew` CLI |
 | 下载/源码查看 | ✅ | `fetch` formula bottle/source 或 `fetch --cask` artifact、`cat`/`home`/`edit` formula 与 cask |

@@ -514,6 +514,20 @@ class CaskInstaller:
                     )
                 except (OSError, subprocess.TimeoutExpired):
                     pass
+        pkgutil_value = cask.uninstall.get("pkgutil")
+        if pkgutil_value and sys.platform == "darwin":
+            receipts = pkgutil_value if isinstance(pkgutil_value, list) else [pkgutil_value]
+            executable = os.environ.get("PYBREW_PKGUTIL", "pkgutil")
+            for receipt in receipts:
+                try:
+                    subprocess.run(
+                        [executable, "--forget", str(receipt)],
+                        text=True,
+                        capture_output=True,
+                        timeout=30,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
         delete_value = cask.uninstall.get("delete")
         if delete_value:
             paths = delete_value if isinstance(delete_value, list) else [delete_value]
