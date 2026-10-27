@@ -22,6 +22,7 @@ from .errors import (
 )
 from .models import BottleFile, Formula
 from .paths import Config
+from .source_builder import build_source
 from .taps import FormulaLoader
 
 PLACEHOLDERS = {
@@ -368,16 +369,15 @@ class Installer:
             extract_root = Path(temporary)
             safe_extract_tar(archive, extract_root)
             build_root = self._find_source_root(extract_root)
-            actions = parse_install_actions(formula.install_source)
-            if not actions:
-                raise UnsupportedInstall(
-                    f"{formula.name}: source installer only supports staged formulae "
-                    "(bin.install/prefix.install/...); this formula needs a build system"
-                )
             staging = Path(tempfile.mkdtemp(prefix="pybrew-keg-"))
             try:
-                for action in actions:
-                    action.run(build_root, staging)
+                build_source(
+                    formula,
+                    self.config,
+                    build_root,
+                    staging,
+                    verbose=self.verbose or options.verbose,
+                )
                 self._commit_keg(staging, keg)
             finally:
                 if staging.exists():

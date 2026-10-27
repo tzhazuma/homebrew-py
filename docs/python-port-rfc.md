@@ -4,7 +4,7 @@
 
 Repository: <https://github.com/tzhazuma/homebrew-py>
 
-Upstream draft PR: <https://github.com/Homebrew/brew/pull/24362>
+Upstream draft PR (closed by template bot; re-submission pending maintainer/user approval): <https://github.com/Homebrew/brew/pull/24362>
 
 ## Motivation
 
@@ -36,14 +36,25 @@ A clean-room Python 3.9+ package (`pybrew`) with no runtime dependencies:
 - bottle install from ghcr.io OCI or a plain/root URL, with SHA-256 verification,
   safe tar extraction, `@@HOMEBREW_*@@` relocation, receipts, opt links and
   link/unlink with conflict detection;
-- a deliberately small staged-source installer (`bin.install`, `prefix.install`,
-  ...); build systems are explicitly unsupported for now;
+- source builds from the common `def install` statements: `system` (including
+  `*std_configure_args`, `*std_cmake_args`, `*std_meson_args`, `*std_cargo_args`),
+  `inreplace`, `ENV` mutation, `bin.install`/`prefix.install` and simple
+  `if OS.mac?`/`on_macos` branches; autotools, CMake and Cargo are covered by
+  tests, and unsupported Ruby/build steps fail explicitly instead of pretending
+  to succeed;
+- Homebrew services: parse `service do` blocks, generate launchd plists, and
+  start/stop/restart/list services through an injectable `launchctl` runner;
+- cask support for zip/dmg archives with `.app`, `binary` and `suite` artifacts,
+  receipts, uninstall and zap; pkg artifacts and Linux systemd are not yet
+  implemented;
+- tap management (`tap`/`untap`/list, local and GitHub URLs);
 - `info`, `search`, `list`, `deps`, `install`, `uninstall`, `link`, `unlink`,
-  `doctor`, `config` commands and a brew-v2-compatible JSON subset.
+  `tap`, `untap`, `cask`, `services`, `doctor`, `config` commands and a
+  brew-v2-compatible JSON subset.
 
 ## Validation
 
-- 45 tests pass (`pytest -q`).
+- 69 tests pass (`pytest -q`).
 - 15 real homebrew-core formulae (bash, git, curl, openssl@3, python@3.12, ...)
   parse to exactly the desc/homepage/license/version/dependency values returned
   by `brew info --json=v2` (Homebrew 7.0.9).
@@ -52,12 +63,20 @@ A clean-room Python 3.9+ package (`pybrew`) with no runtime dependencies:
   receipt.
 - Synthetic tests cover checksum failure, malicious tar paths, link conflicts,
   keg-only formulae, dependency ordering and uninstall.
+- Build tests compile real autotools, CMake and Cargo fixtures and verify the
+  installed executables; cask tests install a zip and a real dmg and verify app,
+  binary, receipt, uninstall and zap; service tests verify plist generation and
+  launchctl start/stop through a fake runner; tap tests clone and update a local
+  git tap.
 
 ## Non-goals
 
 - A drop-in replacement for `brew` or for Homebrew's Ruby extension points.
-- Cask support, services, analytics, tap management (roadmap only).
-- Running arbitrary Ruby from formulae or arbitrary build systems.
+- Full cask coverage: `.pkg` artifacts, `pkgutil` receipts, login items and
+  system-wide installs are not implemented.
+- Linux services/systemd, analytics, `brew bundle`, `brew upgrade` and arbitrary
+  Ruby/build systems are not implemented yet.
+- Running arbitrary Ruby from formulae.
 
 ## Questions for Homebrew maintainers
 

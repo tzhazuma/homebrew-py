@@ -22,20 +22,26 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-45 passed in 1.64s
+69 passed in 20.94s
 ```
 
-Breakdown:
+Breakdown of the feature slices:
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
-17 passed in 0.02s      # 15 parametrized real formulae + 2 aggregate checks
-
+17 passed      # 15 parametrized real formulae + 2 aggregate checks
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
-10 passed in 0.84s
-
+10 passed
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py
+10 passed      # includes a real dmg mount test on macOS
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py
+5 passed       # autotools, CMake, Cargo, inreplace, conditionals
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
+6 passed
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_taps.py
+3 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cli.py
-8 passed in 0.76s
+8 passed
 ```
 
 ## Real formula parity
@@ -75,6 +81,51 @@ Verified in the resulting keg:
 The bottle was read from `~/Library/Caches/Homebrew/downloads`, so the test is
 offline and does not re-download the artefact.
 
+## Real source build (GNU hello)
+
+The real `tests/fixtures/core_formulas/hello.rb` formula was installed with
+`--build-from-source` into a temporary prefix. pybrew downloaded the GNU hello
+source, ran `./configure` + `make install` via the install DSL, and produced a
+working binary:
+
+```console
+$ PYTHONPATH=src python -m pybrew --prefix /tmp/pybrew-hello-prefix \
+    --tap tests/fixtures/core_formulas --cache /tmp/pybrew-hello-cache \
+    install --build-from-source hello
+Installed: hello 2.12.3 (/tmp/pybrew-hello-prefix/Cellar/hello/2.12.3)
+
+$ /tmp/pybrew-hello-prefix/bin/hello --greeting=pybrew
+pybrew
+```
+
+The receipt says `poured_from_bottle: false`, `built_as_bottle: false`.
+This is a real homebrew-core formula, not a synthetic fixture.
+
+## Cask verification
+
+- `tests/test_cask.py` parses real cask definitions (`rectangle`, `iterm2`,
+  `visual-studio-code`) and installs a synthetic `.zip` cask: app copied to
+  `<prefix>/Applications`, binary symlinked into `<prefix>/bin`, receipt written,
+  uninstall and `--zap` verified.
+- A synthetic `.dmg` is created with `hdiutil`, mounted, and its `.app` installed.
+- Unsafe zip members (`../`) are rejected before extraction.
+
+## Services verification
+
+- `parse_service_block` resolves `opt_bin`, `var` and `std_service_path_env`.
+- Plist generation is tested for ProgramArguments, KeepAlive, RunAtLoad,
+  WorkingDirectory, log paths and EnvironmentVariables.
+- start/stop/list are tested through a fake `launchctl` that records arguments;
+  the real launchd is not touched.
+- CLI `services start/list/stop` is covered with `PYBREW_SERVICE_DIR` and
+  `PYBREW_LAUNCHCTL` overrides.
+
+## Tap verification
+
+- A local git remote is cloned into `<prefix>/Library/Taps/tzhazuma/homebrew-demo`,
+  loaded by `FormulaLoader`, updated with a second commit, listed, and untapped.
+- CLI `tap --url`, `tap --list` and `untap` are covered.
+
 ## CLI smoke checks
 
 ```console
@@ -100,8 +151,12 @@ install, `doctor`, `list`, `deps`, `search`, `config`, and `parse`.
 
 - Live download from ghcr.io was exercised by unit logic but not by the offline
   test suite; the real bottle test intentionally uses a cached artefact.
-- Full source builds (autotools/cmake/meson), casks, services, tap management.
+- Meson builds are implemented via `std_meson_args` but meson is not installed in
+  this environment, so only helper expansion is covered.
+- Cask `.pkg` artifacts and system-wide installs.
+- Linux systemd services.
 - Mach-O binary relocation was not validated by running the installed dylib.
+- `brew lgtm`, `brew bundle`, `brew upgrade`, analytics.
 
 These are tracked in the README roadmap and `docs/parity.md`.
 
@@ -138,6 +193,12 @@ misrepresenting authorship.
 The draft RFC PR <https://github.com/Homebrew/brew/pull/24362> was created, then
 automatically closed by Homebrew's PR-template bot (missing template, possible
 AI authorship warning). The fork branch `tzhazuma/brew:python-port-rfc` remains
-available. A human follow-up would need to fill the upstream
-`PULL_REQUEST_TEMPLATE.md`, disclose AI usage as required, and run applicable
-checks; no attempt was made to bypass that human-review gate.
+available.
+
+A complete re-submission template is now prepared in
+`docs/upstream-pr/PR_BODY.md` (with the current Homebrew template checkboxes and
+an AI disclosure section) and `docs/upstream-pr/REVIEW_AND_SUBMIT.md`. It has
+**not** been resubmitted: Homebrew requires the human submitter to review all
+AI-generated content and answer review comments without AI. The guarded helper
+`scripts/open_upstream_pr.py` performs no writes unless `--authorized` is passed
+and still requires the human to tick the AI checkbox and confirm the disclosure.

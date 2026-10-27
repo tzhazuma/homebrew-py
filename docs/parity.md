@@ -41,13 +41,14 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 | Formula DSL metadata | Full Ruby evaluation + DSL | Literal-only parser, tolerates unknown calls |
 | Dependency resolution | Full, options/requirements | Runtime/build/test/optional/recommended + uses_from_macos |
 | Bottle install | All platforms, OCI + legacy mirrors | ghcr.io OCI + plain root_url + local file; SHA-256; relocation (text + best-effort binary) |
-| Source install | Any build system / formula Ruby | Only declarative staged installs (`bin.install`, ...) |
+| Source install | Any build system / formula Ruby | Common `def install` subset: system/inreplace/ENV/install actions; autotools/CMake/Cargo tested; unsupported Ruby fails explicitly |
 | Cellar / keg / receipts | Yes | Yes, compatible layout |
 | opt / linking | Yes | Yes, conflict-aware, --overwrite |
 | `info --json` | Full v2 schema | Compatible subset of v2 fields |
-| Casks | Yes | No |
-| Tap management | `brew tap` | Read-only tap discovery |
-| Services / analytics | Yes | No |
+| Casks | Yes | zip/dmg app/binary/suite, receipts, uninstall/zap; pkg unsupported |
+| Tap management | `brew tap` | `tap`/`untap`/list with GitHub or local git URLs |
+| Services | Yes | macOS launchd start/stop/restart/list/info/run; Linux systemd no |
+| Analytics / bundle / upgrade | Yes | No |
 | Formula tests | `brew test` | Not executed |
 | Self-update / doctor | Yes | `doctor` checks prefix health |
 
@@ -66,12 +67,16 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 - Real bottle: cached Homebrew `libslirp 4.9.6` bottle installs offline, including
   its real `lib/libslirp.dylib`, headers, pkg-config file and receipt.
 - CLI: info/search/list/deps/doctor/config/parse all exercised in subprocesses.
+- Tap: clone a local git tap, update it, load a formula from it, untap.
+- Source build: real autotools/CMake/Cargo fixture compilation, `inreplace`, host conditionals; real GNU hello 2.12.3 built manually.
+- Cask: real rectangle/iterm2/VSCode definitions parse; synthetic zip and dmg installs verify app/binary/receipt/uninstall/zap.
+- Services: DSL parsing, launchd plist fields, start/stop/list with a fake `launchctl`; real launchctl is not invoked in tests.
 
 ## Known differences
 
 1. Source builds use a deliberately small install-DSL subset. A formula that
-   runs `system "make install"` fails with `UnsupportedInstall` instead of
-   pretending to succeed.
+   uses unsupported Ruby (loops, resources, complex build.with? branches) fails
+   with `UnsupportedInstall` instead of pretending to succeed.
 2. Binary relocation is not Mach-O-aware; the current implementation rewrites
    placeholders where the new path fits. `libslirp`'s text files are relocated;
    binary dylibs built with `:any` cellars may still contain build-prefix paths.
@@ -80,3 +85,5 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 4. On this machine brew is x86_64 under Rosetta; corpus expectations therefore
    set `PYBREW_TARGET_ARCH=x86_64`, while native pybrew/pytest is arm64. The
    parser supports both.
+5. Cask pkg artifacts, system-wide installs, Linux systemd services, analytics,
+   `brew bundle` and `brew upgrade` remain roadmap items.

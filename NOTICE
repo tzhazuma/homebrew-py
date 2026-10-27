@@ -14,3 +14,9 @@ included for reproducibility.
 The pybrew implementation itself is an independent, clean-room Python
 implementation of the public Homebrew command-line behaviour, formula DSL and
 on-disk layout. It does not contain Homebrew's Ruby source code.
+
+tests/fixtures/casks/*.rb
+-------------------------
+Unmodified cask definitions from Homebrew/homebrew-cask (rectangle, iterm2,
+visual-studio-code), used as parser fixtures. Homebrew Cask is distributed under
+the BSD 2-Clause License; see https://github.com/Homebrew/homebrew-cask/blob/main/LICENSE.

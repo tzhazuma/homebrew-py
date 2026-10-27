@@ -9,6 +9,7 @@ import os
 import subprocess
 import sys
 import tarfile
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -192,6 +193,56 @@ def sample(tmp_path: Path, bottle_tag: str) -> SimpleNamespace:
             install_body='bin.install "dep"',
         )
     )
+    # A cask fixture: Test.app inside a zip, plus a binary inside the app.
+    cask_src = root / "cask-src" / "Test.app" / "Contents"
+    (cask_src / "MacOS").mkdir(parents=True)
+    (cask_src / "Info.plist").write_text("<plist><dict/></plist>", encoding="utf-8")
+    app_binary = cask_src / "MacOS" / "Test"
+    app_binary.write_text("#!/bin/sh\necho test\n", encoding="utf-8")
+    app_binary.chmod(0o755)
+    cask_zip = root / "casks" / "TestApp-1.0.zip"
+    cask_zip.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(cask_zip, "w") as bundle:
+        for path in sorted((root / "cask-src").rglob("*")):
+            arcname = str(path.relative_to(root / "cask-src"))
+            if path.is_dir():
+                continue
+            info = zipfile.ZipInfo(arcname)
+            info.external_attr = (path.stat().st_mode & 0o777) << 16
+            bundle.writestr(info, path.read_bytes())
+    zap_path = root / "zapme.txt"
+    cask_dir = tap / "Casks" / "t"
+    cask_dir.mkdir(parents=True)
+    (cask_dir / "testapp.rb").write_text(
+        f'''cask "testapp" do
+  version "1.0"
+  sha256 "{sha256_file(cask_zip)}"
+  url "{cask_zip.as_uri()}"
+  name "Test App"
+  desc "test cask"
+  homepage "https://example.com/testapp"
+  app "Test.app"
+  binary "Test.app/Contents/MacOS/Test", target: "test-cli"
+  uninstall quit: "com.example.test"
+  zap trash: ["{zap_path}"]
+end
+'''
+    )
+    (tap / "Formula" / "svc.rb").write_text(
+        f'''class Svc < Formula
+  desc "service fixture"
+  homepage "https://example.com/svc"
+  url "{source.as_uri()}"
+  sha256 "{sha256_file(source)}"
+  license "MIT"
+
+  service do
+    run [opt_bin/"svc", "--foreground"]
+    keep_alive true
+  end
+end
+'''
+    )
     return SimpleNamespace(
         root=root,
         prefix=root / "prefix",
@@ -204,16 +255,25 @@ def sample(tmp_path: Path, bottle_tag: str) -> SimpleNamespace:
         hello_dep_bottle=hello_dep_bottle,
         tag=bottle_tag,
         bottle_sha=sha256_file(bottle),
+        cask_zip=cask_zip,
+        cask_zap=zap_path,
     )
 
 
 @pytest.fixture
 def run_cli(sample: SimpleNamespace):
-    def run(*args: str, bottle_tag: str | None = None, prefix: Path | None = None):
+    def run(
+        *args: str,
+        bottle_tag: str | None = None,
+        prefix: Path | None = None,
+        extra_env: dict[str, str] | None = None,
+    ):
         env = os.environ.copy()
         env["PYTHONPATH"] = str(SRC) + os.pathsep + env.get("PYTHONPATH", "")
         env.pop("HOMEBREW_BOTTLE_TAG", None)
         env.pop("PYBREW_BOTTLE_TAG", None)
+        if extra_env:
+            env.update(extra_env)
         if bottle_tag:
             env["PYBREW_BOTTLE_TAG"] = bottle_tag
         command = [

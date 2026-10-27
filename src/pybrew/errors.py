@@ -41,3 +41,7 @@ class DependencyError(PybrewError):
 
 class UsageError(PybrewError):
     """The command line was used incorrectly."""
+
+
+class BuildError(PybrewError):
+    """A source build command or install step failed."""

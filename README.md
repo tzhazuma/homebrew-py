@@ -8,10 +8,12 @@ Formula 解析、依赖解析、Cellar、bottle 安装、链接/卸载和 receip
 
 > **状态：v0.1 原型（可运行、可测试）**
 >
-> - 45 个测试全部通过（`pytest -q`）
+> - 69 个测试全部通过（`pytest -q`）
 > - 15 个真实 homebrew-core 公式（bash、git、curl、openssl@3、python@3.12 等）与
 >   `brew info --json=v2` 的元数据逐项对比通过
+> - 使用真实 `hello 2.12.3` Formula 完成 autotools 源码构建并运行成功
 > - 使用本机缓存的真实 `libslirp 4.9.6` Homebrew bottle 完成安装验证
+> - 支持 tap 管理、cask（zip/dmg 的 app/binary/suite）和 macOS launchd services
 > - 支持 ghcr.io OCI bottle 下载（匿名 token）、SHA-256 校验、路径重定位、receipt、
 >   opt 链接和回滚
 
@@ -44,6 +46,25 @@ pybrew --prefix /tmp/pybrew --tap /path/to/tap install --bottle-file ~/Library/C
 # 使用 Homebrew JSON API（没有 homebrew-core 本地 checkout 时）
 pybrew --prefix /tmp/pybrew info --api hello
 pybrew --prefix /tmp/pybrew install --api hello
+
+# Tap 管理
+pybrew --prefix /tmp/pybrew tap homebrew/cask
+pybrew --prefix /tmp/pybrew tap --list
+pybrew --prefix /tmp/pybrew untap homebrew/cask
+
+# Cask（zip / dmg；默认安装到 <prefix>/Applications）
+pybrew --prefix /tmp/pybrew tap homebrew/cask
+pybrew --prefix /tmp/pybrew cask install rectangle
+pybrew --prefix /tmp/pybrew cask list
+pybrew --prefix /tmp/pybrew cask uninstall --zap rectangle
+
+# Services（macOS launchd）
+pybrew --prefix /tmp/pybrew services list
+pybrew --prefix /tmp/pybrew services start nginx
+pybrew --prefix /tmp/pybrew services stop nginx
+
+# 源码构建（autotools / CMake / Cargo 等常用 def install DSL）
+pybrew --prefix /tmp/pybrew --tap /path/to/tap install --build-from-source hello
 ```
 
 也可以作为库调用：
@@ -69,10 +90,12 @@ Installer(config, loader).install(formula, InstallOptions())
 | 依赖解析 | ✅ | 递归依赖、拓扑排序、环检测、build/test/optional/recommended 分类、`uses_from_macos`（Linux 安装）|
 | Bottle 安装 | ✅ | 标签选择与降级、ghcr.io OCI 匿名拉取、本地缓存/SHA 校验、安全解包、`@@HOMEBREW_*@@` 重定位、receipt |
 | Cellar / 链接 | ✅ | `Cellar/<name>/<version>`、`opt` 链接、bin/lib/share/... 相对符号链接、冲突检测、`--overwrite`、卸载清理 |
-| Source 安装 | ⚠️ 部分 | 仅支持“已构建二进制”公式的声明式 `bin.install`/`prefix.install` 等；`system "make install"` 会明确报 `UnsupportedInstall`，不会静默损坏环境 |
-| Cask | ❌ | 未实现 |
-| 完整构建系统（autotools/cmake/meson 等） | ❌ | 路线图 |
-| Services / analytics / tap 管理 | ❌ | 路线图 |
+| Source 安装 | ✅ 常用子集 | `system`（含 `std_configure_args`/`std_cmake_args`/`std_meson_args`/`std_cargo_args`）、`inreplace`、`ENV`、`bin.install`/`prefix.install`、`if OS.mac?`/`on_macos`；autotools/cmake/cargo 有真实构建测试；不支持的 Ruby 会明确报错 |
+| Tap 管理 | ✅ | `tap`/`untap`/`tap --list`，支持 GitHub 与本地 git URL，自动发现 Formula/Casks |
+| Cask | ✅ zip/dmg 子集 | app/binary/suite 安装、receipt、uninstall、`--zap`；`pkg` artifact 和系统级安装暂不支持 |
+| Services | ✅ macOS launchd | 解析 `service do`、生成 plist、start/stop/restart/list/info；Linux systemd 路线图 |
+| Cask/Services/Tap 命令 | ✅ | 集成到 `pybrew` CLI |
+| 完整 pkg cask / analytics / bundle / upgrade | ❌ | 路线图 |
 
 ## 架构
 
@@ -113,7 +136,7 @@ Installer(config, loader).install(formula, InstallOptions())
 
 ```bash
 pytest -q
-# 45 passed
+# 69 passed
 ```
 
 测试覆盖：
@@ -125,6 +148,10 @@ pytest -q
   staged source 安装、恶意 tar 拒绝
 - `test_cli.py`：info/search/list/deps/doctor/config/parse
 - `test_real_bottle.py`：真实 `libslirp 4.9.6` bottle 离线安装（有缓存时运行）
+- `test_source_build.py`：真实 autotools/CMake/Cargo 构建、inreplace、条件分支
+- `test_cask.py`：真实 cask（rectangle/iterm2/VSCode）解析、zip/dmg 安装/卸载/zap
+- `test_services.py`：service DSL/plist 生成 + 伪造 launchctl 的 start/stop/list
+- `test_taps.py`：本地 git tap 的 clone/update/untap
 
 详细结果见 [docs/verification.md](docs/verification.md)，与 Ruby Homebrew 的差异见
 [docs/parity.md](docs/parity.md)，设计细节见 [docs/architecture.md](docs/architecture.md)。
@@ -160,9 +187,16 @@ Homebrew 的 `PULL_REQUEST_TEMPLATE.md`；机器人提示它可能由 AI 生成�
 要求提交者逐项勾选并披露 AI 使用、由人类跟进 review。也就是说，这是上游流程门槛，
 不是对代码/方向的技术否决。
 
-如果要以人类账号继续，需要：填写上游 PR 模板、按模板披露 AI 使用、运行适用的
-`brew lgtm`，并由提交者本人回应 review。当前分支仍在 fork
-`tzhazuma/brew:python-port-rfc` 上，可在此基础上重开/重提。
+**已准备好重提模板，等待人工审核授权：**
+
+- PR 正文模板：[docs/upstream-pr/PR_BODY.md](docs/upstream-pr/PR_BODY.md)
+- 审核与提交说明：[docs/upstream-pr/REVIEW_AND_SUBMIT.md](docs/upstream-pr/REVIEW_AND_SUBMIT.md)
+- 标题：[docs/upstream-pr/PR_TITLE.txt](docs/upstream-pr/PR_TITLE.txt)
+- 授权后才执行的脚本：`python scripts/open_upstream_pr.py --authorized --pr 24362`
+
+根据 Homebrew 的 Contributing/Responsible AI 规则，提交者本人必须审核所有 AI 生成内容、
+在 PR 中披露 AI 工具、并亲自回答 maintainer 的 review；当前分支仍在
+`tzhazuma/brew:python-port-rfc`，本次没有自动重提。
 
 ## 目录结构
 

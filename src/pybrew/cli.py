@@ -11,6 +11,8 @@ from typing import Any, Optional
 
 from . import PYBREW_VERSION
 from .api import fetch_formula
+from .cask import CaskError
+from .cask_installer import CaskInstaller, CaskLoader, CaskNotFound
 from .cellar import Cellar, Linker, read_receipt
 from .doctor import diagnose
 from .download import Downloader
@@ -19,6 +21,8 @@ from .installer import InstallOptions, Installer
 from .models import Formula, candidate_bottle_tags
 from .paths import Config
 from .ruby_parser import parse_formula_file
+from .services import ServiceError, ServiceManager, installed_formulae
+from .tap_manager import TapManager
 from .taps import FormulaLoader, discover_taps
 
 
@@ -95,6 +99,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     unlink = subparsers.add_parser("unlink", parents=[common], help="unlink an installed keg")
     unlink.add_argument("formula")
+
+    tap = subparsers.add_parser("tap", parents=[common], help="list, install or update taps")
+    tap.add_argument("names", nargs="*")
+    tap.add_argument("--url", help="override the clone URL (useful for local taps)")
+    tap.add_argument("--list", action="store_true", help="list installed taps")
+
+    untap = subparsers.add_parser("untap", parents=[common], help="remove a tap")
+    untap.add_argument("name")
+    untap.add_argument("--force", action="store_true")
+
+    cask = subparsers.add_parser("cask", parents=[common], help="manage macOS casks (applications)")
+    cask.add_argument("action", nargs="?", default="list", choices=["install", "uninstall", "list", "info", "search", "zap"])
+    cask.add_argument("tokens", nargs="*")
+    cask.add_argument("--force", action="store_true")
+    cask.add_argument("--zap", action="store_true")
+    cask.add_argument("--json", action="store_true")
+    cask.add_argument("--appdir", type=Path)
+
+    services = subparsers.add_parser("services", parents=[common], help="manage background services")
+    services.add_argument("action", nargs="?", default="list", choices=["list", "start", "stop", "restart", "run", "info"])
+    services.add_argument("formula", nargs="?")
+    services.add_argument("--json", action="store_true")
 
     subparsers.add_parser("doctor", parents=[common], help="check the prefix for problems")
     config = subparsers.add_parser("config", parents=[common], help="show pybrew configuration")
@@ -359,6 +385,156 @@ def cmd_unlink(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_tap(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    manager = TapManager(config)
+    if args.list or not args.names:
+        taps = manager.list()
+        for tap in taps:
+            formulas, casks = manager.counts(tap)
+            print(f"{tap.name}\t{tap.path}\t{formulas} formula(s), {casks} cask(s)")
+        return 0
+    if len(args.names) > 1 and args.url:
+        raise UsageError("--url can only be used with a single tap")
+    for name in args.names:
+        result = manager.tap(name, url=args.url)
+        print(
+            f"{result.action}: {result.name} -> {result.path} "
+            f"({result.formulas} formula(s), {result.casks} cask(s))"
+        )
+    return 0
+
+
+def cmd_untap(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    manager = TapManager(config)
+    path = manager.untap(args.name, force=args.force)
+    print(f"untapped: {args.name} ({path})")
+    return 0
+
+
+def _cask_loader(config: Config) -> CaskLoader:
+    return CaskLoader(discover_taps(config.taps))
+
+
+def cmd_cask(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    loader = _cask_loader(config)
+    installer = CaskInstaller(config, appdir=args.appdir)
+    if args.action == "list":
+        rows = installer.list_installed()
+        if args.json:
+            print(json.dumps(rows, indent=2))
+            return 0
+        if not rows:
+            print("No casks installed.")
+        for row in rows:
+            print(f"{row['token']} {row['version']} {row['room']}")
+        return 0
+    if args.action == "search":
+        if not args.tokens:
+            raise UsageError("cask search needs a pattern")
+        for cask in loader.search(args.tokens[0]):
+            print(f"{cask.token}: {cask.name or ''} {cask.desc or ''}".strip())
+        return 0
+    if not args.tokens:
+        raise UsageError(f"cask {args.action} needs at least one token")
+    exit_code = 0
+    for token in args.tokens:
+        try:
+            cask = None
+            try:
+                cask = loader.load(token)
+            except CaskNotFound:
+                if args.action in ("install", "info", "zap"):
+                    raise
+            if args.action == "info":
+                assert cask is not None
+                if args.json:
+                    print(json.dumps(cask.to_api_json(), indent=2))
+                else:
+                    print(f"{cask.token}: {cask.version}")
+                    print(f"  {cask.desc or ''}")
+                    print(f"  {cask.homepage or ''}")
+                    print(f"  url: {cask.resolved_url() if cask.url else 'n/a'}")
+                    print(f"  sha256: {cask.resolved_sha256() or 'n/a'}")
+                    print(f"  artifacts: {[(a.kind, a.source) for a in cask.artifacts]}")
+                    print(f"  installed: {', '.join(installer.installed_versions(token)) or 'no'}")
+            elif args.action == "install":
+                assert cask is not None
+                result = installer.install(cask, force=args.force)
+                if result.skipped:
+                    print(f"Already installed: {result.token} {result.version}")
+                else:
+                    print(f"Installed cask: {result.token} {result.version} -> {result.room}")
+            elif args.action == "uninstall":
+                removed = installer.uninstall(
+                    token, zap=args.zap, cask=cask
+                )
+                print(f"Uninstalled cask: {token} ({', '.join(str(path) for path in removed)})")
+            elif args.action == "zap":
+                assert cask is not None
+                removed = installer.zap(cask)
+                print(f"Zapped {cask.token}: {len(removed)} path(s)")
+        except PybrewError as error:
+            print(f"Error: {error}", file=sys.stderr)
+            exit_code = 1
+    return exit_code
+
+
+def cmd_services(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    loader = _loader(config)
+    manager = ServiceManager(config)
+    if args.action == "list":
+        rows = manager.list(installed_formulae(config, loader))
+        if args.json:
+            print(json.dumps(rows, indent=2))
+            return 0
+        if not rows:
+            print("No services installed.")
+            return 0
+        print(f"{'Name':24} {'Status':10} File")
+        for row in rows:
+            print(f"{row['name']:24} {row['status']:10} {row.get('file') or row.get('error', '')}")
+        return 0
+    if not args.formula:
+        raise UsageError(f"services {args.action} requires a formula name")
+    formula = _load_formula(args.formula, loader)
+    if args.action == "info":
+        spec = manager.spec_for(formula)
+        payload = {
+            "name": formula.name,
+            "label": manager.label(formula),
+            "plist": str(manager.plist_path(formula)),
+            "run": spec.run,
+            "working_dir": spec.working_dir,
+            "log_path": spec.log_path,
+            "keep_alive": spec.keep_alive,
+            "status": manager.status(formula),
+        }
+        print(json.dumps(payload, indent=2))
+        return 0
+    if args.action == "start":
+        path = manager.start(formula)
+        print(f"Started {formula.name} ({path})")
+    elif args.action == "stop":
+        path = manager.stop(formula)
+        print(f"Stopped {formula.name}" + (f" ({path})" if path else ""))
+    elif args.action == "restart":
+        path = manager.restart(formula)
+        print(f"Restarted {formula.name} ({path})")
+    elif args.action == "run":
+        spec = manager.spec_for(formula)
+        if not spec.run:
+            raise ServiceError(f"{formula.name} service has no run command")
+        import subprocess
+
+        result = subprocess.run(spec.run, cwd=spec.working_dir or None)
+        return result.returncode
+    return 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     issues = diagnose(config)
@@ -415,6 +591,10 @@ _COMMANDS = {
     "uninstall": cmd_uninstall,
     "link": cmd_link,
     "unlink": cmd_unlink,
+    "tap": cmd_tap,
+    "untap": cmd_untap,
+    "cask": cmd_cask,
+    "services": cmd_services,
     "doctor": cmd_doctor,
     "config": cmd_config,
     "parse": cmd_parse,

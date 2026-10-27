@@ -20,6 +20,10 @@ be a drop-in replacement for every Homebrew feature yet.
 | `pybrew/paths.py` | prefix/cache/tap configuration and layout |
 | `pybrew/doctor.py` | prefix health checks |
 | `pybrew/version.py` | version detection and natural-order comparison |
+| `pybrew/source_builder.py` | executes the supported subset of `def install` (system/inreplace/ENV/install actions) |
+| `pybrew/cask.py` / `cask_installer.py` | cask parser and zip/dmg installer |
+| `pybrew/services.py` | service DSL parser, launchd plists, start/stop/list |
+| `pybrew/tap_manager.py` | tap clone/update/remove |
 
 ## Formula parsing
 
@@ -64,7 +68,8 @@ install name
   │    │    ├─ move keg into Cellar/<name>/<pkg_version>
   │    │    ├─ write INSTALL_RECEIPT.json
   │    │    └─ link (or only opt for keg-only)
-  │    └─ else: staged source install / explicit UnsupportedInstall
+  │    └─ else: source build via SourceBuilder (autotools/CMake/Cargo/...)
+  │         or explicit UnsupportedInstall
   └─ print result
 ```
 
@@ -103,6 +108,44 @@ tap, package version, runtime dependency names and bottle/source flags. `list`,
 `info --json`, `doctor` and uninstall read it when the tap formula is no longer
 available.
 
+## Source builds
+
+`source_builder.py` is a small, literal-oriented executor for the `def install`
+method. It understands `system` calls (including `*std_*_args` helpers),
+`inreplace`, `ENV` mutation, `bin.install`/`prefix.install`-style actions,
+`cd` blocks and simple host conditionals. It runs commands in the extracted
+source tree with a Homebrew-like environment (`HOMEBREW_PREFIX`, `PATH`,
+`PKG_CONFIG_PATH`, compiler flags). Autotools, CMake and Cargo fixtures compile
+real binaries in the test suite, and the real GNU `hello` formula has been built
+end-to-end. Unsupported Ruby constructs fail with the line number.
+
+## Casks
+
+`cask.py` parses the cask DSL, including `arch`/`sha256 arm,intel`,
+`on_<macos>` conditionals and default `language` blocks. `cask_installer.py`
+downloads the URL, verifies SHA-256, then handles zip, tar and dmg containers:
+`.app` bundles are copied to `<prefix>/Applications`, `binary` artifacts are
+symlinked into `<prefix>/bin`, and receipts live in
+`<prefix>/Caskroom/<token>/<version>/.metadata/receipt.json`. Uninstall removes
+receipt-tracked paths; `--zap` removes the cask's declared trash paths after
+checking they stay inside the user home/prefix/temp roots. `.pkg` artifacts are
+explicitly unsupported.
+
+## Services
+
+`services.py` parses `service do ... end` blocks (run, working_dir, log paths,
+keep_alive, environment_variables, interval, process_type) and renders a launchd
+plist. `launchctl` is invoked through an injectable runner so tests use a fake
+binary. `services list/start/stop/restart/info/run` are available in the CLI.
+Linux systemd is not implemented yet.
+
+## Taps
+
+`tap_manager.py` manages `<prefix>/Library/Taps/<user>/homebrew-<repo>` with
+`git clone --depth 1`, `git pull --ff-only`, and safe removal. Taps become
+visible to formula/cask loaders on the next invocation because loaders discover
+them from the prefix.
+
 ## Safety model
 
 - Default prefix is `~/.pybrew`; operating on `/opt/homebrew` or `/usr/local`
@@ -115,9 +158,11 @@ available.
 
 ## Known limitations
 
-- Only Homebrew bottles and "already-built" staged source formulae are supported.
+- Source builds support a common literal `def install` subset, not arbitrary Ruby.
 - Binary relocation is best-effort, not Mach-O-aware.
-- No cask support, no services, no tap management, no analytics.
+- Cask `.pkg` artifacts and system-wide installs are not implemented.
+- Services are macOS launchd only; Linux systemd is future work.
+- No analytics, `brew bundle`, `brew upgrade` or full cask options.
 - `brew`'s test DSL is captured but not executed.
 
 ## Testing strategy
@@ -128,3 +173,7 @@ available.
 - Corpus tests against 15 real homebrew-core formulae with expected metadata
   generated from `brew info --json=v2`.
 - One real-bottle test against a cached `libslirp 4.9.6` bottle.
+- Real source-build fixtures for autotools, CMake and Cargo; real GNU `hello`
+  source build verified manually.
+- Cask tests with real cask definitions plus a synthetic zip and dmg.
+- Service tests with a fake `launchctl`, and tap tests against a local git remote.

@@ -131,6 +131,32 @@ class Config:
         return self.prefix / "opt"
 
     @property
+    def taps_root(self) -> Path:
+        return self.prefix / "Library" / "Taps"
+
+    @property
+    def caskroom(self) -> Path:
+        return self.prefix / "Caskroom"
+
+    @property
+    def applications(self) -> Path:
+        env = os.environ.get("PYBREW_APPDIR")
+        if env:
+            return Path(env).expanduser()
+        return self.prefix / "Applications"
+
+    @property
+    def service_dir(self) -> Path:
+        import sys
+
+        env = os.environ.get("PYBREW_SERVICE_DIR")
+        if env:
+            return Path(env).expanduser()
+        if sys.platform == "darwin":
+            return Path.home() / "Library" / "LaunchAgents"
+        return self.var / "services"
+
+    @property
     def var(self) -> Path:
         return self.prefix / "var"
 
@@ -165,6 +191,9 @@ class Config:
             self.var,
             self.lock_dir,
             self.downloads,
+            self.taps_root,
+            self.caskroom,
+            self.applications,
         ):
             path.mkdir(parents=True, exist_ok=True)
 
