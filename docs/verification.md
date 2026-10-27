@@ -266,9 +266,9 @@ misrepresenting authorship.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `ec85355` (Brewfile tap URL + link:false)
-- CI run for the Brewfile-options feature commit `ec85355`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40548730363>
+- Latest feature commit: `05223ab` (real upgrade relink + old-keg cleanup)
+- CI run for the real-upgrade feature commit `05223ab`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40549279247>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
