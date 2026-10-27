@@ -86,11 +86,11 @@ the Authorization header to the object store.
 ### Relocation
 
 Bottles contain text and binary placeholders such as `@@HOMEBREW_PREFIX@@` and
-`@@HOMEBREW_CELLAR@@`. Text files are rewritten with the configured prefix.
-Mach-O/ELF files are rewritten only when the replacement is not longer than the
-placeholder (using NUL padding); longer replacements are reported as skipped
-rather than corrupting the binary. A future version will use `install_name_tool`
-and RPATH rewriting.
+`@@HOMEBREW_CELLAR@@`. Text files are rewritten with the configured prefix. On
+macOS, Mach-O load commands and LC_ID_DYLIB entries are rewritten with
+`install_name_tool` (which can grow load commands) and ad-hoc signed with
+`codesign -s -`; on ELF, byte rewriting is used when the replacement fits, else
+the binary is reported as skipped rather than corrupted.
 
 ### Linking
 
@@ -180,7 +180,7 @@ upgrades skip pinned formulae until `unpin`. `list --pinned` shows the set.
 ## Known limitations
 
 - Source builds support a common literal `def install` subset, not arbitrary Ruby.
-- Binary relocation is best-effort, not Mach-O-aware.
+- ELF binary relocation is best-effort; Mach-O uses `install_name_tool`.
 - Cask `.pkg` payloads are expanded under `--pkg-root`; package scripts and
   system-wide installs are not implemented.
 - Services are best-effort: launchd/systemd are invoked, but log rotation,

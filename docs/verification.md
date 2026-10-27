@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-89 passed in 24.85s
+91 passed in 25.07s
 ```
 
 Breakdown of the feature slices:
@@ -71,6 +71,8 @@ generated; its parsed metadata still matches `brew info`).
 it into a temporary prefix with `--ignore-dependencies` semantics.
 
 ```console
+$ PYTHONPATH=src python -m pytest -q tests/test_relocation.py -v
+2 passed
 $ PYTHONPATH=src python -m pytest -q tests/test_real_bottle.py -v
 1 passed in 0.03s
 ```
@@ -95,7 +97,18 @@ Poured from bottle: libslirp 4.9.6 (/tmp/pybrew-ghcr/Cellar/libslirp/4.9.6)
 
 The cached blob SHA-256 matched the formula, the keg receipt says
 `poured_from_bottle: true`, and `file` identifies the installed dylib as a
-Mach-O arm64 shared library.
+Mach-O arm64 shared library. After the `install_name_tool` fix, `otool -L`
+shows the final prefix rather than `@@HOMEBREW_PREFIX@@`:
+
+```text
+/tmp/pybrew-ghcr2/Cellar/libslirp/4.9.6/lib/libslirp.0.dylib:
+    /tmp/pybrew-ghcr2/opt/libslirp/lib/libslirp.0.dylib
+    /tmp/pybrew-ghcr2/opt/glib/lib/libglib-2.0.0.dylib
+    /usr/lib/libresolv.9.dylib
+    /usr/lib/libSystem.B.dylib
+```
+
+`grep -c '@@HOMEBREW'` returns 0 and `codesign -v` succeeds.
 
 ## Real source build (GNU hello)
 
@@ -213,12 +226,12 @@ install, `doctor`, `list`, `deps`, `search`, `config`, and `parse`.
 
 ## Not covered yet
 
-- Live download from ghcr.io was exercised by unit logic but not by the offline
-  test suite; the real bottle test intentionally uses a cached artefact.
+- Live download from ghcr.io is not part of the offline suite; the real bottle
+  test intentionally uses a cached artefact. Live download is recorded manually
+  above.
 - Meson builds are implemented via `std_meson_args` but meson is not installed in
   this environment, so only helper expansion is covered.
 - Cask package scripts and system-wide `.pkg` installation.
-- Mach-O binary relocation was not validated by running the installed dylib.
 - `brew lgtm`, advanced Brewfile options, analytics.
 
 These are tracked in the README roadmap and `docs/parity.md`.

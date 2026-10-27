@@ -40,7 +40,7 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 | --- | --- | --- |
 | Formula DSL metadata | Full Ruby evaluation + DSL | Literal-only parser, tolerates unknown calls |
 | Dependency resolution | Full, options/requirements | Runtime/build/test/optional/recommended + uses_from_macos |
-| Bottle install | All platforms, OCI + legacy mirrors | ghcr.io OCI + plain root_url + local file; SHA-256; relocation (text + best-effort binary) |
+| Bottle install | All platforms, OCI + legacy mirrors | ghcr.io OCI + plain root_url + local file; SHA-256; text relocation + Mach-O install_name_tool |
 | Source install | Any build system / formula Ruby | Common `def install` subset: system/inreplace/ENV/install actions; autotools/CMake/Cargo tested; unsupported Ruby fails explicitly |
 | Cellar / keg / receipts | Yes | Yes, compatible layout |
 | opt / linking | Yes | Yes, conflict-aware, --overwrite |
@@ -67,7 +67,8 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 - Dependency order: `hello-dep` installs `dep` first.
 - Staged source formula: `--build-from-source` installs from the source tarball.
 - Real bottle: cached Homebrew `libslirp 4.9.6` bottle installs offline, including
-  its real `lib/libslirp.dylib`, headers, pkg-config file and receipt.
+  its real `lib/libslirp.dylib`, headers, pkg-config file and receipt; live ghcr
+  install verifies Mach-O relocation (`otool -L` shows the final prefix).
 - CLI: info/search/list/deps/doctor/config/parse all exercised in subprocesses.
 - Tap: clone a local git tap, update it, load a formula from it, untap.
 - Bundle: a Brewfile with `brew`/`cask` entries supports dry-run install, real
@@ -81,9 +82,9 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 1. Source builds use a deliberately small install-DSL subset. A formula that
    uses unsupported Ruby (loops, resources, complex build.with? branches) fails
    with `UnsupportedInstall` instead of pretending to succeed.
-2. Binary relocation is not Mach-O-aware; the current implementation rewrites
-   placeholders where the new path fits. `libslirp`'s text files are relocated;
-   binary dylibs built with `:any` cellars may still contain build-prefix paths.
+2. Mach-O relocation uses `install_name_tool` and ad-hoc signing; ELF
+   relocation is byte-level and skips binaries whose paths cannot fit. More
+   RPATH edge cases remain future work.
 3. Homebrew's `brew info --json=v2` has more fields (patches, requirements,
    deprecation dates, post-install steps). pybrew emits the core subset.
 4. On this machine brew is x86_64 under Rosetta; corpus expectations therefore

@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import subprocess
+import sys
 import tarfile
 import tempfile
 from dataclasses import dataclass, field
@@ -131,6 +133,118 @@ def find_keg_root(extract_root: Path, formula: Formula) -> Path:
     raise BottleError(f"cannot locate {formula.name}/{formula.pkg_version} inside archive")
 
 
+def _replace_binary_placeholder(
+    data: bytes, placeholder: bytes, replacement: bytes
+) -> Optional[bytes]:
+    """Replace a placeholder inside NUL-terminated Mach-O strings safely.
+
+    Mach-O load commands store fixed-length strings.  Replacing the placeholder
+    in the middle of a string would insert NUL padding before the path suffix;
+    instead shrink the whole string and pad its end.  If the replacement is
+    longer than the placeholder, return ``None`` and let the caller skip the
+    binary rather than corrupt it.
+    """
+
+    if len(replacement) > len(placeholder):
+        return None
+    result = data
+    search_from = 0
+    while True:
+        position = result.find(placeholder, search_from)
+        if position < 0:
+            return result
+        start = result.rfind(b"\0", 0, position) + 1
+        end = result.find(b"\0", position)
+        if end < 0:
+            return None
+        segment = result[start:end]
+        if placeholder not in segment:
+            return None
+        new_segment = segment.replace(placeholder, replacement)
+        padding = len(segment) - len(new_segment)
+        if padding < 0:
+            return None
+        result = result[:start] + new_segment + b"\0" * padding + result[end:]
+        search_from = start + len(new_segment)
+
+
+def _relocate_macho(path: Path, replacements: dict[bytes, bytes]) -> bool:
+    """Use install_name_tool to relocate Mach-O load commands.
+
+    Returns True when at least one load command changed.  The caller falls back
+    to byte-level placeholder replacement when no changes were necessary or the
+    tools are unavailable.
+    """
+
+    if shutil.which("otool") is None or shutil.which("install_name_tool") is None:
+        return False
+    try:
+        listing = subprocess.run(
+            ["otool", "-L", str(path)], text=True, capture_output=True, timeout=30
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if listing.returncode != 0:
+        return False
+    old_paths: list[str] = []
+    for line in listing.stdout.splitlines()[1:]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        old = stripped.partition(" (compatibility version")[0].strip()
+        if any(placeholder.decode(errors="ignore") in old for placeholder in replacements):
+            old_paths.append(old)
+
+    changed = False
+    mode = path.stat().st_mode
+    os.chmod(path, mode | 0o200)
+    try:
+        for old in old_paths:
+            new = old
+            for placeholder, replacement in replacements.items():
+                new = new.replace(placeholder.decode(errors="ignore"), replacement.decode(errors="ignore"))
+            if new == old:
+                continue
+            result = subprocess.run(
+                ["install_name_tool", "-change", old, new, str(path)],
+                text=True,
+                capture_output=True,
+                timeout=30,
+            )
+            if result.returncode != 0:
+                return False
+            changed = True
+        id_result = subprocess.run(
+            ["otool", "-D", str(path)], text=True, capture_output=True, timeout=30
+        )
+        if id_result.returncode == 0:
+            id_lines = [line.strip() for line in id_result.stdout.splitlines()[1:] if line.strip()]
+            for old in id_lines:
+                new = old
+                for placeholder, replacement in replacements.items():
+                    new = new.replace(placeholder.decode(errors="ignore"), replacement.decode(errors="ignore"))
+                if new != old:
+                    result = subprocess.run(
+                        ["install_name_tool", "-id", new, str(path)],
+                        text=True,
+                        capture_output=True,
+                        timeout=30,
+                    )
+                    if result.returncode != 0:
+                        return False
+                    changed = True
+    finally:
+        os.chmod(path, mode)
+    if changed and shutil.which("codesign"):
+        subprocess.run(
+            ["codesign", "--force", "--sign", "-", str(path)],
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+    return changed
+
+
 def relocate_tree(keg: Path, config: Config) -> RelocationReport:
     """Replace Homebrew's bottle placeholders in a freshly unpacked keg."""
 
@@ -151,17 +265,28 @@ def relocate_tree(keg: Path, config: Config) -> RelocationReport:
             if not any(placeholder in data for placeholder in replacements):
                 continue
             is_binary = b"\0" in data[:4096]
-            new_data = data
-            for placeholder, replacement in replacements.items():
-                if placeholder not in new_data:
-                    continue
-                if is_binary:
-                    if len(replacement) > len(placeholder):
-                        report.skipped_binaries += 1
+            if is_binary and sys.platform == "darwin":
+                try:
+                    if _relocate_macho(path, replacements):
+                        report.binary_files += 1
                         continue
-                    padded = replacement + b"\0" * (len(placeholder) - len(replacement))
-                    new_data = new_data.replace(placeholder, padded)
-                else:
+                except OSError:
+                    pass
+            new_data = data
+            if is_binary:
+                for placeholder, replacement in replacements.items():
+                    if placeholder not in new_data:
+                        continue
+                    replaced = _replace_binary_placeholder(new_data, placeholder, replacement)
+                    if replaced is None:
+                        report.skipped_binaries += 1
+                        new_data = None
+                        break
+                    new_data = replaced
+                if new_data is None:
+                    continue
+            else:
+                for placeholder, replacement in replacements.items():
                     new_data = new_data.replace(placeholder, replacement)
             if new_data != data:
                 original_mode = path.stat().st_mode
