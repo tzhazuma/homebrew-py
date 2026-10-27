@@ -202,7 +202,7 @@ def test_conditionals_choose_host_branch(tmp_path: Path) -> None:
         "cond",
         "1.0",
         project,
-        '    if OS.mac?\n      system "./configure", *std_configure_args\n      system "make", "install"\n    else\n      raise "linux branch"\n    end',
+        '    if OS.mac?\n      system "./configure", *std_configure_args\n      system "make", "install"\n    else\n      system "./configure", *std_configure_args\n      system "make", "install"\n    end',
     )
     config, _ = _install(tmp_path, tap, "cond")
     assert (config.keg_path("cond", "1.0") / "bin" / "hello").is_file()
