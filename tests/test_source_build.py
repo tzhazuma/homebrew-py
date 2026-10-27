@@ -232,3 +232,40 @@ def test_cargo_source_build(tmp_path: Path) -> None:
     )
     config, _ = _install(tmp_path, tap, "hello-cargo")
     assert (config.keg_path("hello-cargo", "0.1.0") / "bin" / "hello-cargo").is_file()
+
+
+def test_resource_stage_downloads_and_installs(tmp_path: Path) -> None:
+    main_project = tmp_path / "main"
+    main_project.mkdir()
+    (main_project / "README").write_text("main\n")
+    resource_project = tmp_path / "resource"
+    resource_project.mkdir()
+    (resource_project / "data.txt").write_text("resource payload\n")
+
+    main_archive = _tar(main_project, tmp_path / "src" / "resource-fixture-1.0.tar.gz", "resource-fixture-1.0")
+    resource_archive = _tar(resource_project, tmp_path / "src" / "data-1.0.tar.gz", "data-1.0")
+    tap = tmp_path / "tap"
+    (tap / "Formula").mkdir(parents=True)
+    (tap / "Formula" / "resource-fixture.rb").write_text(
+        f'''class ResourceFixture < Formula
+  desc "resource fixture"
+  homepage "https://example.com/resource-fixture"
+  url "{main_archive.as_uri()}"
+  sha256 "{_sha(main_archive)}"
+
+  resource "data" do
+    url "{resource_archive.as_uri()}"
+    sha256 "{_sha(resource_archive)}"
+  end
+
+  def install
+    resource("data").stage do
+      bin.install "data.txt"
+    end
+  end
+end
+'''
+    )
+    config, result = _install(tmp_path, tap, "resource-fixture")
+    assert (result.keg / "bin" / "data.txt").read_text() == "resource payload\n"
+    assert (config.prefix / "bin" / "data.txt").exists()

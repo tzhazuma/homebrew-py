@@ -502,6 +502,7 @@ class Installer:
                     build_root,
                     staging,
                     verbose=self.verbose or options.verbose,
+                    downloader=self.downloader,
                 )
                 self._commit_keg(staging, keg)
             finally:

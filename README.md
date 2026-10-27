@@ -8,7 +8,7 @@ Formula 解析、依赖解析、Cellar、bottle 安装、链接/卸载和 receip
 
 > **状态：v0.1 原型（可运行、可测试）**
 >
-> - 91 个测试全部通过（`pytest -q`）
+> - 92 个测试全部通过（`pytest -q`）
 > - 15 个真实 homebrew-core 公式（bash、git、curl、openssl@3、python@3.12 等）与
 >   `brew info --json=v2` 的元数据逐项对比通过
 > - 使用真实 `hello 2.12.3` Formula 完成 autotools 源码构建并运行成功
@@ -95,9 +95,9 @@ Installer(config, loader).install(formula, InstallOptions())
 | Formula DSL 解析 | ✅ | 只解析字面量 DSL，不执行 Ruby；支持 `url/sha256/version`、`license any_of/all_of/with`、`bottle` 块、`depends_on` 标签、`head`/`stable`/`resource`、`on_macos`/`on_linux`/`on_intel`、`def install/test/caveats` 原文捕获 |
 | Tap 发现 | ✅ | `Formula/**/*.rb`、多个 tap、tap-qualified 名称 |
 | 依赖解析 | ✅ | 递归依赖、拓扑排序、环检测、build/test/optional/recommended 分类、`uses_from_macos`（Linux 安装）|
-| Bottle 安装 | ✅ | 标签选择与降级、ghcr.io OCI 匿名拉取、本地缓存/SHA 校验、安全解包、`@@HOMEBREW_*@@` 重定位、receipt |
+| Bottle 安装 | ✅ | 标签选择与降级、ghcr.io OCI 匿名拉取、本地缓存/SHA 校验、安全解包、`@@HOMEBREW_*@@` 重定位（Mach-O `install_name_tool`）、receipt |
 | Cellar / 链接 | ✅ | `Cellar/<name>/<version>`、`opt` 链接、bin/lib/share/... 相对符号链接、冲突检测、`--overwrite`、卸载清理 |
-| Source 安装 | ✅ 常用子集 | `system`（含 `std_configure_args`/`std_cmake_args`/`std_meson_args`/`std_cargo_args`）、`inreplace`、`ENV`、`bin.install`/`prefix.install`、`if OS.mac?`/`on_macos`；autotools/cmake/cargo 有真实构建测试；不支持的 Ruby 会明确报错 |
+| Source 安装 | ✅ 常用子集 | `system`（含 `std_configure_args`/`std_cmake_args`/`std_meson_args`/`std_cargo_args`）、`inreplace`、`ENV`、`bin.install`/`prefix.install`、`resource(...).stage`、`if OS.mac?`/`on_macos`；autotools/cmake/cargo 有真实构建测试；不支持的 Ruby 会明确报错 |
 | Tap 管理 | ✅ | `tap`/`untap`/`tap --list`，支持 GitHub 与本地 git URL，自动发现 Formula/Casks |
 | Cask | ✅ zip/dmg/pkg 子集 | app/binary/suite 安装、receipt、uninstall、`--zap`；`pkg` 可展开 payload 到 `--pkg-root`；支持 `--api`、`outdated`/`upgrade`、`uninstall quit/delete`；不执行安装脚本/不做系统级安装 |
 | Services | ✅ launchd + systemd | macOS 生成 launchd plist；Linux 生成 systemd user unit；start/stop/restart/list/info |
@@ -145,7 +145,7 @@ Installer(config, loader).install(formula, InstallOptions())
 
 ```bash
 pytest -q
-# 91 passed
+# 92 passed
 ```
 
 测试覆盖：
@@ -222,7 +222,7 @@ docs/                 架构、兼容性、验证、RFC
 
 ## 路线图
 
-1. 补全 source build：meson 实际构建、resources、复杂条件与更多构建系统。
+1. 补全 source build：meson 实际构建、复杂条件与更多构建系统。
 2. Cask 深度：package scripts、系统级 pkg 安装、更多 artifact 类型。
 3. Brewfile 高级选项、更完整的 upgrade 语义。
 4. Linux RPATH/ELF 重定位与更多 Mach-O 边界情况。

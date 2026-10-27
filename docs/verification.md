@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-91 passed in 25.07s
+92 passed in 25.99s
 ```
 
 Breakdown of the feature slices:
@@ -35,7 +35,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py
 16 passed      # real dmg/pkg payload, install --cask, API, outdated/upgrade, uninstall actions
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py
-5 passed       # autotools, CMake, Cargo, inreplace, conditionals
+6 passed       # autotools, CMake, Cargo, inreplace, conditionals, resources
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
 8 passed       # launchd + systemd unit generation, orphan cleanup
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_taps.py
@@ -195,6 +195,14 @@ Unsupported Brewfile lines fail with a line number.
   dry-run and real runs are covered.
 - `pin` prevents `outdated` reporting, `list --pinned` shows it, and `unpin`
   restores outdated detection.
+
+## Resource staging
+
+A synthetic formula declares a `resource "data"` tar.gz and uses
+`resource("data").stage { bin.install "data.txt" }`; the installer downloads the
+resource via the regular cache, verifies sha256, stages it under the build root,
+and installs the file into the keg. Zip resources use the same path with
+path-traversal checks.
 
 ## Additional maintenance checks
 

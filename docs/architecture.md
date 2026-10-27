@@ -179,7 +179,7 @@ upgrades skip pinned formulae until `unpin`. `list --pinned` shows the set.
 
 ## Known limitations
 
-- Source builds support a common literal `def install` subset, not arbitrary Ruby.
+- Source builds support a common literal `def install` subset (including simple resource stages), not arbitrary Ruby.
 - ELF binary relocation is best-effort; Mach-O uses `install_name_tool`.
 - Cask `.pkg` payloads are expanded under `--pkg-root`; package scripts and
   system-wide installs are not implemented.

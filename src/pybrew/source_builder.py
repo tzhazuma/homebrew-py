@@ -166,6 +166,12 @@ class CdAction(Action):
 
 
 @dataclass
+class ResourceStageAction(Action):
+    name: str
+    actions: list[Action]
+
+
+@dataclass
 class ConditionalAction(Action):
     condition: bool
     actions: list[Action]
@@ -493,6 +499,33 @@ class InstallParser:
                 raise UnsupportedInstall(f"{self.formula.name}: cd without a block is unsupported")
             self.advance()
             actions = [CdAction(args[0], self._parse_statements(stop_end=True))]
+        elif name == "resource":
+            self.advance()
+            args = self._parse_argument_list()
+            if not args or not isinstance(args[0], (StringExpr, Literal)):
+                raise UnsupportedInstall(f"{self.formula.name}: resource without a literal name")
+            resource_name = self._static_name(args[0])
+            if not (
+                self.peek().kind == "punct"
+                and self.peek().value == "."
+                and self.peek(1).kind == "id"
+                and self.peek(1).value == "stage"
+            ):
+                raise UnsupportedInstall(
+                    f"{self.formula.name}: only resource(...).stage is supported"
+                )
+            self.advance()
+            self.advance()
+            if self.peek().kind == "punct" and self.peek().value == "(":
+                self.advance()
+                if self.peek().kind == "punct" and self.peek().value == ")":
+                    self.advance()
+            if not (self.peek().kind == "kw" and self.peek().value == "do"):
+                raise UnsupportedInstall(
+                    f"{self.formula.name}: resource.stage must use a do/end block"
+                )
+            self.advance()
+            actions = [ResourceStageAction(resource_name, self._parse_statements(stop_end=True))]
         elif name in _INSTALL_DIRS and self._is_install_call():
             actions = [self._parse_install_call(name)]
         elif name == "mkdir":
@@ -850,10 +883,18 @@ class BuildContext:
 
 
 class SourceBuilder:
-    def __init__(self, formula: Formula, config: Config, verbose: bool = False):
+    def __init__(
+        self,
+        formula: Formula,
+        config: Config,
+        verbose: bool = False,
+        downloader: Optional[Any] = None,
+    ):
         self.formula = formula
         self.config = config
         self.verbose = verbose
+        self.downloader = downloader
+        self._resource_stages: dict[str, Path] = {}
 
     def build(self, build_root: Path, keg: Path) -> None:
         parser = InstallParser(self.formula)
@@ -949,12 +990,89 @@ class SourceBuilder:
                     self._execute(child, ctx)
             finally:
                 ctx.cwd = previous
+        elif isinstance(action, ResourceStageAction):
+            resource = ctx.formula.resources.get(action.name)
+            if resource is None or not resource.url:
+                raise UnsupportedInstall(
+                    f"{ctx.formula.name}: resource {action.name!r} is not defined"
+                )
+            if not resource.sha256:
+                raise UnsupportedInstall(
+                    f"{ctx.formula.name}: resource {action.name!r} has no sha256"
+                )
+            if self.downloader is None:
+                raise UnsupportedInstall(
+                    f"{ctx.formula.name}: resource {action.name!r} requires a downloader"
+                )
+            archive = self.downloader.fetch(
+                resource.url,
+                resource.sha256,
+                hint=f"{ctx.formula.name}-{action.name}",
+            )
+            stage = ctx.build_root / ".pybrew-resources" / action.name
+            if stage.exists():
+                shutil.rmtree(stage)
+            stage.mkdir(parents=True)
+            self._extract_resource(archive, stage)
+            children = [
+                candidate for candidate in stage.iterdir() if candidate.name != "__MACOSX"
+            ]
+            if len(children) == 1 and children[0].is_dir():
+                stage = children[0]
+            previous = ctx.cwd
+            ctx.cwd = stage.resolve()
+            try:
+                for child in action.actions:
+                    self._execute(child, ctx)
+            finally:
+                ctx.cwd = previous
         elif isinstance(action, ConditionalAction):
             if action.condition:
                 for child in action.actions:
                     self._execute(child, ctx)
         else:  # pragma: no cover
             raise UnsupportedInstall(f"unknown build action: {action!r}")
+
+    def _extract_resource(self, archive: Path, destination: Path) -> None:
+        import tarfile
+        import zipfile
+
+        if zipfile.is_zipfile(archive):
+            with zipfile.ZipFile(archive) as bundle:
+                for info in bundle.infolist():
+                    name = info.filename
+                    parts = Path(name).parts
+                    if not name or name.startswith("/") or ".." in parts:
+                        raise BuildError(f"unsafe resource zip member: {name!r}")
+                    target = destination / name
+                    if info.is_dir():
+                        target.mkdir(parents=True, exist_ok=True)
+                        continue
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with bundle.open(info) as source, open(target, "wb") as output:
+                        shutil.copyfileobj(source, output)
+            return
+        try:
+            with tarfile.open(archive) as tar:
+                for member in tar.getmembers():
+                    name = member.name
+                    parts = Path(name).parts
+                    if not name or name.startswith("/") or ".." in parts:
+                        raise BuildError(f"unsafe resource tar member: {name!r}")
+                    target = destination / name
+                    if member.isdir():
+                        target.mkdir(parents=True, exist_ok=True)
+                    elif member.issym() or member.islnk():
+                        raise BuildError(f"resource tar links are not supported: {name!r}")
+                    elif member.isfile():
+                        target.parent.mkdir(parents=True, exist_ok=True)
+                        source = tar.extractfile(member)
+                        if source is None:
+                            raise BuildError(f"cannot read resource tar member: {name!r}")
+                        with source, open(target, "wb") as output:
+                            shutil.copyfileobj(source, output)
+        except tarfile.TarError as error:
+            raise BuildError(f"cannot read resource archive {archive}: {error}") from error
 
     def _resolve(self, expr: Expr, ctx: BuildContext) -> Any:
         if isinstance(expr, Literal):
@@ -1230,5 +1348,12 @@ class SourceBuilder:
         return str(value)
 
 
-def build_source(formula: Formula, config: Config, build_root: Path, keg: Path, verbose: bool = False) -> None:
-    SourceBuilder(formula, config, verbose=verbose).build(build_root, keg)
+def build_source(
+    formula: Formula,
+    config: Config,
+    build_root: Path,
+    keg: Path,
+    verbose: bool = False,
+    downloader: Optional[Any] = None,
+) -> None:
+    SourceBuilder(formula, config, verbose=verbose, downloader=downloader).build(build_root, keg)
