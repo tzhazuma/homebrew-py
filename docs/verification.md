@@ -189,7 +189,8 @@ misrepresenting authorship.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- CI run (latest at the time of writing): <https://github.com/tzhazuma/homebrew-py/actions/runs/40382704108>
+- CI run for the feature commit `03e6ba9`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40445584843>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
