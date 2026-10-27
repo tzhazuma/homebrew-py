@@ -261,9 +261,9 @@ misrepresenting authorship.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `121e9e3` (Mach-O install_name_tool relocation)
-- CI run for the Mach-O relocation fix commit `121e9e3`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40547336147>
+- Latest feature commit: `6835a89` (source-build resource staging)
+- CI run for the resource-staging feature commit `6835a89`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40548143609>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
