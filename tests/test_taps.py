@@ -102,3 +102,16 @@ def test_update_all_taps(tmp_path: Path) -> None:
     results = manager.update_all()
     assert results and results[0].action == "updated"
     assert FormulaLoader(manager.list()).load("hello").desc == "updated all"
+
+
+def test_update_command(run_cli, sample, tmp_path: Path) -> None:
+    remote = _make_remote(tmp_path)
+    tapped = run_cli("tap", "tzhazuma/demo", "--url", str(remote))
+    assert tapped.returncode == 0, tapped.stderr
+    formula = remote / "Formula" / "hello.rb"
+    formula.write_text(formula.read_text().replace("tap hello", "updated via brew update"))
+    _git(remote, "add", ".")
+    _git(remote, "commit", "-m", "update")
+    proc = run_cli("update")
+    assert proc.returncode == 0, proc.stderr
+    assert "updated: tzhazuma/demo" in proc.stdout

@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-103 passed in 36.92s
+104 passed in 25.93s
 ```
 
 Breakdown of the feature slices:
@@ -39,7 +39,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
 8 passed       # launchd + systemd unit generation, orphan cleanup
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_taps.py
-4 passed
+5 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_maintenance.py
 9 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bundle.py
@@ -242,6 +242,11 @@ head binary into the keg, and the resulting binary contains the head marker.
 `cat hello`/`cat --cask testapp` print local formula/cask source, `home` prints
 homepages, and `edit` is tested with `EDITOR=true` to avoid an interactive
 editor.
+
+## Tap update command
+
+`update` updates every installed tap via `git pull --ff-only`; the test taps a
+local remote, commits a change, and confirms the CLI updates it.
 
 ## Cask reinstall
 

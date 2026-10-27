@@ -182,6 +182,9 @@ def build_parser() -> argparse.ArgumentParser:
     upgrade.add_argument("--api", action="store_true")
     upgrade.add_argument("--cask", action="store_true")
 
+    update = subparsers.add_parser("update", parents=[common], help="update all taps")
+    update.add_argument("--quiet", action="store_true")
+
     shellenv = subparsers.add_parser("shellenv", parents=[common], help="print shell environment exports")
     shellenv.add_argument("--shell", choices=["bash", "zsh", "fish"], default="bash")
 
@@ -751,6 +754,19 @@ def cmd_bundle(args: argparse.Namespace) -> int:
     return 1 if errors else 0
 
 
+def cmd_update(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    results = TapManager(config).update_all()
+    if not results:
+        if not args.quiet:
+            print("No taps installed.")
+        return 0
+    for result in results:
+        if not args.quiet:
+            print(f"{result.action}: {result.name}")
+    return 0
+
+
 def cmd_shellenv(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     prefix = str(config.prefix)
@@ -1189,6 +1205,7 @@ _COMMANDS = {
     "bundle": cmd_bundle,
     "pin": cmd_pin,
     "unpin": cmd_unpin,
+    "update": cmd_update,
     "shellenv": cmd_shellenv,
     "outdated": cmd_outdated,
     "upgrade": cmd_upgrade,
