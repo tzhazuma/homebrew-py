@@ -264,9 +264,9 @@ misrepresenting authorship.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `6835a89` (source-build resource staging)
-- CI run for the resource-staging feature commit `6835a89`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40548143609>
+- Latest feature commit: `ec85355` (Brewfile tap URL + link:false)
+- CI run for the Brewfile-options feature commit `ec85355`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40548730363>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
