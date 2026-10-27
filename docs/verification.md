@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-81 passed in 23.30s
+83 passed in 29.50s
 ```
 
 Breakdown of the feature slices:
@@ -41,9 +41,9 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_taps.py
 3 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_maintenance.py
-4 passed
+5 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bundle.py
-2 passed
+3 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cli.py
 8 passed
 ```
@@ -157,6 +157,13 @@ This is a real homebrew-core formula, not a synthetic fixture.
 `cask "testapp"`, performs a dry run, installs both, and then `bundle check`
 reports the dependencies as satisfied; `bundle list` prints the parsed entries.
 Unsupported Brewfile lines fail with a line number.
+
+## Bundle dump and cache cleanup
+
+- `bundle dump` writes `tap`/`brew`/`cask` lines for installed state, refuses to
+  overwrite without `--force`, and the result can be fed back to `bundle check`.
+- `cleanup --prune-cache --cache-age-days 30` removes old cached downloads; both
+  dry-run and real runs are covered.
 
 ## CLI smoke checks
 

@@ -48,8 +48,8 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 | Casks | Yes | zip/dmg app/binary/suite, receipts, uninstall/zap; pkg payload via `--pkg-root`; API fallback; outdated/upgrade |
 | Tap management | `brew tap` | `tap`/`untap`/list with GitHub or local git URLs |
 | Services | Yes | macOS launchd + Linux systemd user units; start/stop/restart/list/info/run |
-| Outdated / upgrade / cleanup / reinstall | Yes | Basic: outdated/upgrade/cleanup/reinstall |
-| Bundle | Yes | Basic Brewfile install/check/list |
+| Outdated / upgrade / cleanup / reinstall | Yes | Basic: outdated/upgrade/cleanup (kegs + cache)/reinstall |
+| Bundle | Yes | Basic Brewfile install/check/list/dump |
 | Analytics | Yes | No |
 | Formula tests | `brew test` | Not executed |
 | Self-update / doctor | Yes | `doctor` checks prefix health |
@@ -71,7 +71,7 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 - CLI: info/search/list/deps/doctor/config/parse all exercised in subprocesses.
 - Tap: clone a local git tap, update it, load a formula from it, untap.
 - Bundle: a Brewfile with `brew`/`cask` entries supports dry-run install, real
-  install, check and list.
+  install, check, list and dump; cache cleanup prunes old downloads.
 - Source build: real autotools/CMake/Cargo fixture compilation, `inreplace`, host conditionals; real GNU hello 2.12.3 built manually.
 - Cask: real rectangle/iterm2/VSCode definitions parse; synthetic zip, dmg and pkg installs verify app/binary/receipt/uninstall/zap; API JSON mapping is unit-tested.
 - Services: DSL parsing, launchd plist fields, start/stop/list with a fake `launchctl`; real launchctl is not invoked in tests.

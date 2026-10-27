@@ -8,7 +8,7 @@ Formula 解析、依赖解析、Cellar、bottle 安装、链接/卸载和 receip
 
 > **状态：v0.1 原型（可运行、可测试）**
 >
-> - 81 个测试全部通过（`pytest -q`）
+> - 83 个测试全部通过（`pytest -q`）
 > - 15 个真实 homebrew-core 公式（bash、git、curl、openssl@3、python@3.12 等）与
 >   `brew info --json=v2` 的元数据逐项对比通过
 > - 使用真实 `hello 2.12.3` Formula 完成 autotools 源码构建并运行成功
@@ -102,8 +102,8 @@ Installer(config, loader).install(formula, InstallOptions())
 | Cask | ✅ zip/dmg/pkg 子集 | app/binary/suite 安装、receipt、uninstall、`--zap`；`pkg` 可展开 payload 到 `--pkg-root`；支持 `--api` 与 `outdated`/`upgrade`，不执行安装脚本/不做系统级安装 |
 | Services | ✅ launchd + systemd | macOS 生成 launchd plist；Linux 生成 systemd user unit；start/stop/restart/list/info |
 | Cask/Services/Tap 命令 | ✅ | 集成到 `pybrew` CLI |
-| 维护命令 | ✅ | `outdated`、`upgrade`（含 `--dry-run`）、`cleanup`、`reinstall` |
-| Brewfile | ✅ 基础 | `bundle install/check/list`，支持 `tap`/`brew`/`cask` 行 |
+| 维护命令 | ✅ | `outdated`、`upgrade`（含 `--dry-run`）、`cleanup`（含 `--prune-cache`）、`reinstall` |
+| Brewfile | ✅ 基础 | `bundle install/check/list/dump`，支持 `tap`/`brew`/`cask` 行 |
 | 完整 pkg cask 脚本/系统安装 / analytics / 高级 bundle 选项 | ❌ | 路线图 |
 
 ## 架构
@@ -145,7 +145,7 @@ Installer(config, loader).install(formula, InstallOptions())
 
 ```bash
 pytest -q
-# 81 passed
+# 83 passed
 ```
 
 测试覆盖：
@@ -161,8 +161,8 @@ pytest -q
 - `test_cask.py`：真实 cask（rectangle/iterm2/VSCode）解析、zip/dmg 安装/卸载/zap、pkg payload、`install --cask`、API 映射、outdated/upgrade
 - `test_services.py`：launchd plist + systemd unit、伪造 launchctl/systemctl 的 start/stop/list
 - `test_taps.py`：本地 git tap 的 clone/update/untap
-- `test_maintenance.py`：outdated、upgrade --dry-run、cleanup、reinstall
-- `test_bundle.py`：Brewfile install/check/list
+- `test_maintenance.py`：outdated、upgrade --dry-run、cleanup（含 cache）、reinstall
+- `test_bundle.py`：Brewfile install/check/list/dump
 
 详细结果见 [docs/verification.md](docs/verification.md)，与 Ruby Homebrew 的差异见
 [docs/parity.md](docs/parity.md)，设计细节见 [docs/architecture.md](docs/architecture.md)。
@@ -224,7 +224,7 @@ docs/                 架构、兼容性、验证、RFC
 
 1. 补全 source build：meson 实际构建、resources、复杂条件与更多构建系统。
 2. Cask 深度：package scripts、系统级 pkg 安装、更多 artifact 类型。
-3. Brewfile 高级选项、`cleanup --cache`、更完整的 upgrade 语义。
+3. Brewfile 高级选项、更完整的 upgrade 语义。
 4. 更完整的 bottle 重定位（Mach-O `install_name_tool`、Linux RPATH）。
 5. 与 `brew` 的测试套件对齐，逐步扩大真实公式覆盖。
 6. 等待人工审核并提交上游 RFC PR。

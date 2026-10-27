@@ -46,3 +46,18 @@ def test_bundle_rejects_unknown_lines(run_cli, sample, tmp_path) -> None:
     proc = run_cli("bundle", "list", "--file", str(path))
     assert proc.returncode == 1
     assert "unsupported brewfile line" in proc.stderr.lower()
+
+
+def test_bundle_dump(run_cli, sample, tmp_path) -> None:
+    brewfile = _brewfile(tmp_path)
+    assert run_cli("bundle", "install", "--file", str(brewfile), bottle_tag=sample.tag).returncode == 0
+    dump = tmp_path / "Brewfile.dump"
+    proc = run_cli("bundle", "dump", "--file", str(dump))
+    assert proc.returncode == 0, proc.stderr
+    text = dump.read_text()
+    assert 'brew "hello"' in text
+    assert 'cask "testapp"' in text
+    again = run_cli("bundle", "dump", "--file", str(dump))
+    assert again.returncode == 1
+    forced = run_cli("bundle", "dump", "--file", str(dump), "--force")
+    assert forced.returncode == 0, forced.stderr

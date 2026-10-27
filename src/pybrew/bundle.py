@@ -114,3 +114,21 @@ def bundle_install(
             except PybrewError as error:
                 errors.append(f"{entry.name}: {error}")
     return installed, errors
+
+
+def bundle_dump(config: Config) -> list[str]:
+    """Produce Brewfile lines for taps, installed formulae and installed casks."""
+
+    lines: list[str] = []
+    for tap in TapManager(config).list():
+        lines.append(f'tap "{tap.name}"')
+    for name in sorted(Cellar(config).installed()):
+        lines.append(f'brew "{name}"')
+    casks = CaskInstaller(config).list_installed()
+    seen: set[str] = set()
+    for row in casks:
+        if row["token"] in seen:
+            continue
+        seen.add(row["token"])
+        lines.append(f'cask "{row["token"]}"')
+    return lines

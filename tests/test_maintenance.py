@@ -51,3 +51,23 @@ def test_reinstall(run_cli, sample) -> None:
     assert "Reinstalled: hello 1.0" in proc.stdout
     assert (sample.prefix / "Cellar" / "hello" / "1.0").is_dir()
     assert (sample.prefix / "bin" / "hello").is_symlink()
+
+
+def test_cleanup_prunes_old_cache(run_cli, sample) -> None:
+    import os
+    import time
+
+    assert run_cli("install", "hello", bottle_tag=sample.tag).returncode == 0
+    downloads = sample.cache / "downloads"
+    old_file = downloads / "old-download.tar.gz"
+    old_file.write_text("old")
+    old_time = time.time() - 90 * 86400
+    os.utime(old_file, (old_time, old_time))
+
+    dry = run_cli("cleanup", "--prune-cache", "--cache-age-days", "30", "--dry-run")
+    assert dry.returncode == 0, dry.stderr
+    assert "Would remove cache:" in dry.stdout
+    assert old_file.exists()
+    real = run_cli("cleanup", "--prune-cache", "--cache-age-days", "30")
+    assert real.returncode == 0, real.stderr
+    assert not old_file.exists()

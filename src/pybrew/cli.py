@@ -12,14 +12,14 @@ from typing import Any, Optional
 from . import PYBREW_VERSION
 from .api import fetch_formula
 from .cask import CaskError
-from .bundle import bundle_check, bundle_install, bundle_list, parse_brewfile
+from .bundle import bundle_check, bundle_dump, bundle_install, bundle_list, parse_brewfile
 from .cask_installer import CaskInstaller, CaskLoader, CaskNotFound
 from .cellar import Cellar, Linker, read_receipt
 from .doctor import diagnose
 from .download import Downloader
 from .errors import FormulaNotFound, PybrewError, UsageError
 from .installer import InstallOptions, Installer
-from .maintenance import cleanup, find_outdated, reinstall, upgrade_formula
+from .maintenance import cleanup, cleanup_cache, find_outdated, reinstall, upgrade_formula
 from .models import Formula, candidate_bottle_tags
 from .paths import Config
 from .ruby_parser import parse_formula_file
@@ -148,19 +148,22 @@ def build_parser() -> argparse.ArgumentParser:
     upgrade.add_argument("--dry-run", action="store_true")
     upgrade.add_argument("--api", action="store_true")
 
-    cleanup_cmd = subparsers.add_parser("cleanup", parents=[common], help="remove old kegs")
+    cleanup_cmd = subparsers.add_parser("cleanup", parents=[common], help="remove old kegs and cache files")
     cleanup_cmd.add_argument("--dry-run", action="store_true")
+    cleanup_cmd.add_argument("--prune-cache", action="store_true", help="also prune the download cache")
+    cleanup_cmd.add_argument("--cache-age-days", type=int, default=120)
 
     reinstall_cmd = subparsers.add_parser("reinstall", parents=[common], help="reinstall formulae")
     reinstall_cmd.add_argument("formulae", nargs="+")
 
     bundle = subparsers.add_parser("bundle", parents=[common], help="install/check a Brewfile")
     bundle_actions = bundle.add_subparsers(dest="bundle_action", required=True)
-    for action_name in ("install", "check", "list"):
+    for action_name in ("install", "check", "list", "dump"):
         action_parser = bundle_actions.add_parser(action_name)
         action_parser.add_argument("--file", type=Path, default=Path("Brewfile"))
         action_parser.add_argument("--dry-run", action="store_true")
         action_parser.add_argument("--api", action="store_true")
+        action_parser.add_argument("--force", action="store_true")
 
     services = subparsers.add_parser("services", parents=[common], help="manage background services")
     services.add_argument("action", nargs="?", default="list", choices=["list", "start", "stop", "restart", "run", "info"])
@@ -523,6 +526,13 @@ def _cask_loader(config: Config, allow_api: bool = False) -> CaskLoader:
 
 def cmd_bundle(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
+    if args.bundle_action == "dump":
+        lines = bundle_dump(config)
+        if args.file.exists() and not args.force:
+            raise UsageError(f"{args.file} already exists; pass --force to overwrite")
+        args.file.write_text("\n".join(lines) + ("\n" if lines else ""))
+        print(f"Wrote {len(lines)} entrie(s) to {args.file}")
+        return 0
     entries = parse_brewfile(args.file)
     if args.bundle_action == "list":
         for line in bundle_list(entries):
@@ -600,6 +610,10 @@ def cmd_cleanup(args: argparse.Namespace) -> int:
     removed = cleanup(config, dry_run=args.dry_run)
     for keg in removed:
         print(("Would remove: " if args.dry_run else "Removed: ") + str(keg))
+    if args.prune_cache:
+        cached = cleanup_cache(config, age_days=args.cache_age_days, dry_run=args.dry_run)
+        for path in cached:
+            print(("Would remove cache: " if args.dry_run else "Removed cache: ") + str(path))
     return 0
 
 

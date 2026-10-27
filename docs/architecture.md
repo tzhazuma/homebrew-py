@@ -153,8 +153,10 @@ them from the prefix.
 
 `bundle.py` parses the common Homebrew Brewfile subset: `tap`, `brew` and `cask`
 lines. `bundle install` installs taps first, then formulae and casks, reusing the
-normal installers; `bundle check` reports missing entries and `bundle list` prints
-the parsed entries. Advanced Brewfile options are not parsed yet.
+normal installers; `bundle check` reports missing entries; `bundle list` prints
+the parsed entries; `bundle dump` writes taps/formulae/casks back to a Brewfile.
+Advanced Brewfile options are not parsed yet. `cleanup --prune-cache` removes
+downloads older than `--cache-age-days` (default 120) in addition to stale kegs.
 
 ## Safety model
 

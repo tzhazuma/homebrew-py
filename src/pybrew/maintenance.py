@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
@@ -95,3 +97,28 @@ def reinstall(
     installer.uninstall(formula.name)
     results = installer.install(formula, InstallOptions(verbose=verbose))
     return [f"{result.name} {result.version}" for result in results]
+
+
+def cleanup_cache(config: Config, age_days: int = 120, dry_run: bool = False) -> list[Path]:
+    """Remove cached downloads older than ``age_days``."""
+
+    removed: list[Path] = []
+    downloads = config.downloads
+    if not downloads.is_dir():
+        return removed
+    cutoff = time.time() - max(0, age_days) * 86400
+    for path in sorted(downloads.iterdir()):
+        if not path.is_file():
+            continue
+        try:
+            if path.stat().st_mtime > cutoff:
+                continue
+        except OSError:
+            continue
+        removed.append(path)
+        if not dry_run:
+            try:
+                path.unlink()
+            except OSError:
+                pass
+    return removed
