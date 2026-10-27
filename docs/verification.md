@@ -194,8 +194,9 @@ misrepresenting authorship.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- CI run for the feature commit `03e6ba9`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40445584843>
+- Latest feature commit: `0414186` (cask pkg payload + systemd services)
+- CI run for the pkg/systemd feature commit `0414186`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40489018953>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
