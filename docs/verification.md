@@ -217,9 +217,9 @@ misrepresenting authorship.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `e4cdb81` (bundle dump + cache pruning)
-- CI run for the bundle-dump/cache-pruning feature commit `e4cdb81`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40543271082>
+- Latest feature commit: `ef5f4ad` (structured doctor checks)
+- CI run for the doctor feature commit `ef5f4ad`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40543789605>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
