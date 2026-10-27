@@ -253,9 +253,9 @@ misrepresenting authorship.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `7fd400e` (pin/unpin + live ghcr verification)
-- CI run for the pin/live-ghcr feature commit `7fd400e`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40545914295>
+- Latest feature commit: `121e9e3` (Mach-O install_name_tool relocation)
+- CI run for the Mach-O relocation fix commit `121e9e3`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40547336147>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
