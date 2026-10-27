@@ -309,9 +309,9 @@ misrepresenting authorship.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `7f3afc8` (leaves/uses commands)
-- CI run for the leaves/uses feature commit `7f3afc8`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40556451898>
+- Latest feature commit: `ed4d790` (`update` command)
+- CI run for the update feature commit `ed4d790`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40556964755>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
