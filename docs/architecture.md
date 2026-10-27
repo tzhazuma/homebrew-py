@@ -168,6 +168,11 @@ downloads older than `--cache-age-days` (default 120) in addition to stale kegs.
 `pin` records a formula under `var/pybrew/pinned`; `outdated` and all-formula
 upgrades skip pinned formulae until `unpin`. `list --pinned` shows the set.
 
+## Source inspection
+
+`cat`, `home` and `edit` resolve local formula/cask files; `cat` prints the source,
+`home` prints the homepage and `edit` opens `$EDITOR`/`$VISUAL` on the file.
+
 ## Fetch
 
 `fetch` resolves a formula's bottle (or source) and downloads it through the

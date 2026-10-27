@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-100 passed in 28.04s
+101 passed in 25.22s
 ```
 
 Breakdown of the feature slices:
@@ -235,6 +235,12 @@ head binary into the keg, and the resulting binary contains the head marker.
 
 `fetch hello` downloads the bottle to the cache and leaves the Cellar untouched;
 `fetch --cask testapp` downloads the cask zip and leaves no Caskroom entry.
+
+## Source inspection commands
+
+`cat hello`/`cat --cask testapp` print local formula/cask source, `home` prints
+homepages, and `edit` is tested with `EDITOR=true` to avoid an interactive
+editor.
 
 ## Cask CLI aliases
 

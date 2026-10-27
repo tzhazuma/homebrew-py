@@ -132,3 +132,22 @@ def test_fetch_formula_and_cask(run_cli, sample) -> None:
     cask_path = Path(cask.stdout.strip())
     assert cask_path.is_file()
     assert not (sample.prefix / "Caskroom").exists()
+
+
+def test_cat_home_edit_and_cask(run_cli, sample) -> None:
+    cat = run_cli("cat", "hello")
+    assert cat.returncode == 0, cat.stderr
+    assert "class Hello" in cat.stdout
+    cask_cat = run_cli("cat", "--cask", "testapp")
+    assert cask_cat.returncode == 0
+    assert 'cask "testapp"' in cask_cat.stdout
+
+    home = run_cli("home", "hello")
+    assert home.returncode == 0
+    assert "https://example.com/hello" in home.stdout
+    cask_home = run_cli("home", "--cask", "testapp")
+    assert cask_home.returncode == 0
+    assert "https://example.com/testapp" in cask_home.stdout
+
+    edit = run_cli("edit", "hello", extra_env={"EDITOR": "true"})
+    assert edit.returncode == 0, edit.stderr

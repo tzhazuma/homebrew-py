@@ -52,7 +52,7 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 | Bundle | Yes | Brewfile install/check/list/dump, tap URL, link:false |
 | Analytics | Yes | No |
 | Formula tests | `brew test` | Not executed |
-| Fetch | `brew fetch` | `fetch` formula bottle/source, `fetch --cask` |
+| Fetch / source inspection | `brew fetch`, `cat`, `home`, `edit` | `fetch` formula/cask; `cat`/`home`/`edit` formula/cask |
 | Self-update / doctor | Yes | `doctor` checks prefix, Cellar, cask artifacts, links and orphan services; `--json`; `shellenv` |
 
 ## Verified integration cases

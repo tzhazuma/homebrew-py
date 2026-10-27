@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Optional
@@ -109,6 +110,16 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--pkg-root", type=Path, help="root for cask pkg payloads")
     install.add_argument("--no-link", action="store_true", help="do not create symlinks")
     install.add_argument("--HEAD", dest="head", action="store_true", help="build the head revision")
+
+    cat_cmd = subparsers.add_parser("cat", parents=[common], help="print a formula/cask source file")
+    cat_cmd.add_argument("formulae", nargs="+")
+    cat_cmd.add_argument("--cask", action="store_true")
+    home_cmd = subparsers.add_parser("home", parents=[common], help="print a formula/cask homepage")
+    home_cmd.add_argument("formulae", nargs="+")
+    home_cmd.add_argument("--cask", action="store_true")
+    edit_cmd = subparsers.add_parser("edit", parents=[common], help="open a formula/cask in $EDITOR")
+    edit_cmd.add_argument("formulae", nargs="+")
+    edit_cmd.add_argument("--cask", action="store_true")
 
     fetch_cmd = subparsers.add_parser("fetch", parents=[common], help="download formula/cask artifacts")
     fetch_cmd.add_argument("formulae", nargs="+")
@@ -333,6 +344,76 @@ def cmd_info(args: argparse.Namespace) -> int:
         if formula.dependencies:
             print("Dependencies: " + ", ".join(sorted({dep.name for dep in formula.dependencies})))
     return 0
+
+
+def _resolve_editable(args: argparse.Namespace, config: Config) -> list[Path]:
+    paths: list[Path] = []
+    if getattr(args, "cask", False):
+        cask_loader = _cask_loader(config)
+        for token in args.formulae:
+            cask = cask_loader.load(token)
+            if cask.path is None:
+                raise UsageError(f"{token}: no local cask source file")
+            paths.append(cask.path)
+        return paths
+    loader = _loader(config)
+    for name in args.formulae:
+        formula = _load_formula(name, loader, use_api=bool(getattr(args, "api", False)))
+        if formula.path is None:
+            raise UsageError(f"{name}: no local formula source file")
+        paths.append(formula.path)
+    return paths
+
+
+def cmd_cat(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    try:
+        paths = _resolve_editable(args, config)
+    except PybrewError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 1
+    for path in paths:
+        print(path.read_text(), end="" if path.read_text().endswith("\n") else "\n")
+    return 0
+
+
+def cmd_home(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    if getattr(args, "cask", False):
+        loader = _cask_loader(config)
+        for token in args.formulae:
+            cask = loader.load(token)
+            if not cask.homepage:
+                print(f"Error: {token} has no homepage", file=sys.stderr)
+                return 1
+            print(cask.homepage)
+        return 0
+    loader = _loader(config)
+    for name in args.formulae:
+        formula = _load_formula(name, loader, use_api=bool(getattr(args, "api", False)))
+        if not formula.homepage:
+            print(f"Error: {name} has no homepage", file=sys.stderr)
+            return 1
+        print(formula.homepage)
+    return 0
+
+
+def cmd_edit(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    try:
+        paths = _resolve_editable(args, config)
+    except PybrewError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 1
+    import shlex
+    editor = os.environ.get("EDITOR") or os.environ.get("VISUAL") or "vi"
+    command = shlex.split(editor) + [str(path) for path in paths]
+    try:
+        result = subprocess.run(command)
+    except OSError as error:
+        print(f"Error: cannot launch editor {editor!r}: {error}", file=sys.stderr)
+        return 1
+    return result.returncode
 
 
 def cmd_fetch(args: argparse.Namespace) -> int:
@@ -1031,6 +1112,9 @@ def cmd_parse(args: argparse.Namespace) -> int:
 _COMMANDS = {
     "info": cmd_info,
     "search": cmd_search,
+    "cat": cmd_cat,
+    "home": cmd_home,
+    "edit": cmd_edit,
     "fetch": cmd_fetch,
     "list": cmd_list,
     "deps": cmd_deps,
