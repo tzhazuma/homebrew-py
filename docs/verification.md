@@ -199,9 +199,9 @@ misrepresenting authorship.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `a074c8b` (cask API fallback + info/list --cask)
-- CI run for the cask-API feature commit `a074c8b`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40489857182>
+- Latest feature commit: `0dffc1e` (cask outdated/upgrade)
+- CI run for the cask outdated/upgrade feature commit `0dffc1e`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40490381500>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
