@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-102 passed in 22.97s
+103 passed in 36.92s
 ```
 
 Breakdown of the feature slices:
@@ -41,7 +41,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_taps.py
 4 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_maintenance.py
-8 passed
+9 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bundle.py
 5 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cli.py
@@ -202,6 +202,7 @@ Unsupported Brewfile lines fail with a line number.
   superseded keg; the old bottle is copied to the new version name for the test.
 - `autoremove` removes a dependency after its only explicit dependent is
   uninstalled; dry-run leaves it in place.
+- `leaves` omits dependency kegs and `uses dep` reports `hello-dep`.
 
 ## Resource staging
 

@@ -185,6 +185,10 @@ def build_parser() -> argparse.ArgumentParser:
     shellenv = subparsers.add_parser("shellenv", parents=[common], help="print shell environment exports")
     shellenv.add_argument("--shell", choices=["bash", "zsh", "fish"], default="bash")
 
+    leaves = subparsers.add_parser("leaves", parents=[common], help="list explicitly installed formulae")
+    uses = subparsers.add_parser("uses", parents=[common], help="show installed formulae depending on a formula")
+    uses.add_argument("formula")
+
     autoremove = subparsers.add_parser("autoremove", parents=[common], help="remove unused dependencies")
     autoremove.add_argument("--dry-run", action="store_true")
 
@@ -788,6 +792,31 @@ def cmd_unpin(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def cmd_leaves(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    for name, versions in sorted(Cellar(config).installed().items()):
+        if not versions:
+            continue
+        receipt = read_receipt(config.keg_path(name, versions[-1]))
+        if not receipt.get("installed_as_dependency"):
+            print(name)
+    return 0
+
+
+def cmd_uses(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    dependents: list[str] = []
+    for name, versions in sorted(Cellar(config).installed().items()):
+        if not versions:
+            continue
+        receipt = read_receipt(config.keg_path(name, versions[-1]))
+        if args.formula in receipt.get("runtime_dependencies", []):
+            dependents.append(name)
+    for name in dependents:
+        print(name)
+    return 0 if dependents else 1
+
+
 def cmd_outdated(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     if getattr(args, "cask", False):
@@ -1163,6 +1192,8 @@ _COMMANDS = {
     "shellenv": cmd_shellenv,
     "outdated": cmd_outdated,
     "upgrade": cmd_upgrade,
+    "leaves": cmd_leaves,
+    "uses": cmd_uses,
     "autoremove": cmd_autoremove,
     "cleanup": cmd_cleanup,
     "reinstall": cmd_reinstall,

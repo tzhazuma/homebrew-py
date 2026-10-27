@@ -117,3 +117,16 @@ def test_autoremove_unused_dependency(run_cli, sample) -> None:
     assert real.returncode == 0, real.stderr
     assert "Removed: dep" in real.stdout
     assert not (sample.prefix / "Cellar" / "dep").exists()
+
+
+def test_leaves_and_uses(run_cli, sample) -> None:
+    assert run_cli("install", "hello-dep", bottle_tag=sample.tag).returncode == 0
+    leaves = run_cli("leaves")
+    assert leaves.returncode == 0, leaves.stderr
+    assert "hello-dep" in leaves.stdout
+    assert "dep" not in leaves.stdout.split()
+    uses = run_cli("uses", "dep")
+    assert uses.returncode == 0, uses.stderr
+    assert "hello-dep" in uses.stdout
+    missing = run_cli("uses", "ghost")
+    assert missing.returncode == 1
