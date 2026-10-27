@@ -438,6 +438,56 @@ class CaskInstaller:
         except OSError as error:
             raise CaskError(f"could not remove {path}: {error}") from error
 
+    # -- outdated / upgrade ---------------------------------------------
+    def find_outdated(self, loader: CaskLoader) -> list[dict[str, str]]:
+        rows: list[dict[str, str]] = []
+        for installed in self.list_installed():
+            token = installed["token"]
+            try:
+                cask = loader.load(token)
+            except Exception:
+                continue
+            current = cask.resolved_version()
+            versions = self.installed_versions(token)
+            latest = versions[-1] if versions else installed["version"]
+            if current and current != latest:
+                rows.append({"token": token, "installed": latest, "current": current})
+        return rows
+
+    def upgrade(self, cask: Cask) -> CaskInstallResult:
+        """Install the current cask version and remove superseded room metadata."""
+
+        old_versions = self.installed_versions(cask.token)
+        result = self.install(cask, force=True)
+        if result.skipped:
+            return result
+        new_receipt = result.room / ".metadata" / "receipt.json"
+        new_paths: set[str] = set()
+        if new_receipt.is_file():
+            try:
+                data = __import__("json").loads(new_receipt.read_text())
+                new_paths = {str(path) for path in data.get("installed", [])}
+            except Exception:
+                new_paths = set()
+        for version in old_versions:
+            if version == result.version:
+                continue
+            old_room = self.config.caskroom / cask.token / version
+            old_receipt = old_room / ".metadata" / "receipt.json"
+            if old_receipt.is_file():
+                try:
+                    data = __import__("json").loads(old_receipt.read_text())
+                    for path_str in data.get("installed", []):
+                        if str(path_str) in new_paths:
+                            continue
+                        path = Path(path_str)
+                        if path.exists() or path.is_symlink():
+                            self._remove_path(path)
+                except Exception:
+                    pass
+            self._remove_path(old_room)
+        return result
+
     # -- uninstall -------------------------------------------------------
     def uninstall(
         self,

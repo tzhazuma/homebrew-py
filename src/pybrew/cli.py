@@ -126,6 +126,8 @@ def build_parser() -> argparse.ArgumentParser:
         ("info", "show cask information"),
         ("search", "search casks"),
         ("zap", "remove a cask's trash paths"),
+        ("outdated", "list outdated casks"),
+        ("upgrade", "upgrade casks"),
     ):
         action_parser = cask_actions.add_parser(action_name, help=action_help)
         action_parser.add_argument("tokens", nargs="*")
@@ -609,6 +611,35 @@ def cmd_cask(args: argparse.Namespace) -> int:
         for cask in loader.search(args.tokens[0]):
             print(f"{cask.token}: {cask.name or ''} {cask.desc or ''}".strip())
         return 0
+    if args.action == "outdated":
+        rows = installer.find_outdated(loader)
+        if args.json:
+            print(json.dumps({"casks": rows}, indent=2))
+            return 0
+        for row in rows:
+            print(f"{row['token']} {row['installed']} < {row['current']}")
+        return 0
+    if args.action == "upgrade":
+        tokens = args.tokens or [
+            row["token"] for row in installer.find_outdated(loader)
+        ]
+        if not tokens:
+            print("All casks are up-to-date.")
+            return 0
+        exit_code = 0
+        for token in tokens:
+            try:
+                cask = loader.load(token)
+                result = installer.upgrade(cask)
+            except PybrewError as error:
+                print(f"Error: {error}", file=sys.stderr)
+                exit_code = 1
+                continue
+            if result.skipped:
+                print(f"Already up-to-date: {result.token} {result.version}")
+            else:
+                print(f"Upgraded cask: {result.token} {result.version}")
+        return exit_code
     if not args.tokens:
         raise UsageError(f"cask {args.action} needs at least one token")
     exit_code = 0

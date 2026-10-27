@@ -267,3 +267,21 @@ def test_info_and_list_cask_commands(run_cli, sample) -> None:
     info = run_cli("info", "--cask", "--json", "testapp")
     assert info.returncode == 0, info.stderr
     assert json.loads(info.stdout)["casks"][0]["token"] == "testapp"
+
+
+def test_cask_outdated_and_upgrade(run_cli, sample) -> None:
+    assert run_cli("install", "--cask", "testapp").returncode == 0
+    cask_file = sample.tap / "Casks" / "t" / "testapp.rb"
+    cask_file.write_text(cask_file.read_text().replace('version "1.0"', 'version "2.0"'))
+    outdated = run_cli("cask", "outdated")
+    assert outdated.returncode == 0, outdated.stderr
+    assert "testapp 1.0 < 2.0" in outdated.stdout
+    payload = json.loads(run_cli("cask", "outdated", "--json").stdout)
+    assert payload["casks"][0]["current"] == "2.0"
+
+    upgraded = run_cli("cask", "upgrade", "testapp")
+    assert upgraded.returncode == 0, upgraded.stderr
+    assert "Upgraded cask: testapp 2.0" in upgraded.stdout
+    assert (sample.prefix / "Caskroom" / "testapp" / "2.0" / ".metadata" / "receipt.json").is_file()
+    assert not (sample.prefix / "Caskroom" / "testapp" / "1.0").exists()
+    assert (sample.prefix / "Applications" / "Test.app").is_dir()

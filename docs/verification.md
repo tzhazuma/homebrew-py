@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-78 passed in 26.36s
+79 passed in 27.72s
 ```
 
 Breakdown of the feature slices:
@@ -33,7 +33,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py
-14 passed      # real dmg/pkg payload, install --cask, cask API mapping
+15 passed      # real dmg/pkg payload, install --cask, API, outdated/upgrade
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py
 5 passed       # autotools, CMake, Cargo, inreplace, conditionals
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
@@ -117,6 +117,8 @@ This is a real homebrew-core formula, not a synthetic fixture.
 - formulae.brew.sh cask JSON is mapped to the same `Cask` model (`--api`),
   including app targets, binary targets, uninstall and zap; the loader can fall
   back to the API when no local cask tap exists.
+- Cask `outdated` and `upgrade` are covered: upgrading replaces the app/binary
+  artifacts, keeps shared paths, and removes the superseded Caskroom version.
 
 ## Services verification
 

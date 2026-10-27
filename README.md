@@ -8,7 +8,7 @@ Formula 解析、依赖解析、Cellar、bottle 安装、链接/卸载和 receip
 
 > **状态：v0.1 原型（可运行、可测试）**
 >
-> - 78 个测试全部通过（`pytest -q`）
+> - 79 个测试全部通过（`pytest -q`）
 > - 15 个真实 homebrew-core 公式（bash、git、curl、openssl@3、python@3.12 等）与
 >   `brew info --json=v2` 的元数据逐项对比通过
 > - 使用真实 `hello 2.12.3` Formula 完成 autotools 源码构建并运行成功
@@ -99,7 +99,7 @@ Installer(config, loader).install(formula, InstallOptions())
 | Cellar / 链接 | ✅ | `Cellar/<name>/<version>`、`opt` 链接、bin/lib/share/... 相对符号链接、冲突检测、`--overwrite`、卸载清理 |
 | Source 安装 | ✅ 常用子集 | `system`（含 `std_configure_args`/`std_cmake_args`/`std_meson_args`/`std_cargo_args`）、`inreplace`、`ENV`、`bin.install`/`prefix.install`、`if OS.mac?`/`on_macos`；autotools/cmake/cargo 有真实构建测试；不支持的 Ruby 会明确报错 |
 | Tap 管理 | ✅ | `tap`/`untap`/`tap --list`，支持 GitHub 与本地 git URL，自动发现 Formula/Casks |
-| Cask | ✅ zip/dmg/pkg 子集 | app/binary/suite 安装、receipt、uninstall、`--zap`；`pkg` 可展开 payload 到 `--pkg-root`；支持 `--api` 直接使用 formulae.brew.sh，不执行安装脚本/不做系统级安装 |
+| Cask | ✅ zip/dmg/pkg 子集 | app/binary/suite 安装、receipt、uninstall、`--zap`；`pkg` 可展开 payload 到 `--pkg-root`；支持 `--api` 与 `outdated`/`upgrade`，不执行安装脚本/不做系统级安装 |
 | Services | ✅ launchd + systemd | macOS 生成 launchd plist；Linux 生成 systemd user unit；start/stop/restart/list/info |
 | Cask/Services/Tap 命令 | ✅ | 集成到 `pybrew` CLI |
 | 维护命令 | ✅ | `outdated`、`upgrade`（含 `--dry-run`）、`cleanup`、`reinstall` |
@@ -144,7 +144,7 @@ Installer(config, loader).install(formula, InstallOptions())
 
 ```bash
 pytest -q
-# 78 passed
+# 79 passed
 ```
 
 测试覆盖：
@@ -157,7 +157,7 @@ pytest -q
 - `test_cli.py`：info/search/list/deps/doctor/config/parse
 - `test_real_bottle.py`：真实 `libslirp 4.9.6` bottle 离线安装（有缓存时运行）
 - `test_source_build.py`：真实 autotools/CMake/Cargo 构建、inreplace、条件分支
-- `test_cask.py`：真实 cask（rectangle/iterm2/VSCode）解析、zip/dmg 安装/卸载/zap、pkg payload、`install --cask`、API 映射
+- `test_cask.py`：真实 cask（rectangle/iterm2/VSCode）解析、zip/dmg 安装/卸载/zap、pkg payload、`install --cask`、API 映射、outdated/upgrade
 - `test_services.py`：launchd plist + systemd unit、伪造 launchctl/systemctl 的 start/stop/list
 - `test_taps.py`：本地 git tap 的 clone/update/untap
 - `test_maintenance.py`：outdated、upgrade --dry-run、cleanup、reinstall
