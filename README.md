@@ -8,7 +8,7 @@ Formula 解析、依赖解析、Cellar、bottle 安装、链接/卸载和 receip
 
 > **状态：v0.1 原型（可运行、可测试）**
 >
-> - 85 个测试全部通过（`pytest -q`）
+> - 88 个测试全部通过（`pytest -q`）
 > - 15 个真实 homebrew-core 公式（bash、git、curl、openssl@3、python@3.12 等）与
 >   `brew info --json=v2` 的元数据逐项对比通过
 > - 使用真实 `hello 2.12.3` Formula 完成 autotools 源码构建并运行成功
@@ -102,7 +102,7 @@ Installer(config, loader).install(formula, InstallOptions())
 | Cask | ✅ zip/dmg/pkg 子集 | app/binary/suite 安装、receipt、uninstall、`--zap`；`pkg` 可展开 payload 到 `--pkg-root`；支持 `--api`、`outdated`/`upgrade`、`uninstall quit/delete`；不执行安装脚本/不做系统级安装 |
 | Services | ✅ launchd + systemd | macOS 生成 launchd plist；Linux 生成 systemd user unit；start/stop/restart/list/info |
 | Cask/Services/Tap 命令 | ✅ | 集成到 `pybrew` CLI |
-| 维护命令 | ✅ | `outdated`、`upgrade`（含 `--dry-run`）、`cleanup`（含 `--prune-cache`）、`reinstall`、`doctor --json` |
+| 维护命令 | ✅ | `outdated`、`upgrade`（含 `--dry-run`）、`cleanup`（含 `--prune-cache`）、`reinstall`、`doctor --json`、`services cleanup`、`tap --update`、`shellenv` |
 | Brewfile | ✅ 基础 | `bundle install/check/list/dump`，支持 `tap`/`brew`/`cask` 行 |
 | 完整 pkg cask 脚本/系统安装 / analytics / 高级 bundle 选项 | ❌ | 路线图 |
 
@@ -145,7 +145,7 @@ Installer(config, loader).install(formula, InstallOptions())
 
 ```bash
 pytest -q
-# 85 passed
+# 88 passed
 ```
 
 测试覆盖：
@@ -155,12 +155,12 @@ pytest -q
 - `test_real_formulas.py`：15 个真实 homebrew-core 公式与 `brew info --json=v2` 对比
 - `test_bottles.py`：bottle 安装/卸载、重定位、冲突、校验失败、keg-only、依赖顺序、
   staged source 安装、恶意 tar 拒绝
-- `test_cli.py`：info/search/list/deps/doctor/doctor --json/config/parse
+- `test_cli.py`：info/search/list/deps/doctor/doctor --json/config/parse/shellenv
 - `test_real_bottle.py`：真实 `libslirp 4.9.6` bottle 离线安装（有缓存时运行）
 - `test_source_build.py`：真实 autotools/CMake/Cargo 构建、inreplace、条件分支
 - `test_cask.py`：真实 cask（rectangle/iterm2/VSCode）解析、zip/dmg 安装/卸载/zap、pkg payload、`install --cask`、API 映射、outdated/upgrade、uninstall quit/delete
-- `test_services.py`：launchd plist + systemd unit、伪造 launchctl/systemctl 的 start/stop/list
-- `test_taps.py`：本地 git tap 的 clone/update/untap
+- `test_services.py`：launchd plist + systemd unit、伪造 launchctl/systemctl 的 start/stop/list、orphan cleanup
+- `test_taps.py`：本地 git tap 的 clone/update/untap/update-all
 - `test_maintenance.py`：outdated、upgrade --dry-run、cleanup（含 cache）、reinstall
 - `test_bundle.py`：Brewfile install/check/list/dump
 

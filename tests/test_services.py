@@ -197,3 +197,19 @@ def test_systemd_unit_and_lifecycle(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 
     manager.stop(formula)
     assert "stop homebrew.mxcl.svc.service" in log.read_text()
+
+
+def test_cleanup_removes_orphan_service_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula()
+    _install_fake_keg(config, formula)
+    manager = ServiceManager(config)
+    manager.directory.mkdir(parents=True, exist_ok=True)
+    installed_file = manager.directory / "homebrew.mxcl.svc.plist"
+    installed_file.write_text("keep")
+    orphan = manager.directory / "homebrew.mxcl.ghost.plist"
+    orphan.write_text("orphan")
+    removed = manager.cleanup()
+    assert orphan in removed
+    assert not orphan.exists()
+    assert installed_file.exists()

@@ -92,3 +92,12 @@ def test_doctor_json_and_missing_cask_artifact(run_cli, sample) -> None:
     payload = json.loads(broken.stdout)
     assert payload["ok"] is False
     assert any("missing cask artifact" in issue["message"] for issue in payload["issues"])
+
+
+def test_shellenv(run_cli, sample) -> None:
+    proc = run_cli("shellenv")
+    assert proc.returncode == 0
+    assert f'export HOMEBREW_PREFIX="{sample.prefix}"' in proc.stdout
+    fish = run_cli("shellenv", "--shell", "fish")
+    assert fish.returncode == 0
+    assert "set -gx HOMEBREW_PREFIX" in fish.stdout

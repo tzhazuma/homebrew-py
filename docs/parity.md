@@ -46,13 +46,13 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 | opt / linking | Yes | Yes, conflict-aware, --overwrite |
 | `info --json` | Full v2 schema | Compatible subset of v2 fields |
 | Casks | Yes | zip/dmg app/binary/suite, receipts, uninstall/zap + quit/delete; pkg payload via `--pkg-root`; API; outdated/upgrade |
-| Tap management | `brew tap` | `tap`/`untap`/list with GitHub or local git URLs |
+| Tap management | `brew tap` | `tap`/`untap`/list/`--update` with GitHub or local git URLs |
 | Services | Yes | macOS launchd + Linux systemd user units; start/stop/restart/list/info/run |
 | Outdated / upgrade / cleanup / reinstall | Yes | Basic: outdated/upgrade/cleanup (kegs + cache)/reinstall |
 | Bundle | Yes | Basic Brewfile install/check/list/dump |
 | Analytics | Yes | No |
 | Formula tests | `brew test` | Not executed |
-| Self-update / doctor | Yes | `doctor` checks prefix, Cellar, cask artifacts, links and orphan services; `--json` |
+| Self-update / doctor | Yes | `doctor` checks prefix, Cellar, cask artifacts, links and orphan services; `--json`; `shellenv` |
 
 ## Verified integration cases
 

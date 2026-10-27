@@ -465,6 +465,26 @@ class ServiceManager:
         )
         return self.runner.status(label)
 
+    def cleanup(self) -> list[Path]:
+        """Remove service files belonging to formulae that are no longer installed."""
+
+        removed: list[Path] = []
+        if not self.directory.is_dir():
+            return removed
+        for path in sorted(self.directory.iterdir()):
+            name = path.name
+            if not (name.startswith("homebrew.mxcl.") and name.endswith((".plist", ".service"))):
+                continue
+            formula_name = name[len("homebrew.mxcl.") :].rsplit(".", 1)[0]
+            if self.config.opt_path(formula_name).is_dir():
+                continue
+            try:
+                path.unlink()
+                removed.append(path)
+            except OSError:
+                pass
+        return removed
+
     def list(self, formulae: Iterable[Formula]) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for formula in formulae:

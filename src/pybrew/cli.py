@@ -113,6 +113,7 @@ def build_parser() -> argparse.ArgumentParser:
     tap.add_argument("names", nargs="*")
     tap.add_argument("--url", help="override the clone URL (useful for local taps)")
     tap.add_argument("--list", action="store_true", help="list installed taps")
+    tap.add_argument("--update", action="store_true", help="update all installed taps")
 
     untap = subparsers.add_parser("untap", parents=[common], help="remove a tap")
     untap.add_argument("name")
@@ -148,6 +149,9 @@ def build_parser() -> argparse.ArgumentParser:
     upgrade.add_argument("--dry-run", action="store_true")
     upgrade.add_argument("--api", action="store_true")
 
+    shellenv = subparsers.add_parser("shellenv", parents=[common], help="print shell environment exports")
+    shellenv.add_argument("--shell", choices=["bash", "zsh", "fish"], default="bash")
+
     cleanup_cmd = subparsers.add_parser("cleanup", parents=[common], help="remove old kegs and cache files")
     cleanup_cmd.add_argument("--dry-run", action="store_true")
     cleanup_cmd.add_argument("--prune-cache", action="store_true", help="also prune the download cache")
@@ -166,7 +170,7 @@ def build_parser() -> argparse.ArgumentParser:
         action_parser.add_argument("--force", action="store_true")
 
     services = subparsers.add_parser("services", parents=[common], help="manage background services")
-    services.add_argument("action", nargs="?", default="list", choices=["list", "start", "stop", "restart", "run", "info"])
+    services.add_argument("action", nargs="?", default="list", choices=["list", "start", "stop", "restart", "run", "info", "cleanup"])
     services.add_argument("formula", nargs="?")
     services.add_argument("--json", action="store_true")
 
@@ -496,6 +500,10 @@ def cmd_unlink(args: argparse.Namespace) -> int:
 def cmd_tap(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     manager = TapManager(config)
+    if args.update:
+        for result in manager.update_all():
+            print(f"{result.action}: {result.name}")
+        return 0
     if args.list or not args.names:
         taps = manager.list()
         for tap in taps:
@@ -559,6 +567,21 @@ def cmd_bundle(args: argparse.Namespace) -> int:
     for error in errors:
         print(f"Error: {error}", file=sys.stderr)
     return 1 if errors else 0
+
+
+def cmd_shellenv(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    prefix = str(config.prefix)
+    cellar = str(config.cellar)
+    if args.shell == "fish":
+        print(f'set -gx HOMEBREW_PREFIX "{prefix}";')
+        print(f'set -gx HOMEBREW_CELLAR "{cellar}";')
+        print(f'set -gx PATH "{prefix}/bin" "{prefix}/sbin" $PATH;')
+    else:
+        print(f'export HOMEBREW_PREFIX="{prefix}";')
+        print(f'export HOMEBREW_CELLAR="{cellar}";')
+        print(f'export PATH="{prefix}/bin:{prefix}/sbin:$PATH";')
+    return 0
 
 
 def cmd_outdated(args: argparse.Namespace) -> int:
@@ -742,6 +765,11 @@ def cmd_services(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     loader = _loader(config)
     manager = ServiceManager(config)
+    if args.action == "cleanup":
+        removed = manager.cleanup()
+        for path in removed:
+            print(f"Removed orphan service: {path}")
+        return 0
     if args.action == "list":
         rows = manager.list(installed_formulae(config, loader))
         if args.json:
@@ -854,6 +882,7 @@ _COMMANDS = {
     "untap": cmd_untap,
     "cask": cmd_cask,
     "bundle": cmd_bundle,
+    "shellenv": cmd_shellenv,
     "outdated": cmd_outdated,
     "upgrade": cmd_upgrade,
     "cleanup": cmd_cleanup,

@@ -142,14 +142,16 @@ home/prefix/temp roots. `.pkg` payloads are expanded under `--pkg-root`.
 keep_alive, environment_variables, interval, process_type). On macOS it renders
 a launchd plist and drives `launchctl`; on Linux it renders a systemd user unit
 and drives `systemctl --user`. Both runners are injectable so tests use fake
-binaries. `services list/start/stop/restart/info/run` are available in the CLI.
+binaries. `services list/start/stop/restart/info/cleanup/run` are available in the CLI;
+`cleanup` removes service files for uninstalled formulae. `shellenv` prints the
+prefix/cellar/PATH exports for bash/zsh/fish.
 
 ## Taps
 
 `tap_manager.py` manages `<prefix>/Library/Taps/<user>/homebrew-<repo>` with
-`git clone --depth 1`, `git pull --ff-only`, and safe removal. Taps become
-visible to formula/cask loaders on the next invocation because loaders discover
-them from the prefix.
+`git clone --depth 1`, `git pull --ff-only`, `--update` for all taps, and safe
+removal. Taps become visible to formula/cask loaders on the next invocation
+because loaders discover them from the prefix.
 
 ## Brewfiles
 

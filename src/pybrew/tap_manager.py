@@ -126,6 +126,12 @@ class TapManager:
         except (OSError, subprocess.CalledProcessError):
             return None
 
+    def update_all(self) -> list[TapResult]:
+        results: list[TapResult] = []
+        for tap in self.list():
+            results.append(self.tap(tap.name))
+        return results
+
     def untap(self, name: str, force: bool = False) -> Path:
         destination = self.path_for(name)
         if not destination.exists():

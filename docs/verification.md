@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-85 passed in 25.87s
+88 passed in 24.73s
 ```
 
 Breakdown of the feature slices:
@@ -37,9 +37,9 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py
 5 passed       # autotools, CMake, Cargo, inreplace, conditionals
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
-7 passed       # launchd + systemd unit generation
+8 passed       # launchd + systemd unit generation, orphan cleanup
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_taps.py
-3 passed
+4 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_maintenance.py
 5 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bundle.py
@@ -168,6 +168,13 @@ Unsupported Brewfile lines fail with a line number.
   overwrite without `--force`, and the result can be fed back to `bundle check`.
 - `cleanup --prune-cache --cache-age-days 30` removes old cached downloads; both
   dry-run and real runs are covered.
+
+## Additional maintenance checks
+
+- `services cleanup` removes `homebrew.mxcl.*` files whose formula is no longer
+  installed while keeping installed services.
+- `tap --update` updates every installed tap from its git remote.
+- `shellenv` prints HOMEBREW_PREFIX/HOMEBREW_CELLAR/PATH for bash/zsh/fish.
 
 ## CLI smoke checks
 

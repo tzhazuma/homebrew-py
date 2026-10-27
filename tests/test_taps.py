@@ -88,3 +88,17 @@ def test_cli_tap_list_and_install(tmp_path: Path, sample, run_cli) -> None:
     untapped = run_cli("untap", "tzhazuma/demo")
     assert untapped.returncode == 0, untapped.stderr
     assert not (sample.prefix / "Library" / "Taps" / "tzhazuma" / "homebrew-demo").exists()
+
+
+def test_update_all_taps(tmp_path: Path) -> None:
+    remote = _make_remote(tmp_path)
+    config = Config.default(prefix=tmp_path / "prefix", taps=[], cache=tmp_path / "cache")
+    manager = TapManager(config)
+    assert manager.tap("tzhazuma/demo", url=str(remote)).action == "installed"
+    formula = remote / "Formula" / "hello.rb"
+    formula.write_text(formula.read_text().replace("tap hello", "updated all"))
+    _git(remote, "add", ".")
+    _git(remote, "commit", "-m", "update all")
+    results = manager.update_all()
+    assert results and results[0].action == "updated"
+    assert FormulaLoader(manager.list()).load("hello").desc == "updated all"
