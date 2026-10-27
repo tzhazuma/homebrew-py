@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-97 passed in 26.96s
+98 passed in 37.42s
 ```
 
 Breakdown of the feature slices:
@@ -35,7 +35,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py
 16 passed      # real dmg/pkg payload, install --cask, API, outdated/upgrade, uninstall actions
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py
-7 passed       # autotools, CMake, Cargo, inreplace, conditionals, resources, HEAD
+8 passed       # autotools, CMake, Cargo, meson(fake), inreplace, conditionals, resources, HEAD
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
 8 passed       # launchd + systemd unit generation, orphan cleanup
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_taps.py
@@ -208,6 +208,13 @@ A synthetic formula declares a `resource "data"` tar.gz and uses
 resource via the regular cache, verifies sha256, stages it under the build root,
 and installs the file into the keg. Zip resources use the same path with
 path-traversal checks.
+
+## Meson build flow
+
+A fake `meson` executable on PATH handles `setup`/`compile`/`install`, records the
+`--prefix` from `std_meson_args`, and installs a test binary into the keg. This
+verifies the install DSL, argument expansion and PATH handling without requiring
+meson in CI.
 
 ## HEAD install
 

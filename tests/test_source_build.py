@@ -296,3 +296,49 @@ def test_head_install(run_cli, sample, tmp_path: Path) -> None:
     installed = sample.prefix / "bin" / "hello"
     assert installed.is_file()
     assert "head build" in installed.read_text()
+
+
+def test_meson_source_build_with_fake_meson(tmp_path: Path, monkeypatch) -> None:
+    project = tmp_path / "meson-src"
+    project.mkdir()
+    (project / "README").write_text("meson fixture\n")
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    fake_meson = fake_bin / "meson"
+    fake_meson.write_text(
+        """#!/bin/sh
+case "$1" in
+  setup)
+    shift
+    for arg in "$@"; do
+      case "$arg" in --prefix=*) prefix="${arg#--prefix=}";; esac
+    done
+    mkdir -p build
+    printf '%s\n' "$prefix" > build/prefix.txt
+    ;;
+  compile)
+    ;;
+  install)
+    prefix=$(cat build/prefix.txt)
+    mkdir -p "$prefix/bin"
+    printf '#!/bin/sh\\necho meson hello\\n' > "$prefix/bin/meson-hello"
+    chmod +x "$prefix/bin/meson-hello"
+    ;;
+esac
+"""
+    )
+    fake_meson.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{fake_bin}:{__import__('os').environ.get('PATH', '')}")
+    tap, _archive = _make_tap(
+        tmp_path,
+        "meson-hello",
+        "1.0",
+        project,
+        '    system "meson", "setup", "build", *std_meson_args\n'
+        '    system "meson", "compile", "-C", "build"\n'
+        '    system "meson", "install", "-C", "build"',
+    )
+    _config, result = _install(tmp_path, tap, "meson-hello")
+    binary = result.keg / "bin" / "meson-hello"
+    assert binary.is_file()
+    assert "meson hello" in binary.read_text()
