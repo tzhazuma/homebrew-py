@@ -298,9 +298,9 @@ misrepresenting authorship.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `8cae10f` (`autoremove` unused dependencies)
-- CI run for the autoremove feature commit `8cae10f`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40552962695>
+- Latest feature commit: `e0681e2` (cat/home/edit commands)
+- CI run for the cat/home/edit feature commit `e0681e2`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40554379971>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
