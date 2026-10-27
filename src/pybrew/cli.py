@@ -18,6 +18,7 @@ from .doctor import diagnose
 from .download import Downloader
 from .errors import FormulaNotFound, PybrewError, UsageError
 from .installer import InstallOptions, Installer
+from .maintenance import cleanup, find_outdated, reinstall, upgrade_formula
 from .models import Formula, candidate_bottle_tags
 from .paths import Config
 from .ruby_parser import parse_formula_file
@@ -125,6 +126,21 @@ def build_parser() -> argparse.ArgumentParser:
         action_parser.add_argument("--zap", action="store_true")
         action_parser.add_argument("--json", action="store_true")
         action_parser.add_argument("--appdir", type=Path)
+
+    outdated = subparsers.add_parser("outdated", parents=[common], help="list outdated formulae")
+    outdated.add_argument("--json", action="store_true")
+    outdated.add_argument("--api", action="store_true")
+
+    upgrade = subparsers.add_parser("upgrade", parents=[common], help="upgrade outdated formulae")
+    upgrade.add_argument("formulae", nargs="*")
+    upgrade.add_argument("--dry-run", action="store_true")
+    upgrade.add_argument("--api", action="store_true")
+
+    cleanup_cmd = subparsers.add_parser("cleanup", parents=[common], help="remove old kegs")
+    cleanup_cmd.add_argument("--dry-run", action="store_true")
+
+    reinstall_cmd = subparsers.add_parser("reinstall", parents=[common], help="reinstall formulae")
+    reinstall_cmd.add_argument("formulae", nargs="+")
 
     services = subparsers.add_parser("services", parents=[common], help="manage background services")
     services.add_argument("action", nargs="?", default="list", choices=["list", "start", "stop", "restart", "run", "info"])
@@ -426,6 +442,77 @@ def _cask_loader(config: Config) -> CaskLoader:
     return CaskLoader(discover_taps(config.taps))
 
 
+def cmd_outdated(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    loader = _loader(config)
+    rows = [item.as_dict() for item in find_outdated(config, loader)]
+    if args.json:
+        print(json.dumps({"formulae": rows, "casks": []}, indent=2))
+        return 0
+    for row in rows:
+        print(f"{row['name']} {row['installed']} < {row['current']}")
+    return 0
+
+
+def cmd_upgrade(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    loader = _loader(config)
+    if args.formulae:
+        formulae = [_load_formula(name, loader, use_api=args.api) for name in args.formulae]
+    else:
+        formulae = [
+            _load_formula(item.name, loader, use_api=args.api)
+            for item in find_outdated(config, loader)
+        ]
+    if not formulae:
+        print("Already up-to-date.")
+        return 0
+    exit_code = 0
+    for formula in formulae:
+        installed = Cellar(config).installed().get(formula.name, [])
+        if installed and installed[-1] == formula.pkg_version:
+            print(f"{formula.name} is already up-to-date")
+            continue
+        try:
+            messages = upgrade_formula(
+                config, loader, formula, dry_run=args.dry_run,
+                verbose=bool(getattr(args, "verbose", False)),
+            )
+        except PybrewError as error:
+            print(f"Error: {error}", file=sys.stderr)
+            exit_code = 1
+            continue
+        for message in messages:
+            print(("Would upgrade: " if args.dry_run else "Upgraded: ") + message)
+    return exit_code
+
+
+def cmd_cleanup(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    removed = cleanup(config, dry_run=args.dry_run)
+    for keg in removed:
+        print(("Would remove: " if args.dry_run else "Removed: ") + str(keg))
+    return 0
+
+
+def cmd_reinstall(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    config.ensure()
+    loader = _loader(config)
+    exit_code = 0
+    for name in args.formulae:
+        try:
+            formula = _load_formula(name, loader)
+            messages = reinstall(config, loader, formula, verbose=bool(getattr(args, "verbose", False)))
+        except PybrewError as error:
+            print(f"Error: {error}", file=sys.stderr)
+            exit_code = 1
+            continue
+        for message in messages:
+            print(f"Reinstalled: {message}")
+    return exit_code
+
+
 def cmd_cask(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     loader = _cask_loader(config)
@@ -610,6 +697,10 @@ _COMMANDS = {
     "tap": cmd_tap,
     "untap": cmd_untap,
     "cask": cmd_cask,
+    "outdated": cmd_outdated,
+    "upgrade": cmd_upgrade,
+    "cleanup": cmd_cleanup,
+    "reinstall": cmd_reinstall,
     "services": cmd_services,
     "doctor": cmd_doctor,
     "config": cmd_config,

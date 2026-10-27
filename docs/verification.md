@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-69 passed in 20.94s
+73 passed in 25.76s
 ```
 
 Breakdown of the feature slices:
@@ -40,6 +40,8 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
 6 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_taps.py
 3 passed
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_maintenance.py
+4 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cli.py
 8 passed
 ```
@@ -125,6 +127,16 @@ This is a real homebrew-core formula, not a synthetic fixture.
 - A local git remote is cloned into `<prefix>/Library/Taps/tzhazuma/homebrew-demo`,
   loaded by `FormulaLoader`, updated with a second commit, listed, and untapped.
 - CLI `tap --url`, `tap --list` and `untap` are covered.
+
+## Maintenance verification
+
+- `outdated` compares installed keg versions with the tap formula's
+  `pkg_version` and supports `--json`.
+- `upgrade --dry-run` resolves the newer formula and reports the plan without
+  downloading or writing a keg.
+- `cleanup` keeps the opt-linked keg (or newest) and removes older kegs;
+  `--dry-run` is covered.
+- `reinstall` uninstalls then reinstalls a formula and restores links.
 
 ## CLI smoke checks
 

@@ -8,7 +8,7 @@ Formula 解析、依赖解析、Cellar、bottle 安装、链接/卸载和 receip
 
 > **状态：v0.1 原型（可运行、可测试）**
 >
-> - 69 个测试全部通过（`pytest -q`）
+> - 73 个测试全部通过（`pytest -q`）
 > - 15 个真实 homebrew-core 公式（bash、git、curl、openssl@3、python@3.12 等）与
 >   `brew info --json=v2` 的元数据逐项对比通过
 > - 使用真实 `hello 2.12.3` Formula 完成 autotools 源码构建并运行成功
@@ -63,6 +63,12 @@ pybrew --prefix /tmp/pybrew services list
 pybrew --prefix /tmp/pybrew services start nginx
 pybrew --prefix /tmp/pybrew services stop nginx
 
+# 维护
+pybrew --prefix /tmp/pybrew outdated
+pybrew --prefix /tmp/pybrew upgrade --dry-run
+pybrew --prefix /tmp/pybrew cleanup --dry-run
+pybrew --prefix /tmp/pybrew reinstall hello
+
 # 源码构建（autotools / CMake / Cargo 等常用 def install DSL）
 pybrew --prefix /tmp/pybrew --tap /path/to/tap install --build-from-source hello
 ```
@@ -95,7 +101,8 @@ Installer(config, loader).install(formula, InstallOptions())
 | Cask | ✅ zip/dmg 子集 | app/binary/suite 安装、receipt、uninstall、`--zap`；`pkg` artifact 和系统级安装暂不支持 |
 | Services | ✅ macOS launchd | 解析 `service do`、生成 plist、start/stop/restart/list/info；Linux systemd 路线图 |
 | Cask/Services/Tap 命令 | ✅ | 集成到 `pybrew` CLI |
-| 完整 pkg cask / analytics / bundle / upgrade | ❌ | 路线图 |
+| 维护命令 | ✅ | `outdated`、`upgrade`（含 `--dry-run`）、`cleanup`、`reinstall` |
+| 完整 pkg cask / analytics / bundle / Linux services | ❌ | 路线图 |
 
 ## 架构
 
@@ -136,7 +143,7 @@ Installer(config, loader).install(formula, InstallOptions())
 
 ```bash
 pytest -q
-# 69 passed
+# 73 passed
 ```
 
 测试覆盖：
@@ -152,6 +159,7 @@ pytest -q
 - `test_cask.py`：真实 cask（rectangle/iterm2/VSCode）解析、zip/dmg 安装/卸载/zap
 - `test_services.py`：service DSL/plist 生成 + 伪造 launchctl 的 start/stop/list
 - `test_taps.py`：本地 git tap 的 clone/update/untap
+- `test_maintenance.py`：outdated、upgrade --dry-run、cleanup、reinstall
 
 详细结果见 [docs/verification.md](docs/verification.md)，与 Ruby Homebrew 的差异见
 [docs/parity.md](docs/parity.md)，设计细节见 [docs/architecture.md](docs/architecture.md)。

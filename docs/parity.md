@@ -48,7 +48,8 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 | Casks | Yes | zip/dmg app/binary/suite, receipts, uninstall/zap; pkg unsupported |
 | Tap management | `brew tap` | `tap`/`untap`/list with GitHub or local git URLs |
 | Services | Yes | macOS launchd start/stop/restart/list/info/run; Linux systemd no |
-| Analytics / bundle / upgrade | Yes | No |
+| Outdated / upgrade / cleanup / reinstall | Yes | Basic: outdated/upgrade/cleanup/reinstall |
+| Analytics / bundle | Yes | No |
 | Formula tests | `brew test` | Not executed |
 | Self-update / doctor | Yes | `doctor` checks prefix health |
 
