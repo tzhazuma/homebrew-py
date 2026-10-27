@@ -310,9 +310,9 @@ misrepresenting authorship.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `ed4d790` (`update` command)
-- CI run for the update feature commit `ed4d790`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40556964755>
+- Latest feature commit: `7774a60` (cask `pkgutil` uninstall action)
+- CI run for the pkgutil-uninstall feature commit `7774a60`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40557380180>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
