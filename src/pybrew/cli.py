@@ -110,12 +110,21 @@ def build_parser() -> argparse.ArgumentParser:
     untap.add_argument("--force", action="store_true")
 
     cask = subparsers.add_parser("cask", parents=[common], help="manage macOS casks (applications)")
-    cask.add_argument("action", nargs="?", default="list", choices=["install", "uninstall", "list", "info", "search", "zap"])
-    cask.add_argument("tokens", nargs="*")
-    cask.add_argument("--force", action="store_true")
-    cask.add_argument("--zap", action="store_true")
-    cask.add_argument("--json", action="store_true")
-    cask.add_argument("--appdir", type=Path)
+    cask_actions = cask.add_subparsers(dest="action", required=False)
+    for action_name, action_help in (
+        ("install", "install casks"),
+        ("uninstall", "uninstall casks"),
+        ("list", "list installed casks"),
+        ("info", "show cask information"),
+        ("search", "search casks"),
+        ("zap", "remove a cask's trash paths"),
+    ):
+        action_parser = cask_actions.add_parser(action_name, help=action_help)
+        action_parser.add_argument("tokens", nargs="*")
+        action_parser.add_argument("--force", action="store_true")
+        action_parser.add_argument("--zap", action="store_true")
+        action_parser.add_argument("--json", action="store_true")
+        action_parser.add_argument("--appdir", type=Path)
 
     services = subparsers.add_parser("services", parents=[common], help="manage background services")
     services.add_argument("action", nargs="?", default="list", choices=["list", "start", "stop", "restart", "run", "info"])
@@ -420,7 +429,14 @@ def _cask_loader(config: Config) -> CaskLoader:
 def cmd_cask(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     loader = _cask_loader(config)
-    installer = CaskInstaller(config, appdir=args.appdir)
+    if getattr(args, "action", None) is None:
+        args.action = "list"
+        args.tokens = []
+        args.json = False
+        args.force = False
+        args.zap = False
+    appdir = getattr(args, "appdir", None)
+    installer = CaskInstaller(config, appdir=appdir)
     if args.action == "list":
         rows = installer.list_installed()
         if args.json:
