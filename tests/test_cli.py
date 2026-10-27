@@ -73,3 +73,22 @@ def test_unknown_formula_errors(run_cli) -> None:
     proc = run_cli("info", "definitely-not-a-formula-xyz")
     assert proc.returncode == 1
     assert "no formula named" in proc.stderr.lower()
+
+
+def test_doctor_json_and_missing_cask_artifact(run_cli, sample) -> None:
+    assert run_cli("install", "hello", bottle_tag=sample.tag).returncode == 0
+    healthy = run_cli("doctor", "--json")
+    assert healthy.returncode == 0, healthy.stdout + healthy.stderr
+    payload = json.loads(healthy.stdout)
+    assert payload["ok"] is True and payload["issues"] == []
+
+    assert run_cli("cask", "install", "testapp").returncode == 0
+    app = sample.prefix / "Applications" / "Test.app"
+    import shutil
+
+    shutil.rmtree(app)
+    broken = run_cli("doctor", "--json")
+    assert broken.returncode == 1
+    payload = json.loads(broken.stdout)
+    assert payload["ok"] is False
+    assert any("missing cask artifact" in issue["message"] for issue in payload["issues"])

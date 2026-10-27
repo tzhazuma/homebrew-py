@@ -15,7 +15,7 @@ from .cask import CaskError
 from .bundle import bundle_check, bundle_dump, bundle_install, bundle_list, parse_brewfile
 from .cask_installer import CaskInstaller, CaskLoader, CaskNotFound
 from .cellar import Cellar, Linker, read_receipt
-from .doctor import diagnose
+from .doctor import diagnose, diagnose_issues
 from .download import Downloader
 from .errors import FormulaNotFound, PybrewError, UsageError
 from .installer import InstallOptions, Installer
@@ -170,7 +170,8 @@ def build_parser() -> argparse.ArgumentParser:
     services.add_argument("formula", nargs="?")
     services.add_argument("--json", action="store_true")
 
-    subparsers.add_parser("doctor", parents=[common], help="check the prefix for problems")
+    doctor_cmd = subparsers.add_parser("doctor", parents=[common], help="check the prefix for problems")
+    doctor_cmd.add_argument("--json", action="store_true")
     config = subparsers.add_parser("config", parents=[common], help="show pybrew configuration")
     config.add_argument("--json", action="store_true")
 
@@ -792,12 +793,15 @@ def cmd_services(args: argparse.Namespace) -> int:
 
 def cmd_doctor(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
-    issues = diagnose(config)
+    issues = diagnose_issues(config)
+    if args.json:
+        print(json.dumps({"ok": not issues, "issues": issues}, indent=2))
+        return 0 if not issues else 1
     if not issues:
         print("Your pybrew prefix looks healthy.")
         return 0
     for issue in issues:
-        print(f"Warning: {issue}")
+        print(f"Warning: {issue['message']}")
     return 1
 
 

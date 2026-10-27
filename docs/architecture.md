@@ -18,7 +18,7 @@ be a drop-in replacement for every Homebrew feature yet.
 | `pybrew/installer.py` | dependency resolution, bottle/source installation, uninstall |
 | `pybrew/cellar.py` | Cellar/keg mutation, receipts, link/unlink, opt links |
 | `pybrew/paths.py` | prefix/cache/tap configuration and layout |
-| `pybrew/doctor.py` | prefix health checks |
+| `pybrew/doctor.py` | prefix, Cellar, cask and service health checks (`--json`) |
 | `pybrew/version.py` | version detection and natural-order comparison |
 | `pybrew/source_builder.py` | executes the supported subset of `def install` (system/inreplace/ENV/install actions) |
 | `pybrew/cask.py` / `cask_installer.py` | cask parser and zip/dmg installer |

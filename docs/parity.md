@@ -52,7 +52,7 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 | Bundle | Yes | Basic Brewfile install/check/list/dump |
 | Analytics | Yes | No |
 | Formula tests | `brew test` | Not executed |
-| Self-update / doctor | Yes | `doctor` checks prefix health |
+| Self-update / doctor | Yes | `doctor` checks prefix, Cellar, cask artifacts, links and orphan services; `--json` |
 
 ## Verified integration cases
 

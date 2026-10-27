@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-83 passed in 29.50s
+84 passed in 26.15s
 ```
 
 Breakdown of the feature slices:
@@ -143,6 +143,8 @@ This is a real homebrew-core formula, not a synthetic fixture.
 
 ## Maintenance verification
 
+- `doctor --json` returns structured issues and detects a removed cask artifact
+  in addition to the existing prefix/Cellar/link checks.
 - `outdated` compares installed keg versions with the tap formula's
   `pkg_version` and supports `--json`.
 - `upgrade --dry-run` resolves the newer formula and reports the plan without

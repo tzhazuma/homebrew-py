@@ -272,6 +272,8 @@ def run_cli(sample: SimpleNamespace):
         env["PYTHONPATH"] = str(SRC) + os.pathsep + env.get("PYTHONPATH", "")
         env.pop("HOMEBREW_BOTTLE_TAG", None)
         env.pop("PYBREW_BOTTLE_TAG", None)
+        env.setdefault("PYBREW_SERVICE_DIR", str(sample.root / "service-agents"))
+        env.setdefault("PYBREW_SERVICE_BACKEND", "launchd")
         if extra_env:
             env.update(extra_env)
         if bottle_tag:
