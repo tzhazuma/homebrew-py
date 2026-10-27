@@ -219,9 +219,9 @@ misrepresenting authorship.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `ef5f4ad` (structured doctor checks)
-- CI run for the doctor feature commit `ef5f4ad`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40543789605>
+- Latest feature commit: `f489634` (cask uninstall quit/delete)
+- CI run for the cask uninstall-actions feature commit `f489634`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40544554499>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
