@@ -145,6 +145,23 @@ class Downloader:
                 temporary.unlink()
         return destination
 
+    def fetch_unverified(self, url: str, hint: str = "head") -> Path:
+        """Fetch a HEAD source URL without a checksum (Homebrew ``head`` specs)."""
+
+        safe_hint = re.sub(r"[^A-Za-z0-9._@+-]+", "-", hint).strip("-") or "head"
+        digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
+        destination = self.cache_dir / f"url-{digest}--{safe_hint}"
+        if destination.is_file():
+            return destination
+        temporary = Path(tempfile.mkstemp(prefix=".pybrew-", dir=self.cache_dir)[1])
+        try:
+            self._download(url, temporary)
+            os.replace(temporary, destination)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+        return destination
+
     def _download(self, url: str, destination: Path) -> None:
         try:
             with open_url(url) as response, open(destination, "wb") as handle:

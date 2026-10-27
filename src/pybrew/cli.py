@@ -107,6 +107,7 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--appdir", type=Path, help="cask application directory")
     install.add_argument("--pkg-root", type=Path, help="root for cask pkg payloads")
     install.add_argument("--no-link", action="store_true", help="do not create symlinks")
+    install.add_argument("--HEAD", dest="head", action="store_true", help="build the head revision")
 
     uninstall = subparsers.add_parser("uninstall", parents=[common], help="uninstall formulae")
     uninstall.add_argument("formulae", nargs="+")
@@ -453,6 +454,7 @@ def cmd_install(args: argparse.Namespace) -> int:
         verbose=bool(getattr(args, "verbose", False)),
         dry_run=args.dry_run,
         link=not args.no_link,
+        head=bool(getattr(args, "head", False)),
     )
     exit_code = 0
     for name in args.formulae:

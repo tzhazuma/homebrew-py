@@ -41,7 +41,7 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 | Formula DSL metadata | Full Ruby evaluation + DSL | Literal-only parser, tolerates unknown calls |
 | Dependency resolution | Full, options/requirements | Runtime/build/test/optional/recommended + uses_from_macos |
 | Bottle install | All platforms, OCI + legacy mirrors | ghcr.io OCI + plain root_url + local file; SHA-256; text relocation + Mach-O install_name_tool |
-| Source install | Any build system / formula Ruby | Common `def install` subset: system/inreplace/ENV/install actions/resource staging; autotools/CMake/Cargo tested; unsupported Ruby fails explicitly |
+| Source install | Any build system / formula Ruby | Common `def install` subset: system/inreplace/ENV/install actions/resource staging/--HEAD; autotools/CMake/Cargo tested; unsupported Ruby fails explicitly |
 | Cellar / keg / receipts | Yes | Yes, compatible layout |
 | opt / linking | Yes | Yes, conflict-aware, --overwrite |
 | `info --json` | Full v2 schema | Compatible subset of v2 fields |

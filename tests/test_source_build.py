@@ -269,3 +269,30 @@ end
     config, result = _install(tmp_path, tap, "resource-fixture")
     assert (result.keg / "bin" / "data.txt").read_text() == "resource payload\n"
     assert (config.prefix / "bin" / "data.txt").exists()
+
+
+def test_head_install(run_cli, sample, tmp_path: Path) -> None:
+    head_archive = tmp_path / "hello-head.tar.gz"
+    with tarfile.open(head_archive, "w:gz") as tar:
+        data = b"#!/bin/sh\necho head build\n"
+        info = tarfile.TarInfo("hello-head/hello")
+        info.size = len(data)
+        info.mode = 0o755
+        tar.addfile(info, io.BytesIO(data))
+        readme = b"head readme\n"
+        info = tarfile.TarInfo("hello-head/README")
+        info.size = len(readme)
+        info.mode = 0o644
+        tar.addfile(info, io.BytesIO(readme))
+    head_block = (
+        "  head do\n"
+        f'    url "{head_archive.as_uri()}"\n'
+        f'    sha256 "{_sha(head_archive)}"\n'
+        "  end\n\n"
+    )
+    sample.formula.write_text(sample.formula.read_text().replace("  bottle do", head_block + "  bottle do", 1))
+    proc = run_cli("install", "--HEAD", "hello", bottle_tag=sample.tag)
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    installed = sample.prefix / "bin" / "hello"
+    assert installed.is_file()
+    assert "head build" in installed.read_text()

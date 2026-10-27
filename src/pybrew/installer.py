@@ -45,6 +45,7 @@ class InstallOptions:
     verbose: bool = False
     dry_run: bool = False
     link: bool = True
+    head: bool = False
 
 
 @dataclass
@@ -401,7 +402,7 @@ class Installer:
                 skipped=True,
             )
 
-        if options.build_from_source:
+        if options.head or options.build_from_source:
             from_bottle = False
             self._install_from_source(formula, keg, options)
         else:
@@ -494,12 +495,23 @@ class Installer:
 
     # -- source ----------------------------------------------------------
     def _install_from_source(self, formula: Formula, keg: Path, options: InstallOptions) -> None:
-        stable = formula.stable
-        if not stable.url or not stable.sha256:
+        stable = formula.head if options.head else formula.stable
+        if not stable.url:
             raise UnsupportedInstall(
-                f"{formula.name} cannot be installed from source: missing url/sha256"
+                f"{formula.name} cannot be installed from source: missing url"
             )
-        archive = self.downloader.fetch(stable.url, stable.sha256, hint=f"{formula.name}-source")
+        if stable.sha256:
+            archive = self.downloader.fetch(
+                stable.url, stable.sha256, hint=f"{formula.name}-source"
+            )
+        elif options.head:
+            archive = self.downloader.fetch_unverified(
+                stable.url, hint=f"{formula.name}-head-source"
+            )
+        else:
+            raise UnsupportedInstall(
+                f"{formula.name} cannot be installed from source: missing sha256"
+            )
         with tempfile.TemporaryDirectory(prefix="pybrew-source-") as temporary:
             extract_root = Path(temporary)
             safe_extract_tar(archive, extract_root)
