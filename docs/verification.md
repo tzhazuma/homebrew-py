@@ -272,9 +272,9 @@ misrepresenting authorship.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `05223ab` (real upgrade relink + old-keg cleanup)
-- CI run for the real-upgrade feature commit `05223ab`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40549279247>
+- Latest feature commit: `57c1b31` (cask flags for search/outdated/upgrade)
+- CI run for the cask-CLI-flags feature commit `57c1b31`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40549792391>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
