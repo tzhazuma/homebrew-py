@@ -285,9 +285,9 @@ misrepresenting authorship.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `d68916a` (`--HEAD` source install)
-- CI run for the HEAD-install feature commit `d68916a`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40550313619>
+- Latest feature commit: `a2092d3` (meson build-flow coverage)
+- CI run for the meson-flow test commit `a2092d3`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40551246632>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
