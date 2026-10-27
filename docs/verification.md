@@ -240,9 +240,9 @@ misrepresenting authorship.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `06c81de` (services cleanup, tap update-all, shellenv)
-- CI run for the services/tap/shellenv feature commit `06c81de`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40545327313>
+- Latest feature commit: `7fd400e` (pin/unpin + live ghcr verification)
+- CI run for the pin/live-ghcr feature commit `7fd400e`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40545914295>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
