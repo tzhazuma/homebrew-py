@@ -278,9 +278,9 @@ misrepresenting authorship.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `57c1b31` (cask flags for search/outdated/upgrade)
-- CI run for the cask-CLI-flags feature commit `57c1b31`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40549792391>
+- Latest feature commit: `d68916a` (`--HEAD` source install)
+- CI run for the HEAD-install feature commit `d68916a`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40550313619>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
