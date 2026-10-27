@@ -290,9 +290,9 @@ misrepresenting authorship.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `a2092d3` (meson build-flow coverage)
-- CI run for the meson-flow test commit `a2092d3`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40551246632>
+- Latest feature commit: `3128111` (`fetch` command)
+- CI run for the fetch feature commit `3128111`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40551782384>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
