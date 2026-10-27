@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import plistlib
 import platform
+import shlex
 import shutil
 import subprocess
 import sys
@@ -247,6 +248,43 @@ def _apply_service_directive(spec: ServiceSpec, name: str, args: list[Any]) -> N
     # Unknown directives (nice, sockets, ...) are intentionally ignored for now.
 
 
+class SystemctlRunner:
+    """Thin wrapper around ``systemctl --user`` (or a fake binary in tests)."""
+
+    def __init__(self, executable: Optional[str] = None):
+        self.executable = executable or os.environ.get("PYBREW_SYSTEMCTL", "systemctl")
+
+    def run(self, args: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                [self.executable, "--user", *args],
+                text=True,
+                capture_output=True,
+                timeout=60,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise ServiceError(f"could not run {self.executable}: {error}") from error
+
+    def daemon_reload(self) -> None:
+        result = self.run(["daemon-reload"])
+        if result.returncode != 0:
+            raise ServiceError(f"systemctl daemon-reload failed: {result.stderr.strip()}")
+
+    def start(self, unit: str) -> None:
+        result = self.run(["start", unit])
+        if result.returncode != 0:
+            raise ServiceError(f"systemctl start {unit} failed: {result.stderr.strip()}")
+
+    def stop(self, unit: str) -> None:
+        result = self.run(["stop", unit])
+        if result.returncode != 0:
+            raise ServiceError(f"systemctl stop {unit} failed: {result.stderr.strip()}")
+
+    def status(self, unit: str) -> str:
+        result = self.run(["is-active", "--quiet", unit])
+        return "started" if result.returncode == 0 else "stopped"
+
+
 class LaunchctlRunner:
     """Thin wrapper around launchctl (or a fake binary in tests)."""
 
@@ -284,9 +322,17 @@ class LaunchctlRunner:
 
 
 class ServiceManager:
-    def __init__(self, config: Config, runner: Optional[LaunchctlRunner] = None):
+    def __init__(self, config: Config, runner: Any = None):
         self.config = config
-        self.runner = runner or LaunchctlRunner()
+        self.backend = os.environ.get("PYBREW_SERVICE_BACKEND")
+        if self.backend is None:
+            self.backend = "systemd" if sys.platform.startswith("linux") else "launchd"
+        if runner is not None:
+            self.runner = runner
+        elif self.backend == "systemd":
+            self.runner = SystemctlRunner()
+        else:
+            self.runner = LaunchctlRunner()
         self.directory = config.service_dir
 
     # -- plist / unit generation ----------------------------------------
@@ -296,6 +342,41 @@ class ServiceManager:
 
     def plist_path(self, formula: Formula) -> Path:
         return self.directory / f"{self.label(formula)}.plist"
+
+    def unit_path(self, formula: Formula) -> Path:
+        return self.directory / f"{self.label(formula)}.service"
+
+    def unit_text(self, formula: Formula, spec: ServiceSpec) -> str:
+        log_dir = self.config.prefix / "var" / "log"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        stdout_path = spec.log_path or str(log_dir / f"{formula.name}.log")
+        stderr_path = spec.error_log_path or str(log_dir / f"{formula.name}.log")
+        lines = [
+            "[Unit]",
+            f"Description={formula.name} (pybrew)",
+            "After=network.target",
+            "",
+            "[Service]",
+            f"ExecStart={shlex.join(spec.run)}",
+            f"Restart={'always' if spec.keep_alive else 'no'}",
+            f"StandardOutput=append:{stdout_path}",
+            f"StandardError=append:{stderr_path}",
+        ]
+        if spec.working_dir:
+            lines.append(f"WorkingDirectory={spec.working_dir}")
+        for key, value in spec.environment_variables.items():
+            escaped = str(value).replace('"', '\\"')
+            lines.append(f'Environment="{key}={escaped}"')
+        lines += ["", "[Install]", "WantedBy=default.target", ""]
+        return "\n".join(lines) + "\n"
+
+    def write_unit(self, formula: Formula, spec: ServiceSpec) -> Path:
+        if not spec.run:
+            raise ServiceError(f"{formula.name} service has no run command")
+        self.directory.mkdir(parents=True, exist_ok=True)
+        path = self.unit_path(formula)
+        path.write_text(self.unit_text(formula, spec))
+        return path
 
     def plist_payload(self, formula: Formula, spec: ServiceSpec) -> dict[str, Any]:
         label = self.label(formula)
@@ -341,15 +422,23 @@ class ServiceManager:
         if not self.config.opt_path(formula.name).is_dir():
             raise ServiceError(f"{formula.name} is not installed")
         spec = self.spec_for(formula)
-        path = self.write_plist(formula, spec)
-        self.runner.start(path)
+        if self.backend == "systemd":
+            path = self.write_unit(formula, spec)
+            self.runner.daemon_reload()
+            self.runner.start(f"{self.label(formula)}.service")
+        else:
+            path = self.write_plist(formula, spec)
+            self.runner.start(path)
         return path
 
     def stop(self, formula: Formula) -> Optional[Path]:
-        path = self.plist_path(formula)
+        path = self.unit_path(formula) if self.backend == "systemd" else self.plist_path(formula)
         if not path.exists():
             return None
-        self.runner.stop(self.label(formula), path)
+        if self.backend == "systemd":
+            self.runner.stop(f"{self.label(formula)}.service")
+        else:
+            self.runner.stop(self.label(formula), path)
         return path
 
     def restart(self, formula: Formula) -> Path:
@@ -357,18 +446,24 @@ class ServiceManager:
         return self.start(formula)
 
     def remove(self, formula: Formula) -> None:
-        path = self.plist_path(formula)
+        path = self.unit_path(formula) if self.backend == "systemd" else self.plist_path(formula)
         if path.exists():
-            self.runner.stop(self.label(formula), path)
+            if self.backend == "systemd":
+                self.runner.stop(f"{self.label(formula)}.service")
+            else:
+                self.runner.stop(self.label(formula), path)
             path.unlink()
 
     def status(self, formula: Formula) -> str:
-        path = self.plist_path(formula)
+        path = self.unit_path(formula) if self.backend == "systemd" else self.plist_path(formula)
         if not path.exists():
             return "none"
-        if sys.platform == "darwin":
-            return self.runner.status(self.label(formula))
-        return "started"  # systemd path is future work
+        label = (
+            f"{self.label(formula)}.service"
+            if self.backend == "systemd"
+            else self.label(formula)
+        )
+        return self.runner.status(label)
 
     def list(self, formulae: Iterable[Formula]) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
@@ -391,7 +486,11 @@ class ServiceManager:
                 {
                     "name": formula.name,
                     "status": self.status(formula),
-                    "file": str(self.plist_path(formula)),
+                    "file": str(
+                        self.unit_path(formula)
+                        if self.backend == "systemd"
+                        else self.plist_path(formula)
+                    ),
                     "run": " ".join(spec.run),
                 }
             )

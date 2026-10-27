@@ -45,8 +45,9 @@ A clean-room Python 3.9+ package (`pybrew`) with no runtime dependencies:
 - Homebrew services: parse `service do` blocks, generate launchd plists, and
   start/stop/restart/list services through an injectable `launchctl` runner;
 - cask support for zip/dmg archives with `.app`, `binary` and `suite` artifacts,
-  receipts, uninstall and zap; pkg artifacts and Linux systemd are not yet
-  implemented;
+  receipts, uninstall and zap; `.pkg` payloads can be expanded into an explicit
+  `--pkg-root` without running package scripts;
+- services on macOS (launchd) and Linux (systemd user units);
 - tap management (`tap`/`untap`/list, local and GitHub URLs);
 - `info`, `search`, `list`, `deps`, `install`, `uninstall`, `link`, `unlink`,
   `tap`, `untap`, `cask`, `services`, `doctor`, `config` commands and a
@@ -54,7 +55,7 @@ A clean-room Python 3.9+ package (`pybrew`) with no runtime dependencies:
 
 ## Validation
 
-- 73 tests pass (`pytest -q`).
+- 76 tests pass (`pytest -q`).
 - 15 real homebrew-core formulae (bash, git, curl, openssl@3, python@3.12, ...)
   parse to exactly the desc/homepage/license/version/dependency values returned
   by `brew info --json=v2` (Homebrew 7.0.9).
@@ -74,7 +75,7 @@ A clean-room Python 3.9+ package (`pybrew`) with no runtime dependencies:
 - A drop-in replacement for `brew` or for Homebrew's Ruby extension points.
 - Full cask coverage: `.pkg` artifacts, `pkgutil` receipts, login items and
   system-wide installs are not implemented.
-- Linux services/systemd, analytics, `brew bundle`, `brew upgrade` and arbitrary
+- Analytics, `brew bundle`, package scripts/system-wide pkg installs and arbitrary
   Ruby/build systems are not implemented yet.
 - Running arbitrary Ruby from formulae.
 

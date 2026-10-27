@@ -152,9 +152,12 @@ class Config:
         env = os.environ.get("PYBREW_SERVICE_DIR")
         if env:
             return Path(env).expanduser()
+        backend = os.environ.get("PYBREW_SERVICE_BACKEND")
+        if backend == "systemd":
+            return Path.home() / ".config" / "systemd" / "user"
         if sys.platform == "darwin":
             return Path.home() / "Library" / "LaunchAgents"
-        return self.var / "services"
+        return Path.home() / ".config" / "systemd" / "user"
 
     @property
     def var(self) -> Path:

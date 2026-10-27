@@ -8,6 +8,7 @@ import plistlib
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import zipfile
 from dataclasses import dataclass
@@ -122,6 +123,8 @@ def _safe_extract_zip(archive: Path, destination: Path) -> None:
 
 def _archive_kind(path: Path) -> str:
     suffix = path.name.lower()
+    if suffix.endswith(".pkg"):
+        return "pkg"
     if suffix.endswith(".dmg"):
         return "dmg"
     if suffix.endswith(".zip"):
@@ -184,10 +187,12 @@ class CaskInstaller:
         config: Config,
         downloader: Optional[Downloader] = None,
         appdir: Optional[Path] = None,
+        pkg_root: Optional[Path] = None,
     ):
         self.config = config
         self.downloader = downloader or Downloader(config.downloads, config.bottle_dirs)
         self.appdir = Path(appdir).expanduser() if appdir else config.applications
+        self.pkg_root = Path(pkg_root).expanduser() if pkg_root else (config.prefix / "pkgroot")
 
     # -- paths -----------------------------------------------------------
     def room(self, cask: Cask, version: Optional[str] = None) -> Path:
@@ -249,6 +254,8 @@ class CaskInstaller:
             elif kind == "tar":
                 safe_extract_tar(archive, temp_root)
                 installed = self._install_artifacts(cask, temp_root, room, force)
+            elif kind == "pkg":
+                installed = self._install_artifacts(cask, archive.parent, room, force, archive=archive)
             else:
                 shutil.rmtree(room, ignore_errors=True)
                 raise CaskError(f"{cask.token}: unsupported cask archive type for {url}")
@@ -271,7 +278,12 @@ class CaskInstaller:
         return CaskInstallResult(cask.token, version, room, installed)
 
     def _install_artifacts(
-        self, cask: Cask, source_root: Path, room: Path, force: bool
+        self,
+        cask: Cask,
+        source_root: Path,
+        room: Path,
+        force: bool,
+        archive: Optional[Path] = None,
     ) -> list[str]:
         installed: list[str] = []
         artifacts = cask.resolved_artifacts()
@@ -321,9 +333,8 @@ class CaskInstaller:
                 target.symlink_to(source_path)
                 installed.append(str(target))
             elif artifact.kind in ("pkg", "installer"):
-                raise CaskError(
-                    f"{cask.token}: pkg/installer artifacts are not implemented yet"
-                )
+                self._install_pkg(cask, artifact, source_root, room, force, installed, archive)
+
             elif artifact.kind == "suite":
                 source = self._find(source_root, artifact.source)
                 if source is None:
@@ -338,6 +349,56 @@ class CaskInstaller:
             else:
                 raise CaskError(f"{cask.token}: unsupported artifact {artifact.kind}")
         return installed
+
+    def _install_pkg(
+        self,
+        cask: Cask,
+        artifact: Artifact,
+        source_root: Path,
+        room: Path,
+        force: bool,
+        installed: list[str],
+        archive: Optional[Path],
+    ) -> None:
+        if sys.platform != "darwin" or shutil.which("pkgutil") is None:
+            raise CaskError("pkg artifacts require macOS pkgutil")
+        package: Optional[Path] = None
+        if artifact.source:
+            package = self._find(source_root, artifact.source)
+        if package is None and archive is not None:
+            package = archive
+        if package is None:
+            raise CaskError(f"{cask.token}: pkg {artifact.source!r} not found")
+        expanded = room / ".pkg-expanded"
+        if expanded.exists():
+            shutil.rmtree(expanded)
+        result = subprocess.run(
+            ["pkgutil", "--expand-full", str(package), str(expanded)],
+            text=True,
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            shutil.rmtree(expanded, ignore_errors=True)
+            raise CaskError(
+                f"{cask.token}: could not expand package {package}: "
+                f"{(result.stderr or result.stdout).strip()}"
+            )
+        payload = expanded / "Payload"
+        if not payload.is_dir():
+            candidates = sorted(expanded.glob("**/Payload"))
+            if not candidates:
+                raise CaskError(f"{cask.token}: package has no Payload directory")
+            payload = candidates[0]
+        self.pkg_root.mkdir(parents=True, exist_ok=True)
+        # The package payload is rooted at its install location; copy it under
+        # the configured pkg-root rather than writing to the system volume.
+        shutil.copytree(payload, self.pkg_root, dirs_exist_ok=True, symlinks=True)
+        for path in payload.rglob("*"):
+            if path.is_file() or path.is_symlink():
+                relative = path.relative_to(payload)
+                target = self.pkg_root / relative
+                installed.append(str(target))
+        shutil.rmtree(expanded, ignore_errors=True)
 
     @staticmethod
     def _find(root: Path, name: str) -> Optional[Path]:

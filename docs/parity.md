@@ -45,9 +45,9 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 | Cellar / keg / receipts | Yes | Yes, compatible layout |
 | opt / linking | Yes | Yes, conflict-aware, --overwrite |
 | `info --json` | Full v2 schema | Compatible subset of v2 fields |
-| Casks | Yes | zip/dmg app/binary/suite, receipts, uninstall/zap; pkg unsupported |
+| Casks | Yes | zip/dmg app/binary/suite, receipts, uninstall/zap; pkg payload via `--pkg-root` |
 | Tap management | `brew tap` | `tap`/`untap`/list with GitHub or local git URLs |
-| Services | Yes | macOS launchd start/stop/restart/list/info/run; Linux systemd no |
+| Services | Yes | macOS launchd + Linux systemd user units; start/stop/restart/list/info/run |
 | Outdated / upgrade / cleanup / reinstall | Yes | Basic: outdated/upgrade/cleanup/reinstall |
 | Analytics / bundle | Yes | No |
 | Formula tests | `brew test` | Not executed |
@@ -86,5 +86,5 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 4. On this machine brew is x86_64 under Rosetta; corpus expectations therefore
    set `PYBREW_TARGET_ARCH=x86_64`, while native pybrew/pytest is arm64. The
    parser supports both.
-5. Cask pkg artifacts, system-wide installs, Linux systemd services, analytics,
-   `brew bundle` and `brew upgrade` remain roadmap items.
+5. Cask package scripts/system-wide installs, analytics, `brew bundle` and deeper
+   `brew upgrade` semantics remain roadmap items.

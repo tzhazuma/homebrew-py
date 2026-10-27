@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-73 passed in 25.76s
+76 passed in 38.32s
 ```
 
 Breakdown of the feature slices:
@@ -33,11 +33,11 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py
-10 passed      # includes a real dmg mount test on macOS
+12 passed      # includes real dmg and pkg payload tests on macOS and install --cask
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py
 5 passed       # autotools, CMake, Cargo, inreplace, conditionals
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
-6 passed
+7 passed       # launchd + systemd unit generation
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_taps.py
 3 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_maintenance.py
@@ -110,6 +110,9 @@ This is a real homebrew-core formula, not a synthetic fixture.
   `<prefix>/Applications`, binary symlinked into `<prefix>/bin`, receipt written,
   uninstall and `--zap` verified.
 - A synthetic `.dmg` is created with `hdiutil`, mounted, and its `.app` installed.
+- A synthetic `.pkg` is built with `pkgbuild`, expanded with `pkgutil --expand-full`,
+  and its payload installed under an explicit `--pkg-root`; uninstall removes the
+  files. Package scripts are intentionally not executed.
 - Unsafe zip members (`../`) are rejected before extraction.
 
 ## Services verification
@@ -121,6 +124,9 @@ This is a real homebrew-core formula, not a synthetic fixture.
   the real launchd is not touched.
 - CLI `services start/list/stop` is covered with `PYBREW_SERVICE_DIR` and
   `PYBREW_LAUNCHCTL` overrides.
+- A systemd backend renders a unit with `ExecStart`/`Restart`/`Environment`/
+  `WorkingDirectory` and drives a fake `systemctl --user` with daemon-reload,
+  start and stop; `PYBREW_SERVICE_BACKEND=systemd` selects it.
 
 ## Tap verification
 
@@ -165,8 +171,7 @@ install, `doctor`, `list`, `deps`, `search`, `config`, and `parse`.
   test suite; the real bottle test intentionally uses a cached artefact.
 - Meson builds are implemented via `std_meson_args` but meson is not installed in
   this environment, so only helper expansion is covered.
-- Cask `.pkg` artifacts and system-wide installs.
-- Linux systemd services.
+- Cask package scripts and system-wide `.pkg` installation.
 - Mach-O binary relocation was not validated by running the installed dylib.
 - `brew lgtm`, `brew bundle`, `brew upgrade`, analytics.
 

@@ -33,6 +33,7 @@ end
 
 def _config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Config:
     monkeypatch.setenv("PYBREW_SERVICE_DIR", str(tmp_path / "agents"))
+    monkeypatch.setenv("PYBREW_SERVICE_BACKEND", "launchd")
     config = Config.default(prefix=tmp_path / "prefix", taps=[], cache=tmp_path / "cache")
     config.ensure()
     return config
@@ -151,6 +152,7 @@ def test_cli_services_start_list_stop(run_cli, sample, tmp_path, monkeypatch) ->
         "PYBREW_SERVICE_DIR": str(sample.root / "agents"),
         "PYBREW_LAUNCHCTL": str(script),
         "FAKE_LAUNCHCTL_LOG": str(log),
+        "PYBREW_SERVICE_BACKEND": "launchd",
     }
     started = run_cli("services", "start", "svc", extra_env=env)
     assert started.returncode == 0, started.stderr
@@ -164,3 +166,34 @@ def test_cli_services_start_list_stop(run_cli, sample, tmp_path, monkeypatch) ->
     stopped = run_cli("services", "stop", "svc", extra_env=env)
     assert stopped.returncode == 0, stopped.stderr
     assert "bootout" in log.read_text()
+
+
+def test_systemd_unit_and_lifecycle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("PYBREW_SERVICE_BACKEND", "systemd")
+    monkeypatch.setenv("PYBREW_SERVICE_DIR", str(tmp_path / "units"))
+    script = tmp_path / "fake-systemctl"
+    log = tmp_path / "systemctl.log"
+    script.write_text('#!/bin/sh\necho "$@" >> "$FAKE_SYSTEMCTL_LOG"\nexit 0\n')
+    script.chmod(0o755)
+    monkeypatch.setenv("PYBREW_SYSTEMCTL", str(script))
+    monkeypatch.setenv("FAKE_SYSTEMCTL_LOG", str(log))
+
+    config = Config.default(prefix=tmp_path / "prefix", taps=[], cache=tmp_path / "cache")
+    config.ensure()
+    formula = _formula()
+    _install_fake_keg(config, formula)
+    manager = ServiceManager(config)
+
+    path = manager.start(formula)
+    assert path.name == "homebrew.mxcl.svc.service"
+    unit = path.read_text()
+    assert "[Unit]" in unit and "[Service]" in unit
+    assert "ExecStart=" in unit
+    assert "WorkingDirectory=" in unit
+    assert 'Environment="FOO=bar"' in unit
+    assert "daemon-reload" in log.read_text()
+    assert "start homebrew.mxcl.svc.service" in log.read_text()
+    assert manager.status(formula) == "started"
+
+    manager.stop(formula)
+    assert "stop homebrew.mxcl.svc.service" in log.read_text()

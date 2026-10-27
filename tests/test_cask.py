@@ -159,3 +159,63 @@ def test_install_dmg_cask(tmp_path: Path) -> None:
     result = installer.install(loader.load("tiny"))
     assert (config.applications / "Tiny.app" / "Contents" / "MacOS" / "Tiny").is_file()
     assert result.version == "1.0"
+
+
+def test_install_cask_flag(run_cli, sample) -> None:
+    proc = run_cli("install", "--cask", "testapp")
+    assert proc.returncode == 0, proc.stderr
+    assert (sample.prefix / "Applications" / "Test.app").is_dir()
+    removed = run_cli("uninstall", "--cask", "testapp")
+    assert removed.returncode == 0, removed.stderr
+    assert not (sample.prefix / "Applications" / "Test.app").exists()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="pkgbuild requires macOS")
+def test_cask_pkg_payload(tmp_path: Path) -> None:
+    import hashlib
+    import shutil
+    import subprocess
+
+    if shutil.which("pkgbuild") is None:
+        pytest.skip("pkgbuild not available")
+    root = tmp_path / "pkg-root"
+    target = root / "usr" / "local" / "share" / "pkgtest"
+    target.mkdir(parents=True)
+    (target / "hello.txt").write_text("pkg payload\n")
+    package = tmp_path / "PkgTest-1.0.pkg"
+    result = subprocess.run(
+        [
+            "pkgbuild",
+            "--root",
+            str(root),
+            "--identifier",
+            "com.example.pkgtest",
+            "--version",
+            "1.0",
+            "--install-location",
+            "/",
+            str(package),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"pkgbuild failed: {result.stderr}")
+
+    tap = tmp_path / "tap"
+    cask_dir = tap / "Casks" / "p"
+    cask_dir.mkdir(parents=True)
+    digest = hashlib.sha256(package.read_bytes()).hexdigest()
+    (cask_dir / "pkgtest.rb").write_text(
+        f'cask "pkgtest" do\n  version "1.0"\n  sha256 "{digest}"\n'
+        f'  url "{package.as_uri()}"\n  pkg "PkgTest-1.0.pkg"\nend\n'
+    )
+    config = Config.default(prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache")
+    config.ensure()
+    pkg_root = tmp_path / "installed-pkg-root"
+    installer = CaskInstaller(config, pkg_root=pkg_root)
+    loader = CaskLoader(discover_taps([tap]))
+    installer.install(loader.load("pkgtest"))
+    assert (pkg_root / "usr" / "local" / "share" / "pkgtest" / "hello.txt").read_text() == "pkg payload\n"
+    installer.uninstall("pkgtest")
+    assert not (pkg_root / "usr" / "local" / "share" / "pkgtest" / "hello.txt").exists()

@@ -134,10 +134,10 @@ explicitly unsupported.
 ## Services
 
 `services.py` parses `service do ... end` blocks (run, working_dir, log paths,
-keep_alive, environment_variables, interval, process_type) and renders a launchd
-plist. `launchctl` is invoked through an injectable runner so tests use a fake
-binary. `services list/start/stop/restart/info/run` are available in the CLI.
-Linux systemd is not implemented yet.
+keep_alive, environment_variables, interval, process_type). On macOS it renders
+a launchd plist and drives `launchctl`; on Linux it renders a systemd user unit
+and drives `systemctl --user`. Both runners are injectable so tests use fake
+binaries. `services list/start/stop/restart/info/run` are available in the CLI.
 
 ## Taps
 
@@ -160,8 +160,10 @@ them from the prefix.
 
 - Source builds support a common literal `def install` subset, not arbitrary Ruby.
 - Binary relocation is best-effort, not Mach-O-aware.
-- Cask `.pkg` artifacts and system-wide installs are not implemented.
-- Services are macOS launchd only; Linux systemd is future work.
+- Cask `.pkg` payloads are expanded under `--pkg-root`; package scripts and
+  system-wide installs are not implemented.
+- Services are best-effort: launchd/systemd are invoked, but log rotation,
+  process supervision edge cases and root services are not implemented.
 - No analytics, `brew bundle`, `brew upgrade` or full cask options.
 - `brew`'s test DSL is captured but not executed.
 

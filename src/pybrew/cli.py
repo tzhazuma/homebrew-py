@@ -89,10 +89,15 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--overwrite", action="store_true", help="overwrite link conflicts")
     install.add_argument("--dry-run", action="store_true")
     install.add_argument("--api", action="store_true", help="fall back to formulae.brew.sh")
+    install.add_argument("--cask", action="store_true", help="install a cask instead of a formula")
+    install.add_argument("--appdir", type=Path, help="cask application directory")
+    install.add_argument("--pkg-root", type=Path, help="root for cask pkg payloads")
 
     uninstall = subparsers.add_parser("uninstall", parents=[common], help="uninstall formulae")
     uninstall.add_argument("formulae", nargs="+")
     uninstall.add_argument("--force", action="store_true")
+    uninstall.add_argument("--cask", action="store_true", help="uninstall casks")
+    uninstall.add_argument("--zap", action="store_true", help="also zap cask trash")
 
     link = subparsers.add_parser("link", parents=[common], help="link an installed keg")
     link.add_argument("formula")
@@ -126,6 +131,7 @@ def build_parser() -> argparse.ArgumentParser:
         action_parser.add_argument("--zap", action="store_true")
         action_parser.add_argument("--json", action="store_true")
         action_parser.add_argument("--appdir", type=Path)
+        action_parser.add_argument("--pkg-root", type=Path)
 
     outdated = subparsers.add_parser("outdated", parents=[common], help="list outdated formulae")
     outdated.add_argument("--json", action="store_true")
@@ -344,6 +350,27 @@ def _installer(config: Config, loader: FormulaLoader) -> Installer:
 def cmd_install(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     config.ensure()
+    if getattr(args, "cask", False):
+        cask_loader = _cask_loader(config)
+        cask_installer = CaskInstaller(
+            config,
+            appdir=getattr(args, "appdir", None),
+            pkg_root=getattr(args, "pkg_root", None),
+        )
+        exit_code = 0
+        for token in args.formulae:
+            try:
+                cask = cask_loader.load(token)
+                result = cask_installer.install(cask, force=args.force)
+            except PybrewError as error:
+                print(f"Error: {error}", file=sys.stderr)
+                exit_code = 1
+                continue
+            if result.skipped:
+                print(f"Already installed: {result.token} {result.version}")
+            else:
+                print(f"Installed cask: {result.token} {result.version} -> {result.room}")
+        return exit_code
     loader = _loader(config)
     installer = _installer(config, loader)
     options = InstallOptions(
@@ -375,6 +402,24 @@ def cmd_install(args: argparse.Namespace) -> int:
 
 def cmd_uninstall(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
+    if getattr(args, "cask", False):
+        cask_loader = _cask_loader(config)
+        cask_installer = CaskInstaller(config)
+        exit_code = 0
+        for token in args.formulae:
+            try:
+                cask = None
+                try:
+                    cask = cask_loader.load(token)
+                except CaskNotFound:
+                    pass
+                removed = cask_installer.uninstall(token, zap=args.zap, cask=cask)
+            except PybrewError as error:
+                print(f"Error: {error}", file=sys.stderr)
+                exit_code = 1
+                continue
+            print(f"Uninstalled cask: {token}")
+        return exit_code
     loader = _loader(config)
     installer = _installer(config, loader)
     exit_code = 0
@@ -523,7 +568,8 @@ def cmd_cask(args: argparse.Namespace) -> int:
         args.force = False
         args.zap = False
     appdir = getattr(args, "appdir", None)
-    installer = CaskInstaller(config, appdir=appdir)
+    pkg_root = getattr(args, "pkg_root", None)
+    installer = CaskInstaller(config, appdir=appdir, pkg_root=pkg_root)
     if args.action == "list":
         rows = installer.list_installed()
         if args.json:
