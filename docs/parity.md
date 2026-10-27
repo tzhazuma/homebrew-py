@@ -45,7 +45,7 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 | Cellar / keg / receipts | Yes | Yes, compatible layout |
 | opt / linking | Yes | Yes, conflict-aware, --overwrite |
 | `info --json` | Full v2 schema | Compatible subset of v2 fields |
-| Casks | Yes | zip/dmg app/binary/suite, receipts, uninstall/zap + quit/delete; pkg payload via `--pkg-root`; API; outdated/upgrade |
+| Casks | Yes | zip/dmg app/binary/suite, receipts, uninstall/zap + quit/delete; pkg payload via `--pkg-root`; API; outdated/upgrade; `--cask` flags |
 | Tap management | `brew tap` | `tap`/`untap`/list/`--update` with GitHub or local git URLs |
 | Services | Yes | macOS launchd + Linux systemd user units; start/stop/restart/list/info/run |
 | Outdated / upgrade / cleanup / reinstall / pin | Yes | outdated; upgrade installs new keg, rewrites links, removes old kegs; cleanup; reinstall; pin |

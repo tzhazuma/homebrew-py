@@ -78,8 +78,9 @@ def build_parser() -> argparse.ArgumentParser:
     info.add_argument("--api", action="store_true", help="fall back to formulae.brew.sh")
     info.add_argument("--cask", action="store_true", help="show cask information")
 
-    search = subparsers.add_parser("search", parents=[common], help="search formulae")
+    search = subparsers.add_parser("search", parents=[common], help="search formulae or casks")
     search.add_argument("pattern")
+    search.add_argument("--cask", action="store_true", help="search local cask taps")
 
     listing = subparsers.add_parser("list", parents=[common], help="list installed formulae")
     listing.add_argument("--versions", action="store_true", help="show all installed versions")
@@ -151,14 +152,16 @@ def build_parser() -> argparse.ArgumentParser:
         action_parser.add_argument("--pkg-root", type=Path)
         action_parser.add_argument("--api", action="store_true", help="fall back to formulae.brew.sh")
 
-    outdated = subparsers.add_parser("outdated", parents=[common], help="list outdated formulae")
+    outdated = subparsers.add_parser("outdated", parents=[common], help="list outdated formulae or casks")
     outdated.add_argument("--json", action="store_true")
     outdated.add_argument("--api", action="store_true")
+    outdated.add_argument("--cask", action="store_true")
 
     upgrade = subparsers.add_parser("upgrade", parents=[common], help="upgrade outdated formulae")
     upgrade.add_argument("formulae", nargs="*")
     upgrade.add_argument("--dry-run", action="store_true")
     upgrade.add_argument("--api", action="store_true")
+    upgrade.add_argument("--cask", action="store_true")
 
     shellenv = subparsers.add_parser("shellenv", parents=[common], help="print shell environment exports")
     shellenv.add_argument("--shell", choices=["bash", "zsh", "fish"], default="bash")
@@ -324,6 +327,12 @@ def cmd_info(args: argparse.Namespace) -> int:
 
 def cmd_search(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
+    if getattr(args, "cask", False):
+        cask_loader = _cask_loader(config)
+        casks = cask_loader.search(args.pattern)
+        for cask in casks:
+            print(f"{cask.token}: {cask.name or ''} {cask.desc or ''}".strip())
+        return 0 if casks else 1
     loader = _loader(config)
     results = loader.search(args.pattern)
     for formula in results:
@@ -633,6 +642,15 @@ def cmd_unpin(args: argparse.Namespace) -> int:
 
 def cmd_outdated(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
+    if getattr(args, "cask", False):
+        cask_loader = _cask_loader(config, allow_api=bool(getattr(args, "api", False)))
+        rows = CaskInstaller(config).find_outdated(cask_loader)
+        if args.json:
+            print(json.dumps({"formulae": [], "casks": rows}, indent=2))
+            return 0
+        for row in rows:
+            print(f"{row['token']} {row['installed']} < {row['current']}")
+        return 0
     loader = _loader(config)
     rows = [item.as_dict() for item in find_outdated(config, loader)]
     if args.json:
@@ -645,6 +663,27 @@ def cmd_outdated(args: argparse.Namespace) -> int:
 
 def cmd_upgrade(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
+    if getattr(args, "cask", False):
+        cask_loader = _cask_loader(config, allow_api=bool(getattr(args, "api", False)))
+        installer = CaskInstaller(config)
+        tokens = args.formulae or [row["token"] for row in installer.find_outdated(cask_loader)]
+        if not tokens:
+            print("Already up-to-date.")
+            return 0
+        exit_code = 0
+        for token in tokens:
+            try:
+                cask = cask_loader.load(token)
+                if args.dry_run:
+                    print(f"Would upgrade: {token} {cask.resolved_version()}")
+                    continue
+                result = installer.upgrade(cask)
+            except PybrewError as error:
+                print(f"Error: {error}", file=sys.stderr)
+                exit_code = 1
+                continue
+            print(f"Upgraded: {result.token} {result.version}")
+        return exit_code
     loader = _loader(config)
     if args.formulae:
         formulae = [_load_formula(name, loader, use_api=args.api) for name in args.formulae]

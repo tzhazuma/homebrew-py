@@ -101,3 +101,20 @@ def test_shellenv(run_cli, sample) -> None:
     fish = run_cli("shellenv", "--shell", "fish")
     assert fish.returncode == 0
     assert "set -gx HOMEBREW_PREFIX" in fish.stdout
+
+
+def test_cask_flags_on_search_outdated_upgrade(run_cli, sample) -> None:
+    assert run_cli("install", "--cask", "testapp").returncode == 0
+    search = run_cli("search", "--cask", "test")
+    assert search.returncode == 0, search.stderr
+    assert "testapp" in search.stdout
+    cask_file = sample.tap / "Casks" / "t" / "testapp.rb"
+    cask_file.write_text(cask_file.read_text().replace('version "1.0"', 'version "2.0"'))
+    outdated = run_cli("outdated", "--cask")
+    assert outdated.returncode == 0, outdated.stderr
+    assert "testapp 1.0 < 2.0" in outdated.stdout
+    payload = json.loads(run_cli("outdated", "--cask", "--json").stdout)
+    assert payload["casks"][0]["current"] == "2.0"
+    upgraded = run_cli("upgrade", "--cask", "testapp")
+    assert upgraded.returncode == 0, upgraded.stderr
+    assert "Upgraded: testapp 2.0" in upgraded.stdout

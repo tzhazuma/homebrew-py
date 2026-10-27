@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-95 passed in 26.00s
+96 passed in 29.62s
 ```
 
 Breakdown of the feature slices:
@@ -215,6 +215,12 @@ path-traversal checks.
   installed while keeping installed services.
 - `tap --update` updates every installed tap from its git remote.
 - `shellenv` prints HOMEBREW_PREFIX/HOMEBREW_CELLAR/PATH for bash/zsh/fish.
+
+## Cask CLI aliases
+
+`search --cask`, `outdated --cask` and `upgrade --cask` are covered end-to-end:
+search finds the local cask, outdated reports 1.0 < 2.0 (including JSON), and
+upgrade installs the new Caskroom version.
 
 ## CLI smoke checks
 
