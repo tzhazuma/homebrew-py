@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
 
-from .cellar import Cellar, Linker
+from .cellar import Cellar, Linker, read_receipt
 from .installer import InstallOptions, Installer
 from .models import Formula
 from .paths import Config
@@ -154,4 +154,44 @@ def cleanup_cache(config: Config, age_days: int = 120, dry_run: bool = False) ->
                 path.unlink()
             except OSError:
                 pass
+    return removed
+
+
+def autoremove(config: Config, dry_run: bool = False) -> list[str]:
+    """Remove installed dependencies no longer required by an explicit formula."""
+
+    cellar = Cellar(config)
+    linker = Linker(config)
+    installed = cellar.installed()
+    receipts: dict[str, dict] = {}
+    for name, versions in installed.items():
+        if not versions:
+            continue
+        receipt = read_receipt(config.keg_path(name, versions[-1]))
+        if receipt:
+            receipts[name] = receipt
+    needed = {
+        name for name, receipt in receipts.items() if not receipt.get("installed_as_dependency")
+    }
+    changed = True
+    while changed:
+        changed = False
+        for name in list(needed):
+            for dep in receipts.get(name, {}).get("runtime_dependencies", []):
+                if dep in installed and dep not in needed:
+                    needed.add(dep)
+                    changed = True
+    removable = [name for name in installed if name not in needed]
+    removed: list[str] = []
+    for name in removable:
+        formula = Formula(name=name)
+        for keg in cellar.kegs(name):
+            if keg is None or not keg.is_dir():
+                continue
+            if dry_run:
+                removed.append(name)
+                break
+            linker.unlink(formula, keg)
+            cellar.remove_keg(keg)
+            removed.append(name)
     return removed

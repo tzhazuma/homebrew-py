@@ -103,3 +103,17 @@ def test_real_upgrade_removes_old_keg(run_cli, sample) -> None:
     link = sample.prefix / "bin" / "hello"
     assert link.is_symlink()
     assert "hello/2.0" in str(link.readlink())
+
+
+def test_autoremove_unused_dependency(run_cli, sample) -> None:
+    assert run_cli("install", "hello-dep", bottle_tag=sample.tag).returncode == 0
+    assert (sample.prefix / "Cellar" / "dep" / "2.0").is_dir()
+    assert run_cli("uninstall", "hello-dep").returncode == 0
+    dry = run_cli("autoremove", "--dry-run")
+    assert dry.returncode == 0, dry.stderr
+    assert "Would remove: dep" in dry.stdout
+    assert (sample.prefix / "Cellar" / "dep" / "2.0").is_dir()
+    real = run_cli("autoremove")
+    assert real.returncode == 0, real.stderr
+    assert "Removed: dep" in real.stdout
+    assert not (sample.prefix / "Cellar" / "dep").exists()

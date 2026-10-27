@@ -20,6 +20,7 @@ from .download import Downloader
 from .errors import FormulaNotFound, PybrewError, UsageError
 from .installer import InstallOptions, Installer
 from .maintenance import (
+    autoremove,
     cleanup,
     cleanup_cache,
     find_outdated,
@@ -171,6 +172,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     shellenv = subparsers.add_parser("shellenv", parents=[common], help="print shell environment exports")
     shellenv.add_argument("--shell", choices=["bash", "zsh", "fish"], default="bash")
+
+    autoremove = subparsers.add_parser("autoremove", parents=[common], help="remove unused dependencies")
+    autoremove.add_argument("--dry-run", action="store_true")
 
     cleanup_cmd = subparsers.add_parser("cleanup", parents=[common], help="remove old kegs and cache files")
     cleanup_cmd.add_argument("--dry-run", action="store_true")
@@ -776,6 +780,14 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def cmd_autoremove(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    removed = autoremove(config, dry_run=args.dry_run)
+    for name in removed:
+        print(("Would remove: " if args.dry_run else "Removed: ") + name)
+    return 0
+
+
 def cmd_cleanup(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     removed = cleanup(config, dry_run=args.dry_run)
@@ -1035,6 +1047,7 @@ _COMMANDS = {
     "shellenv": cmd_shellenv,
     "outdated": cmd_outdated,
     "upgrade": cmd_upgrade,
+    "autoremove": cmd_autoremove,
     "cleanup": cmd_cleanup,
     "reinstall": cmd_reinstall,
     "services": cmd_services,

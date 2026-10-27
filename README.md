@@ -8,7 +8,7 @@ Formula 解析、依赖解析、Cellar、bottle 安装、链接/卸载和 receip
 
 > **状态：v0.1 原型（可运行、可测试）**
 >
-> - 99 个测试全部通过（`pytest -q`）
+> - 100 个测试全部通过（`pytest -q`）
 > - 15 个真实 homebrew-core 公式（bash、git、curl、openssl@3、python@3.12 等）与
 >   `brew info --json=v2` 的元数据逐项对比通过
 > - 使用真实 `hello 2.12.3` Formula 完成 autotools 源码构建并运行成功
@@ -103,7 +103,7 @@ Installer(config, loader).install(formula, InstallOptions())
 | Services | ✅ launchd + systemd | macOS 生成 launchd plist；Linux 生成 systemd user unit；start/stop/restart/list/info |
 | Cask/Services/Tap 命令 | ✅ | 集成到 `pybrew` CLI |
 | 下载 | ✅ | `fetch` formula bottle/source 或 `fetch --cask` artifact，不安装 |
-| 维护命令 | ✅ | `outdated`、`upgrade`（安装新版本并清理旧 keg，含 `--dry-run`）、`cleanup`（含 `--prune-cache`）、`reinstall`、`doctor --json`、`pin`/`unpin`、`services cleanup`、`tap --update`、`shellenv`；install `--no-link` |
+| 维护命令 | ✅ | `autoremove`、`outdated`、`upgrade`（安装新版本并清理旧 keg，含 `--dry-run`）、`cleanup`（含 `--prune-cache`）、`reinstall`、`doctor --json`、`pin`/`unpin`、`services cleanup`、`tap --update`、`shellenv`；install `--no-link` |
 | Brewfile | ✅ 基础 | `bundle install/check/list/dump`，支持 `tap`/`brew`/`cask` 行，tap `url:`、brew `link: false` |
 | 完整 pkg cask 脚本/系统安装 / analytics / 高级 bundle 选项 | ❌ | 路线图 |
 
@@ -146,7 +146,7 @@ Installer(config, loader).install(formula, InstallOptions())
 
 ```bash
 pytest -q
-# 99 passed
+# 100 passed
 ```
 
 测试覆盖：
@@ -162,7 +162,7 @@ pytest -q
 - `test_cask.py`：真实 cask（rectangle/iterm2/VSCode）解析、zip/dmg 安装/卸载/zap、pkg payload、`install --cask`、API 映射、outdated/upgrade、uninstall quit/delete
 - `test_services.py`：launchd plist + systemd unit、伪造 launchctl/systemctl 的 start/stop/list、orphan cleanup
 - `test_taps.py`：本地 git tap 的 clone/update/untap/update-all
-- `test_maintenance.py`：outdated、upgrade dry-run/real upgrade + old keg cleanup、cleanup（含 cache）、reinstall、pin/unpin
+- `test_maintenance.py`：outdated、upgrade dry-run/real upgrade + old keg cleanup、autoremove、cleanup（含 cache）、reinstall、pin/unpin
 - `test_bundle.py`：Brewfile install/check/list/dump、tap URL、link:false
 
 详细结果见 [docs/verification.md](docs/verification.md)，与 Ruby Homebrew 的差异见

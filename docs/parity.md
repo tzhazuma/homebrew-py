@@ -48,7 +48,7 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 | Casks | Yes | zip/dmg app/binary/suite, receipts, uninstall/zap + quit/delete; pkg payload via `--pkg-root`; API; outdated/upgrade; `--cask` flags |
 | Tap management | `brew tap` | `tap`/`untap`/list/`--update` with GitHub or local git URLs |
 | Services | Yes | macOS launchd + Linux systemd user units; start/stop/restart/list/info/run |
-| Outdated / upgrade / cleanup / reinstall / pin | Yes | outdated; upgrade installs new keg, rewrites links, removes old kegs; cleanup; reinstall; pin |
+| Outdated / upgrade / auto-remove / cleanup / reinstall / pin | Yes | outdated; upgrade installs/relinks/removes old kegs; autoremove; cleanup; reinstall; pin |
 | Bundle | Yes | Brewfile install/check/list/dump, tap URL, link:false |
 | Analytics | Yes | No |
 | Formula tests | `brew test` | Not executed |
