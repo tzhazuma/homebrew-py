@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-84 passed in 26.15s
+85 passed in 25.87s
 ```
 
 Breakdown of the feature slices:
@@ -33,7 +33,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py
-15 passed      # real dmg/pkg payload, install --cask, API, outdated/upgrade
+16 passed      # real dmg/pkg payload, install --cask, API, outdated/upgrade, uninstall actions
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py
 5 passed       # autotools, CMake, Cargo, inreplace, conditionals
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
@@ -121,6 +121,8 @@ This is a real homebrew-core formula, not a synthetic fixture.
   back to the API when no local cask tap exists.
 - Cask `outdated` and `upgrade` are covered: upgrading replaces the app/binary
   artifacts, keeps shared paths, and removes the superseded Caskroom version.
+- Cask uninstall runs `quit` through a fake osascript and removes a `delete`
+  leftover inside the temporary root; unsupported actions are skipped.
 
 ## Services verification
 

@@ -285,3 +285,33 @@ def test_cask_outdated_and_upgrade(run_cli, sample) -> None:
     assert (sample.prefix / "Caskroom" / "testapp" / "2.0" / ".metadata" / "receipt.json").is_file()
     assert not (sample.prefix / "Caskroom" / "testapp" / "1.0").exists()
     assert (sample.prefix / "Applications" / "Test.app").is_dir()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="quit uses macOS osascript")
+def test_cask_uninstall_quit_and_delete(run_cli, sample, tmp_path) -> None:
+    assert run_cli("install", "--cask", "testapp").returncode == 0
+    leftover = tmp_path / "leftover.txt"
+    leftover.write_text("leftover\n")
+    cask_file = sample.tap / "Casks" / "t" / "testapp.rb"
+    cask_file.write_text(
+        cask_file.read_text().replace(
+            'uninstall quit: "com.example.test"',
+            f'uninstall quit: "com.example.test", delete: ["{leftover}"]',
+        )
+    )
+    fake = tmp_path / "fake-osascript"
+    log = tmp_path / "osascript.log"
+    fake.write_text('#!/bin/sh\necho "$@" >> "$FAKE_OSASCRIPT_LOG"\nexit 0\n')
+    fake.chmod(0o755)
+    proc = run_cli(
+        "cask",
+        "uninstall",
+        "testapp",
+        extra_env={
+            "PYBREW_OSASCRIPT": str(fake),
+            "FAKE_OSASCRIPT_LOG": str(log),
+        },
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert 'tell application id "com.example.test" to quit' in log.read_text()
+    assert not leftover.exists()

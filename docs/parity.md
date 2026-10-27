@@ -45,7 +45,7 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 | Cellar / keg / receipts | Yes | Yes, compatible layout |
 | opt / linking | Yes | Yes, conflict-aware, --overwrite |
 | `info --json` | Full v2 schema | Compatible subset of v2 fields |
-| Casks | Yes | zip/dmg app/binary/suite, receipts, uninstall/zap; pkg payload via `--pkg-root`; API fallback; outdated/upgrade |
+| Casks | Yes | zip/dmg app/binary/suite, receipts, uninstall/zap + quit/delete; pkg payload via `--pkg-root`; API; outdated/upgrade |
 | Tap management | `brew tap` | `tap`/`untap`/list with GitHub or local git URLs |
 | Services | Yes | macOS launchd + Linux systemd user units; start/stop/restart/list/info/run |
 | Outdated / upgrade / cleanup / reinstall | Yes | Basic: outdated/upgrade/cleanup (kegs + cache)/reinstall |
@@ -73,7 +73,7 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 - Bundle: a Brewfile with `brew`/`cask` entries supports dry-run install, real
   install, check, list and dump; cache cleanup prunes old downloads.
 - Source build: real autotools/CMake/Cargo fixture compilation, `inreplace`, host conditionals; real GNU hello 2.12.3 built manually.
-- Cask: real rectangle/iterm2/VSCode definitions parse; synthetic zip, dmg and pkg installs verify app/binary/receipt/uninstall/zap; API JSON mapping is unit-tested.
+- Cask: real rectangle/iterm2/VSCode definitions parse; synthetic zip, dmg and pkg installs verify app/binary/receipt/uninstall/zap, uninstall quit/delete and API mapping.
 - Services: DSL parsing, launchd plist fields, start/stop/list with a fake `launchctl`; real launchctl is not invoked in tests.
 
 ## Known differences

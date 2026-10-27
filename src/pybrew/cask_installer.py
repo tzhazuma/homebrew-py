@@ -489,6 +489,53 @@ class CaskInstaller:
         return result
 
     # -- uninstall -------------------------------------------------------
+    def _run_uninstall_actions(self, cask: Cask) -> None:
+        """Execute the safe subset of cask uninstall actions.
+
+        ``quit`` apps are asked to quit via osascript; ``delete`` paths are
+        removed after checking they are inside the user home/prefix/temp roots.
+        Unsupported actions (launchctl, pkgutil, scripts, login items) are
+        deliberately not executed.
+        """
+
+        if not cask.uninstall:
+            return
+        quit_value = cask.uninstall.get("quit")
+        if quit_value and sys.platform == "darwin":
+            apps = quit_value if isinstance(quit_value, list) else [quit_value]
+            osascript = os.environ.get("PYBREW_OSASCRIPT", "/usr/bin/osascript")
+            for app in apps:
+                try:
+                    subprocess.run(
+                        [osascript, "-e", f'tell application id "{app}" to quit'],
+                        text=True,
+                        capture_output=True,
+                        timeout=15,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+        delete_value = cask.uninstall.get("delete")
+        if delete_value:
+            paths = delete_value if isinstance(delete_value, list) else [delete_value]
+            for pattern in paths:
+                for match in glob.glob(os.path.expanduser(str(pattern))):
+                    self._remove_user_path(Path(match))
+
+    def _remove_user_path(self, path: Path) -> None:
+        resolved = path.resolve()
+        home = Path.home().resolve()
+        prefix = self.config.prefix.resolve()
+        temp = Path(tempfile.gettempdir()).resolve()
+        if resolved in (Path("/"), home, prefix):
+            raise CaskError(f"refusing to delete unsafe path: {path}")
+        if not (
+            home in resolved.parents
+            or prefix in resolved.parents
+            or temp in resolved.parents
+        ):
+            raise CaskError(f"refusing to delete path outside allowed roots: {path}")
+        self._remove_path(path)
+
     def uninstall(
         self,
         token: str,
@@ -496,6 +543,8 @@ class CaskInstaller:
         zap: bool = False,
         cask: Optional[Cask] = None,
     ) -> list[Path]:
+        if cask is not None:
+            self._run_uninstall_actions(cask)
         rack = self.config.caskroom / token
         if not rack.is_dir():
             raise CaskError(f"cask {token} is not installed")
