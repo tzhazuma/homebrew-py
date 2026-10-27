@@ -17,6 +17,9 @@ from .tap_manager import TapManager
 from .taps import FormulaLoader, discover_taps
 
 _LINE_RE = re.compile(r'^\s*(?P<kind>tap|brew|cask|mas|vscode|whalebrew)\s+"(?P<name>[^"]+)"(?P<rest>.*)$')
+_OPTION_RE = re.compile(
+    r'([A-Za-z_][A-Za-z0-9_]*):\s*("([^"]*)"|\'([^\']*)\'|true|false|\[[^\]]*\])'
+)
 
 
 @dataclass
@@ -37,7 +40,19 @@ def parse_brewfile(path: Path) -> list[BundleEntry]:
         match = _LINE_RE.match(line)
         if not match:
             raise PybrewError(f"unsupported Brewfile line {line_number}: {stripped}")
-        entries.append(BundleEntry(match.group("kind"), match.group("name")))
+        rest = match.group("rest")
+        options: dict[str, str] = {}
+        for option in _OPTION_RE.finditer(rest):
+            key = option.group(1)
+            value = option.group(3) if option.group(3) is not None else (
+                option.group(4) if option.group(4) is not None else option.group(2)
+            )
+            options[key] = value
+        if not options:
+            positional = re.search(r',\s*"([^"]+)"', rest)
+            if positional:
+                options["url"] = positional.group(1)
+        entries.append(BundleEntry(match.group("kind"), match.group("name"), options))
     return entries
 
 
@@ -81,24 +96,30 @@ def bundle_install(
     installed: list[str] = []
     errors: list[str] = []
     tap_manager = TapManager(config)
-    formula_loader = _formula_loader(config)
-    cask_loader = _cask_loader(config, allow_api)
 
     for entry in entries:
         if entry.kind == "tap":
             try:
-                tap_manager.tap(entry.name)
+                tap_manager.tap(entry.name, url=entry.options.get("url"))
                 installed.append(f"tap {entry.name}")
             except PybrewError as error:
                 errors.append(f"{entry.name}: {error}")
             continue
+
+    # Re-discover taps after installing any Brewfile taps.
+    formula_loader = _formula_loader(config)
+    cask_loader = _cask_loader(config, allow_api)
 
     for entry in entries:
         if entry.kind == "brew":
             try:
                 formula = formula_loader.load(entry.name)
                 Installer(config, formula_loader).install(
-                    formula, InstallOptions(dry_run=dry_run)
+                    formula,
+                    InstallOptions(
+                        dry_run=dry_run,
+                        link=entry.options.get("link", "true").lower() != "false",
+                    ),
                 )
                 installed.append(f"brew {entry.name}")
             except PybrewError as error:

@@ -61,3 +61,32 @@ def test_bundle_dump(run_cli, sample, tmp_path) -> None:
     assert again.returncode == 1
     forced = run_cli("bundle", "dump", "--file", str(dump), "--force")
     assert forced.returncode == 0, forced.stderr
+
+
+def test_bundle_link_false(run_cli, sample, tmp_path) -> None:
+    brewfile = tmp_path / "Brewfile"
+    brewfile.write_text('brew "hello", link: false\n')
+    proc = run_cli("bundle", "install", "--file", str(brewfile), bottle_tag=sample.tag)
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert (sample.prefix / "Cellar" / "hello" / "1.0").is_dir()
+    assert not (sample.prefix / "bin" / "hello").exists()
+    assert not (sample.prefix / "opt" / "hello").exists()
+
+
+def test_bundle_tap_url(run_cli, sample, tmp_path) -> None:
+    import subprocess
+
+    remote = tmp_path / "demo-remote"
+    (remote / "Formula").mkdir(parents=True)
+    (remote / "Formula" / "hello.rb").write_text('class Hello < Formula\nend\n')
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-C", str(remote), *args], check=True, capture_output=True)
+    git("init", "-q", "-b", "main")
+    git("add", ".")
+    git("-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "init")
+    brewfile = tmp_path / "Brewfile"
+    brewfile.write_text(f'tap "tzhazuma/demo", url: "{remote.as_uri()}"\n')
+    proc = run_cli("bundle", "install", "--file", str(brewfile))
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "tap tzhazuma/demo" in proc.stdout
+    assert (sample.prefix / "Library" / "Taps" / "tzhazuma" / "homebrew-demo" / ".git").is_dir()

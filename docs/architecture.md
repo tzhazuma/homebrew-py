@@ -159,7 +159,8 @@ because loaders discover them from the prefix.
 lines. `bundle install` installs taps first, then formulae and casks, reusing the
 normal installers; `bundle check` reports missing entries; `bundle list` prints
 the parsed entries; `bundle dump` writes taps/formulae/casks back to a Brewfile.
-Advanced Brewfile options are not parsed yet. `cleanup --prune-cache` removes
+`tap ..., url: "..."` and `brew ..., link: false` are supported; other advanced
+options are ignored. `cleanup --prune-cache` removes
 downloads older than `--cache-age-days` (default 120) in addition to stale kegs.
 
 ## Pinning

@@ -44,6 +44,7 @@ class InstallOptions:
     overwrite: bool = False
     verbose: bool = False
     dry_run: bool = False
+    link: bool = True
 
 
 @dataclass
@@ -423,6 +424,15 @@ class Installer:
             poured_from_bottle=from_bottle,
             installed_as_dependency=as_dependency,
         )
+        if not options.link:
+            return InstallResult(
+                formula.name,
+                package_version,
+                keg,
+                from_bottle=from_bottle,
+                linked=False,
+                dependencies=[dep.name for dep in formula.runtime_dependencies()],
+            )
         linked = False
         if not formula.keg_only:
             result = self.linker.link(formula, keg, overwrite=options.overwrite or options.force)

@@ -8,7 +8,7 @@ Formula 解析、依赖解析、Cellar、bottle 安装、链接/卸载和 receip
 
 > **状态：v0.1 原型（可运行、可测试）**
 >
-> - 92 个测试全部通过（`pytest -q`）
+> - 94 个测试全部通过（`pytest -q`）
 > - 15 个真实 homebrew-core 公式（bash、git、curl、openssl@3、python@3.12 等）与
 >   `brew info --json=v2` 的元数据逐项对比通过
 > - 使用真实 `hello 2.12.3` Formula 完成 autotools 源码构建并运行成功
@@ -102,8 +102,8 @@ Installer(config, loader).install(formula, InstallOptions())
 | Cask | ✅ zip/dmg/pkg 子集 | app/binary/suite 安装、receipt、uninstall、`--zap`；`pkg` 可展开 payload 到 `--pkg-root`；支持 `--api`、`outdated`/`upgrade`、`uninstall quit/delete`；不执行安装脚本/不做系统级安装 |
 | Services | ✅ launchd + systemd | macOS 生成 launchd plist；Linux 生成 systemd user unit；start/stop/restart/list/info |
 | Cask/Services/Tap 命令 | ✅ | 集成到 `pybrew` CLI |
-| 维护命令 | ✅ | `outdated`、`upgrade`（含 `--dry-run`）、`cleanup`（含 `--prune-cache`）、`reinstall`、`doctor --json`、`pin`/`unpin`、`services cleanup`、`tap --update`、`shellenv` |
-| Brewfile | ✅ 基础 | `bundle install/check/list/dump`，支持 `tap`/`brew`/`cask` 行 |
+| 维护命令 | ✅ | `outdated`、`upgrade`（含 `--dry-run`）、`cleanup`（含 `--prune-cache`）、`reinstall`、`doctor --json`、`pin`/`unpin`、`services cleanup`、`tap --update`、`shellenv`；install `--no-link` |
+| Brewfile | ✅ 基础 | `bundle install/check/list/dump`，支持 `tap`/`brew`/`cask` 行，tap `url:`、brew `link: false` |
 | 完整 pkg cask 脚本/系统安装 / analytics / 高级 bundle 选项 | ❌ | 路线图 |
 
 ## 架构
@@ -145,7 +145,7 @@ Installer(config, loader).install(formula, InstallOptions())
 
 ```bash
 pytest -q
-# 92 passed
+# 94 passed
 ```
 
 测试覆盖：
@@ -162,7 +162,7 @@ pytest -q
 - `test_services.py`：launchd plist + systemd unit、伪造 launchctl/systemctl 的 start/stop/list、orphan cleanup
 - `test_taps.py`：本地 git tap 的 clone/update/untap/update-all
 - `test_maintenance.py`：outdated、upgrade --dry-run、cleanup（含 cache）、reinstall、pin/unpin
-- `test_bundle.py`：Brewfile install/check/list/dump
+- `test_bundle.py`：Brewfile install/check/list/dump、tap URL、link:false
 
 详细结果见 [docs/verification.md](docs/verification.md)，与 Ruby Homebrew 的差异见
 [docs/parity.md](docs/parity.md)，设计细节见 [docs/architecture.md](docs/architecture.md)。

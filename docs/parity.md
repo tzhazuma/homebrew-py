@@ -49,7 +49,7 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 | Tap management | `brew tap` | `tap`/`untap`/list/`--update` with GitHub or local git URLs |
 | Services | Yes | macOS launchd + Linux systemd user units; start/stop/restart/list/info/run |
 | Outdated / upgrade / cleanup / reinstall / pin | Yes | Basic: outdated/upgrade/cleanup (kegs + cache)/reinstall + pin/unpin |
-| Bundle | Yes | Basic Brewfile install/check/list/dump |
+| Bundle | Yes | Brewfile install/check/list/dump, tap URL, link:false |
 | Analytics | Yes | No |
 | Formula tests | `brew test` | Not executed |
 | Self-update / doctor | Yes | `doctor` checks prefix, Cellar, cask artifacts, links and orphan services; `--json`; `shellenv` |
