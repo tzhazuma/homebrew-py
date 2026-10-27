@@ -226,9 +226,9 @@ misrepresenting authorship.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `f489634` (cask uninstall quit/delete)
-- CI run for the cask uninstall-actions feature commit `f489634`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40544554499>
+- Latest feature commit: `06c81de` (services cleanup, tap update-all, shellenv)
+- CI run for the services/tap/shellenv feature commit `06c81de`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40545327313>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
