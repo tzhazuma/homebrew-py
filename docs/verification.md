@@ -208,9 +208,9 @@ misrepresenting authorship.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `0dffc1e` (cask outdated/upgrade)
-- CI run for the cask outdated/upgrade feature commit `0dffc1e`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40490381500>
+- Latest feature commit: `8392dea` (minimal Brewfile bundle support)
+- CI run for the Brewfile bundle feature commit `8392dea`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40490793638>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
