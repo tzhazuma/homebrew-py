@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-79 passed in 27.72s
+81 passed in 23.30s
 ```
 
 Breakdown of the feature slices:
@@ -42,6 +42,8 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_taps.py
 3 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_maintenance.py
 4 passed
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bundle.py
+2 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cli.py
 8 passed
 ```
@@ -149,6 +151,13 @@ This is a real homebrew-core formula, not a synthetic fixture.
   `--dry-run` is covered.
 - `reinstall` uninstalls then reinstalls a formula and restores links.
 
+## Brewfile verification
+
+`bundle install` parses a Brewfile containing `brew "hello"` and
+`cask "testapp"`, performs a dry run, installs both, and then `bundle check`
+reports the dependencies as satisfied; `bundle list` prints the parsed entries.
+Unsupported Brewfile lines fail with a line number.
+
 ## CLI smoke checks
 
 ```console
@@ -178,7 +187,7 @@ install, `doctor`, `list`, `deps`, `search`, `config`, and `parse`.
   this environment, so only helper expansion is covered.
 - Cask package scripts and system-wide `.pkg` installation.
 - Mach-O binary relocation was not validated by running the installed dylib.
-- `brew lgtm`, `brew bundle`, `brew upgrade`, analytics.
+- `brew lgtm`, advanced Brewfile options, analytics.
 
 These are tracked in the README roadmap and `docs/parity.md`.
 

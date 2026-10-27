@@ -24,6 +24,7 @@ be a drop-in replacement for every Homebrew feature yet.
 | `pybrew/cask.py` / `cask_installer.py` | cask parser and zip/dmg installer |
 | `pybrew/services.py` | service DSL parser, launchd plists, start/stop/list |
 | `pybrew/tap_manager.py` | tap clone/update/remove |
+| `pybrew/bundle.py` | minimal Brewfile parsing and install/check/list |
 
 ## Formula parsing
 
@@ -148,6 +149,13 @@ binaries. `services list/start/stop/restart/info/run` are available in the CLI.
 visible to formula/cask loaders on the next invocation because loaders discover
 them from the prefix.
 
+## Brewfiles
+
+`bundle.py` parses the common Homebrew Brewfile subset: `tap`, `brew` and `cask`
+lines. `bundle install` installs taps first, then formulae and casks, reusing the
+normal installers; `bundle check` reports missing entries and `bundle list` prints
+the parsed entries. Advanced Brewfile options are not parsed yet.
+
 ## Safety model
 
 - Default prefix is `~/.pybrew`; operating on `/opt/homebrew` or `/usr/local`
@@ -166,7 +174,7 @@ them from the prefix.
   system-wide installs are not implemented.
 - Services are best-effort: launchd/systemd are invoked, but log rotation,
   process supervision edge cases and root services are not implemented.
-- No analytics, `brew bundle`, `brew upgrade` or full cask options.
+- No analytics, advanced Brewfile options or full cask options.
 - `brew`'s test DSL is captured but not executed.
 
 ## Testing strategy

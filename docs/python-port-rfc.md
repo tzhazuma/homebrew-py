@@ -57,7 +57,7 @@ A clean-room Python 3.9+ package (`pybrew`) with no runtime dependencies:
 
 ## Validation
 
-- 79 tests pass (`pytest -q`).
+- 81 tests pass (`pytest -q`).
 - 15 real homebrew-core formulae (bash, git, curl, openssl@3, python@3.12, ...)
   parse to exactly the desc/homepage/license/version/dependency values returned
   by `brew info --json=v2` (Homebrew 7.0.9).
@@ -77,8 +77,8 @@ A clean-room Python 3.9+ package (`pybrew`) with no runtime dependencies:
 - A drop-in replacement for `brew` or for Homebrew's Ruby extension points.
 - Full cask coverage: `.pkg` artifacts, `pkgutil` receipts, login items and
   system-wide installs are not implemented.
-- Analytics, `brew bundle`, package scripts/system-wide pkg installs and arbitrary
-  Ruby/build systems are not implemented yet.
+- Analytics, advanced Brewfile options, package scripts/system-wide pkg installs
+  and arbitrary Ruby/build systems are not implemented yet.
 - Running arbitrary Ruby from formulae.
 
 ## Questions for Homebrew maintainers

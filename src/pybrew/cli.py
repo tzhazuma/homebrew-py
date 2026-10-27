@@ -12,6 +12,7 @@ from typing import Any, Optional
 from . import PYBREW_VERSION
 from .api import fetch_formula
 from .cask import CaskError
+from .bundle import bundle_check, bundle_install, bundle_list, parse_brewfile
 from .cask_installer import CaskInstaller, CaskLoader, CaskNotFound
 from .cellar import Cellar, Linker, read_receipt
 from .doctor import diagnose
@@ -152,6 +153,14 @@ def build_parser() -> argparse.ArgumentParser:
 
     reinstall_cmd = subparsers.add_parser("reinstall", parents=[common], help="reinstall formulae")
     reinstall_cmd.add_argument("formulae", nargs="+")
+
+    bundle = subparsers.add_parser("bundle", parents=[common], help="install/check a Brewfile")
+    bundle_actions = bundle.add_subparsers(dest="bundle_action", required=True)
+    for action_name in ("install", "check", "list"):
+        action_parser = bundle_actions.add_parser(action_name)
+        action_parser.add_argument("--file", type=Path, default=Path("Brewfile"))
+        action_parser.add_argument("--dry-run", action="store_true")
+        action_parser.add_argument("--api", action="store_true")
 
     services = subparsers.add_parser("services", parents=[common], help="manage background services")
     services.add_argument("action", nargs="?", default="list", choices=["list", "start", "stop", "restart", "run", "info"])
@@ -512,6 +521,35 @@ def _cask_loader(config: Config, allow_api: bool = False) -> CaskLoader:
     return CaskLoader(discover_taps(config.taps), allow_api=allow_api)
 
 
+def cmd_bundle(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    entries = parse_brewfile(args.file)
+    if args.bundle_action == "list":
+        for line in bundle_list(entries):
+            print(line)
+        return 0
+    if args.bundle_action == "check":
+        missing = bundle_check(config, entries, allow_api=bool(getattr(args, "api", False)))
+        if not missing:
+            print("The Brewfile's dependencies are satisfied.")
+            return 0
+        for item in missing:
+            print(f"Missing: {item}")
+        return 1
+    config.ensure()
+    installed, errors = bundle_install(
+        config,
+        entries,
+        dry_run=bool(getattr(args, "dry_run", False)),
+        allow_api=bool(getattr(args, "api", False)),
+    )
+    for item in installed:
+        print(("Would install: " if args.dry_run else "Installed: ") + item)
+    for error in errors:
+        print(f"Error: {error}", file=sys.stderr)
+    return 1 if errors else 0
+
+
 def cmd_outdated(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     loader = _loader(config)
@@ -797,6 +835,7 @@ _COMMANDS = {
     "tap": cmd_tap,
     "untap": cmd_untap,
     "cask": cmd_cask,
+    "bundle": cmd_bundle,
     "outdated": cmd_outdated,
     "upgrade": cmd_upgrade,
     "cleanup": cmd_cleanup,
