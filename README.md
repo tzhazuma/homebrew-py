@@ -188,27 +188,21 @@ homebrew-core 变更。
 
 ## 上游 PR
 
-已向上游提交一个 **draft RFC PR**（不是要求合并的代码 PR），说明 Python 原型、验证
-结果、差异和需要维护者反馈的问题：
+已提交并重新打开 RFC PR（不是要求合并的代码 PR），用于说明 Python 原型、验证结果、
+差异和需要维护者反馈的问题：
 
 - PR：<https://github.com/Homebrew/brew/pull/24362>
+- 状态：open，ready for review（2026-10-28 由 Homebrew 模板机器人重新打开）
 - 提案正文：[docs/python-port-rfc.md](docs/python-port-rfc.md)
+- PR 正文：[docs/upstream-pr/PR_BODY.md](docs/upstream-pr/PR_BODY.md)
 
-**结果说明：** 该 PR 创建后约 12 秒被上游的 PR 模板机器人自动关闭，原因是缺少
-Homebrew 的 `PULL_REQUEST_TEMPLATE.md`；机器人提示它可能由 AI 生成。Homebrew 的模板
-要求提交者逐项勾选并披露 AI 使用、由人类跟进 review。也就是说，这是上游流程门槛，
-不是对代码/方向的技术否决。
-
-**已准备好重提模板，等待人工审核授权：**
-
-- PR 正文模板：[docs/upstream-pr/PR_BODY.md](docs/upstream-pr/PR_BODY.md)
-- 审核与提交说明：[docs/upstream-pr/REVIEW_AND_SUBMIT.md](docs/upstream-pr/REVIEW_AND_SUBMIT.md)
-- 标题：[docs/upstream-pr/PR_TITLE.txt](docs/upstream-pr/PR_TITLE.txt)
-- 授权后才执行的脚本：`python scripts/open_upstream_pr.py --authorized --pr 24362`
+PR 曾因缺少 Homebrew 的 `PULL_REQUEST_TEMPLATE.md` 被自动关闭；补全模板、披露 AI
+使用并经提交者明确确认后，机器人自动重新打开。AI 披露复选框已由提交者授权勾选；
+`brew lgtm` 因本 PR 只新增 RFC 文档、未修改 Homebrew Ruby 代码而保留未勾选，并在正文中
+注明原因。
 
 根据 Homebrew 的 Contributing/Responsible AI 规则，提交者本人必须审核所有 AI 生成内容、
-在 PR 中披露 AI 工具、并亲自回答 maintainer 的 review；当前分支仍在
-`tzhazuma/brew:python-port-rfc`，本次没有自动重提。
+在 PR 中披露 AI 工具、并亲自回答 maintainer 的 review。PR 后续状态以 GitHub 页面为准。
 
 ## 目录结构
 
@@ -228,7 +222,7 @@ docs/                 架构、兼容性、验证、RFC
 3. Brewfile 更多高级选项、Cask upgrade 边界。
 4. Linux RPATH/ELF 重定位与更多 Mach-O 边界情况。
 5. 与 `brew` 的测试套件对齐，逐步扩大真实公式覆盖。
-6. 等待人工审核并提交上游 RFC PR。
+6. 跟进上游 RFC PR 的 maintainer review（已提交）。
 
 ## License
 

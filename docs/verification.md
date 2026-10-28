@@ -309,17 +309,21 @@ These are tracked in the README roadmap and `docs/parity.md`.
 
 ## Upstream PR attempt
 
-A draft RFC PR was opened against `Homebrew/brew`:
+RFC PR <https://github.com/Homebrew/brew/pull/24362> was initially closed by
+Homebrew's PR-template bot because the body did not match
+`PULL_REQUEST_TEMPLATE.md`. After the human reviewed and explicitly authorized
+the submission, the body was updated with the template and AI disclosure, the
+AI-disclosure checkbox was checked, and the template bot reopened the PR:
 
-- <https://github.com/Homebrew/brew/pull/24362>
+- state: open, ready for review (draft=false)
+- reopened by `github-actions[bot]` on 2026-10-28
+- `brew lgtm` remains unchecked with an explanatory note because the PR only
+  adds an RFC document and does not change Homebrew Ruby code
+- no attempt was made to misrepresent authorship or bypass the bot
 
-It was automatically closed after ~12 seconds by Homebrew's PR-template bot because
-the body did not match `PULL_REQUEST_TEMPLATE.md`; the bot also warned that the PR
-appeared AI-generated. This is an upstream process gate, not a technical review.
-The fork branch remains at `tzhazuma/brew:python-port-rfc` and the proposal text is
-kept in `docs/python-port-rfc.md` for a human follow-up (fill the template, disclose
-AI usage, run applicable checks). No attempt was made to evade the bot by
-misrepresenting authorship.
+The submitting human is responsible for answering maintainer review comments
+without AI. PR state should be re-checked on GitHub; the bot may re-evaluate
+the template after edits.
 
 ## GitHub repository, CI and upstream tracking
 
@@ -339,15 +343,13 @@ misrepresenting authorship.
 
 ## Upstream RFC PR outcome
 
-The draft RFC PR <https://github.com/Homebrew/brew/pull/24362> was created, then
-automatically closed by Homebrew's PR-template bot (missing template, possible
-AI authorship warning). The fork branch `tzhazuma/brew:python-port-rfc` remains
-available.
+The RFC PR <https://github.com/Homebrew/brew/pull/24362> is now **open and ready
+for review** after the template bot reopened it. The body includes the current
+Homebrew template checkboxes and the AI disclosure; the AI checkbox was checked
+only after the submitting human explicitly confirmed that they had reviewed the
+body and authorized submission. The fork branch
+`tzhazuma/brew:python-port-rfc` contains the RFC document.
 
-A complete re-submission template is now prepared in
-`docs/upstream-pr/PR_BODY.md` (with the current Homebrew template checkboxes and
-an AI disclosure section) and `docs/upstream-pr/REVIEW_AND_SUBMIT.md`. It has
-**not** been resubmitted: Homebrew requires the human submitter to review all
-AI-generated content and answer review comments without AI. The guarded helper
-`scripts/open_upstream_pr.py` performs no writes unless `--authorized` is passed
-and still requires the human to tick the AI checkbox and confirm the disclosure.
+The guarded helper `scripts/open_upstream_pr.py` still performs no writes without
+`--authorized`. The human submitter must answer maintainer review comments
+without AI and remains responsible for the upstream submission.

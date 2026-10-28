@@ -1,19 +1,22 @@
 # Upstream PR review and submission
 
-This folder holds the **draft upstream PR** for Homebrew/brew. It is intentionally
-not submitted by the agent in this session. The repository owner reviews,
-edits/approves it, and explicitly authorizes submission.
+This folder holds the upstream PR material for Homebrew/brew. The repository
+owner reviewed and explicitly authorized submission, so the PR has been
+submitted and reopened by the template bot.
 
 ## Current state
 
-- Previous PR: <https://github.com/Homebrew/brew/pull/24362> — closed ~12 seconds
-  after creation by Homebrew's PR-template bot because the body lacked
-  `.github/PULL_REQUEST_TEMPLATE.md`.
+- PR: <https://github.com/Homebrew/brew/pull/24362> — **open, ready for review**
+  (draft=false), reopened by Homebrew's PR-template bot on 2026-10-28.
 - Fork branch with the RFC file: `tzhazuma/brew:python-port-rfc`
-- The bot comment says it will reopen the PR once the template is complete.
-- Homebrew's Contributing rules require AI/LLM disclosure, human review of all
-  AI-authored content, and that the submitting human answers review comments
-  without AI. There may only be one open AI-assisted PR from a non-maintainer.
+- Body includes the current Homebrew template checkboxes and AI disclosure.
+- The AI-disclosure checkbox was checked only after the human explicitly
+  confirmed they reviewed the body and authorized it.
+- `brew lgtm` is unchecked with a note that this docs-only RFC does not change
+  Homebrew Ruby code.
+- Homebrew's Contributing rules still require the submitting human to answer
+  review comments without AI; there may only be one open AI-assisted PR from a
+  non-maintainer.
 
 ## Files
 
@@ -41,24 +44,18 @@ edits/approves it, and explicitly authorizes submission.
    same fork branch. The helper defaults to updating #24362 and then attempting
    to reopen it.
 
-## After you approve
+## Submission history
 
-Option A — you submit through the GitHub UI:
-1. Edit <https://github.com/Homebrew/brew/pull/24362> (or create a new PR from
-   `tzhazuma:python-port-rfc`), paste `PR_BODY.md`, complete the human-only
-   checkboxes.
-2. The template bot may reopen the PR automatically.
-
-Option B — ask the agent to submit:
-1. Reply in the session that you approve and authorize submission, and state
-   whether to update #24362 or create a new PR.
-2. The agent will run:
+The human authorized updating and reopening #24362. The agent ran:
 
 ```bash
 python scripts/open_upstream_pr.py --authorized --pr 24362
-# or, for a new PR:
-python scripts/open_upstream_pr.py --authorized --new
 ```
+
+The PR body was updated and the template bot reopened the PR. The agent then
+marked the PR ready for review (GraphQL `markPullRequestReadyForReview`) only
+after the human explicitly confirmed they had reviewed the body and authorized
+checking the AI disclosure.
 
 Without `--authorized`, the script only prints a preview and performs no writes.
 
