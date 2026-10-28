@@ -69,9 +69,11 @@ asks three concrete questions:
 - [x] Have you written new tests (excluding integration tests)? [Here's an example](https://github.com/Homebrew/brew/blob/HEAD/Library/Homebrew/test/PATH_spec.rb).
 - [ ] Have you successfully run `brew lgtm` (style, typechecking and tests) locally?
 
+<!-- `brew lgtm` is not applicable: this change only adds an RFC document and does not modify Homebrew Ruby code. -->
+
 -----
 
-- [ ] I did not use AI/LLM to create this PR, or I disclosed the tool/model below and reviewed its output; I did not attribute commits to AI and will answer maintainer questions and review comments myself without AI/LLM.
+- [x] I did not use AI/LLM to create this PR, or I disclosed the tool/model below and reviewed its output; I did not attribute commits to AI and will answer maintainer questions and review comments myself without AI/LLM.
 
 <!-- If AI was used, explain below how it was and how you verified the changes. Non-maintainers may only have one AI-assisted PR open at a time. See https://docs.brew.sh/Responsible-AI-Usage for guidance. -->
 
