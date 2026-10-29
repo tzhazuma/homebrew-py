@@ -139,7 +139,8 @@ cask's declared trash paths after checking they stay inside the user
 home/prefix/temp roots. Library artifact kinds (`font`, `qlplugin`, VST plugins,
 etc.) copy into `<prefix>/Library/...` by default or `--library-root`; `stage_only`
 writes a receipt without artifacts. `.pkg` payloads are expanded under
-`--pkg-root`; package scripts and system-wide installs are not implemented.
+`--pkg-root`; `--system-pkg` opts into a root-only macOS `installer` call, while
+package scripts and system pkg uninstall/rollback are not implemented.
 
 ## Services
 
@@ -165,7 +166,8 @@ lines. `bundle install` installs taps first, then formulae and casks, reusing th
 normal installers; `bundle check` reports missing entries; `bundle list` prints
 the parsed entries; `bundle dump` writes taps/formulae/casks back to a Brewfile.
 `tap ..., url: "..."`, `brew ..., link: false`, `brew ..., args: [...]`,
-`mas ... id:` and `vscode ...` are supported; other advanced options are ignored. `cleanup --prune-cache` removes
+`brew ..., restart_service: true`, `mas ... id:` and `vscode ...` are supported;
+other advanced options are ignored. `cleanup --prune-cache` removes
 downloads older than `--cache-age-days` (default 120) in addition to stale kegs.
 
 ## Pinning
@@ -200,8 +202,9 @@ same for a local cask artifact.
   predicates, resources and HEAD included), not arbitrary Ruby.
 - ELF relocation needs `patchelf` for long RPATH replacements; Mach-O uses
   `install_name_tool`; further edge cases remain.
-- Cask `.pkg` payloads are expanded under `--pkg-root`; package scripts and
-  system-wide installs are not implemented. Library artifacts are prefix-scoped
+- Cask `.pkg` payloads are expanded under `--pkg-root`; `--system-pkg` delegates
+  to macOS `installer` when root, but package scripts and system pkg
+  uninstall/rollback are not implemented. Library artifacts are prefix-scoped
   unless `--library-root` is supplied.
 - Services are best-effort: launchd/systemd are invoked, but log rotation,
   process supervision edge cases and root services are not implemented.

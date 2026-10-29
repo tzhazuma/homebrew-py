@@ -240,6 +240,7 @@ class CaskInstaller:
         appdir: Optional[Path] = None,
         pkg_root: Optional[Path] = None,
         library_root: Optional[Path] = None,
+        system_pkg: bool = False,
     ):
         self.config = config
         self.downloader = downloader or Downloader(config.downloads, config.bottle_dirs)
@@ -248,6 +249,10 @@ class CaskInstaller:
         self.library_root = (
             Path(library_root).expanduser() if library_root else (config.prefix / "Library")
         )
+        # Opt-in system-wide pkg installation.  The default remains the safe
+        # path that expands the payload beneath ``pkg_root``.
+        self.system_pkg = system_pkg
+        self._system_pkg_used = False
 
     # -- paths -----------------------------------------------------------
     def room(self, cask: Cask, version: Optional[str] = None) -> Path:
@@ -272,6 +277,7 @@ class CaskInstaller:
 
     # -- install ---------------------------------------------------------
     def install(self, cask: Cask, force: bool = False) -> CaskInstallResult:
+        self._system_pkg_used = False
         version = cask.resolved_version()
         if version in ("latest", "0"):
             raise CaskError(f"{cask.token}: version {version!r} cannot be installed reliably")
@@ -340,6 +346,10 @@ class CaskInstaller:
             "installed": installed,
             "tap": cask.tap,
         }
+        if self._system_pkg_used:
+            # No payload paths are recorded for system-wide pkg installs: the
+            # macOS installer owns the receipt and the files on disk.
+            receipt["system_pkg"] = True
         (metadata / "receipt.json").write_text(
             __import__("json").dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
@@ -463,7 +473,9 @@ class CaskInstaller:
         installed: list[str],
         archive: Optional[Path],
     ) -> None:
-        if sys.platform != "darwin" or shutil.which("pkgutil") is None:
+        if not self.system_pkg and (
+            sys.platform != "darwin" or shutil.which("pkgutil") is None
+        ):
             raise CaskError("pkg artifacts require macOS pkgutil")
         package: Optional[Path] = None
         if artifact.source:
@@ -472,6 +484,11 @@ class CaskInstaller:
             package = archive
         if package is None:
             raise CaskError(f"{cask.token}: pkg {artifact.source!r} not found")
+        if self.system_pkg:
+            # Explicit opt-in: hand the package to macOS ``installer`` instead
+            # of expanding and copying its payload beneath ``pkg_root``.
+            self._install_pkg_system(cask, package)
+            return
         expanded = room / ".pkg-expanded"
         if expanded.exists():
             shutil.rmtree(expanded)
@@ -502,6 +519,45 @@ class CaskInstaller:
                 target = self.pkg_root / relative
                 installed.append(str(target))
         shutil.rmtree(expanded, ignore_errors=True)
+
+    def _install_pkg_system(self, cask: Cask, package: Path) -> None:
+        """Install a pkg artifact system-wide with macOS ``installer``.
+
+        This is an explicit opt-in escape hatch.  It requires macOS, an
+        installer executable and effective root; pybrew never expands or
+        copies the payload in this mode.
+        """
+
+        if sys.platform != "darwin":
+            raise CaskError(f"{cask.token}: system-wide pkg installation requires macOS")
+        installer = os.path.expanduser(
+            os.environ.get("PYBREW_INSTALLER") or "/usr/sbin/installer"
+        )
+        executable = shutil.which(installer)
+        if executable is None:
+            raise CaskError(
+                f"{cask.token}: installer executable not found or not executable: "
+                f"{installer}; set PYBREW_INSTALLER to the macOS installer tool"
+            )
+        if os.geteuid() != 0:
+            raise CaskError(
+                f"{cask.token}: system-wide pkg installation requires root; "
+                "rerun with sudo or use --pkg-root for a payload-only install"
+            )
+        command = [executable, "-pkg", str(package), "-target", "/"]
+        try:
+            result = subprocess.run(command, text=True, capture_output=True)
+        except OSError as error:
+            raise CaskError(
+                f"{cask.token}: could not run installer {executable}: {error}"
+            ) from error
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            raise CaskError(
+                f"{cask.token}: system-wide package installation failed "
+                f"(exit {result.returncode}): {detail or package}"
+            )
+        self._system_pkg_used = True
 
     @staticmethod
     def _find(root: Path, name: str) -> Optional[Path]:

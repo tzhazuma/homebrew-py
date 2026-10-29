@@ -31,7 +31,7 @@ asks three concrete questions:
 
 ## Testing
 
-- `pytest -q` in the linked prototype: **128 passed**.
+- `pytest -q` in the linked prototype: **139 passed**.
 - 15 real homebrew-core formulae parse to exactly the desc/homepage/license/
   version/dependency values returned by `brew info --json=v2` (Homebrew 7.0.9).
 - A real cached `libslirp 4.9.6` Homebrew bottle installs offline; synthetic
@@ -39,8 +39,8 @@ asks three concrete questions:
   generation and tap clone/update are covered by tests; a real meson 1.12.1
   project was also built manually. The latest batch adds 13 Library cask
   artifact kinds, stage_only, cask upgrade artifact cleanup, on_arm/on_intel
-  source conditionals, Brewfile args/mas/vscode, and optional ELF patchelf
-  RPATH relocation.
+  source conditionals, Brewfile args/mas/vscode/restart_service, opt-in system
+  pkg installs, and optional ELF patchelf RPATH relocation.
 - No Homebrew Ruby code is copied or executed; the prototype is BSD-2-Clause.
 
 ## AI disclosure and review

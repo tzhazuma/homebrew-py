@@ -16,6 +16,7 @@ from .cellar import Cellar
 from .errors import PybrewError
 from .installer import InstallOptions, Installer
 from .paths import Config
+from .services import ServiceManager
 from .tap_manager import TapManager
 from .taps import FormulaLoader, discover_taps
 
@@ -98,6 +99,17 @@ def _install_options(entry: BundleEntry, dry_run: bool) -> InstallOptions:
         head="--head" in arguments,
         build_from_source="--build-from-source" in arguments,
     )
+
+
+def _restart_service(entry: BundleEntry) -> bool:
+    """Return whether the entry opted into starting its service after install."""
+
+    return str(entry.options.get("restart_service", "")).strip().casefold() == "true"
+
+
+def _formula_has_service(formula: object) -> bool:
+    service = getattr(formula, "service", None)
+    return isinstance(service, dict) and bool(service.get("source"))
 
 
 def _tap_paths(config: Config) -> list[Path]:
@@ -231,9 +243,22 @@ def bundle_install(
                 Installer(config, formula_loader).install(
                     formula, _install_options(entry, dry_run)
                 )
-                installed.append(f"brew {entry.name}")
             except PybrewError as error:
                 errors.append(f"{entry.name}: {error}")
+                continue
+            installed.append(f"brew {entry.name}")
+            if dry_run or not _restart_service(entry):
+                continue
+            if not _formula_has_service(formula):
+                errors.append(
+                    f"{entry.name}: restart_service requested but the formula "
+                    "does not define a service"
+                )
+                continue
+            try:
+                ServiceManager(config).start(formula)
+            except (PybrewError, OSError) as error:
+                errors.append(f"{entry.name}: failed to start service: {error}")
         elif entry.kind == "cask":
             try:
                 cask = cask_loader.load(entry.name)

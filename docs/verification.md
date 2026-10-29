@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-128 passed in 33.72s
+139 passed in 37.48s
 ```
 
 Breakdown of the feature slices:
@@ -32,8 +32,8 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 17 passed      # 15 parametrized real formulae + 2 aggregate checks
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
-$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_depth.py
-27 passed      # 17 base + 10 depth: Library artifacts, stage_only, upgrade cleanup
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_depth.py tests/test_cask_pkg_system.py
+34 passed      # 17 base + 10 depth + 7 opt-in system pkg
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py
 12 passed      # autotools, CMake, Cargo, meson, on_arm/on_intel, predicates, resources, HEAD
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
@@ -43,7 +43,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_taps.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_maintenance.py
 9 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bundle.py
-12 passed      # install/check/list/dump, tap URL, args, mas/vscode
+16 passed      # install/check/list/dump, tap URL, args, mas/vscode, restart_service
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cli.py
 13 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_relocation.py
@@ -267,6 +267,16 @@ editor.
 `update` updates every installed tap via `git pull --ff-only`; the test taps a
 local remote, commits a change, and confirms the CLI updates it.
 
+## Second parallel batch
+
+- `--system-pkg` performs an explicit root-only macOS `installer -pkg ... -target /`
+  install; tests use a fake installer and never run as root. The default
+  `--pkg-root` payload expansion remains unchanged. System pkg uninstall/rollback
+  is still not implemented.
+- Brewfile `brew "svc", restart_service: true` starts the installed service after
+  a successful non-dry-run install; missing service/start failure becomes a
+  bundle error.
+
 ## Parallel feature batch
 
 - 13 Cask Library artifact kinds (`font`, `colorpicker`, `prefpane`, `qlplugin`,
@@ -321,7 +331,7 @@ install, `doctor`, `list`, `deps`, `search`, `config`, and `parse`.
 - Live download from ghcr.io is not part of the offline suite; the real bottle
   test intentionally uses a cached artefact. Live download is recorded manually
   above.
-- Cask package scripts and system-wide `.pkg` installation.
+- Cask package scripts, login items and system pkg uninstall/rollback.
 - `brew lgtm`, remaining advanced Brewfile options, analytics.
 - Real Linux/patchelf execution is exercised with a fake tool; no real Linux
   bottle is installed in CI.

@@ -319,3 +319,149 @@ def test_bundle_formula_from_newly_installed_tap(monkeypatch, sample, tmp_path) 
     assert errors == []
     assert installed == ["tap tzhazuma/refresh", "brew fresh"]
     assert captured == ["fresh"]
+
+
+def _fake_launchctl(tmp_path: Path, monkeypatch, *, exit_code: int = 0) -> Path:
+    script = tmp_path / "fake-launchctl"
+    log = tmp_path / "launchctl.log"
+    script.write_text(
+        "#!/bin/sh\n"
+        'echo "$@" >> "$FAKE_LAUNCHCTL_LOG"\n'
+        f"exit {exit_code}\n"
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("FAKE_LAUNCHCTL_LOG", str(log))
+    return script
+
+
+def _service_env(tmp_path: Path, launchctl: Path) -> dict[str, str]:
+    return {
+        "PYBREW_SERVICE_DIR": str(tmp_path / "agents"),
+        "PYBREW_SERVICE_BACKEND": "launchd",
+        "PYBREW_LAUNCHCTL": str(launchctl),
+    }
+
+
+def _stage_installed_service_keg(config, formula) -> None:
+    """Simulate a completed install for the service fixture formula."""
+
+    keg = config.keg_path(formula.name, formula.pkg_version)
+    (keg / "bin").mkdir(parents=True, exist_ok=True)
+    executable = keg / "bin" / formula.name
+    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.chmod(0o755)
+    opt = config.opt_path(formula.name)
+    opt.parent.mkdir(parents=True, exist_ok=True)
+    opt.symlink_to(keg)
+
+
+def test_bundle_restart_service_starts_service(monkeypatch, sample, tmp_path) -> None:
+    from pybrew import bundle as bundle_module
+    from pybrew.bundle import bundle_install, parse_brewfile
+    from pybrew.paths import Config
+
+    brewfile = tmp_path / "Brewfile"
+    brewfile.write_text('brew "svc", restart_service: true\n')
+    launchctl = _fake_launchctl(tmp_path, monkeypatch)
+    for name, value in _service_env(tmp_path, launchctl).items():
+        monkeypatch.setenv(name, value)
+
+    class InstallingInstaller:
+        def __init__(self, config, loader) -> None:
+            self.config = config
+            self.loader = loader
+
+        def install(self, formula, options):
+            _stage_installed_service_keg(self.config, formula)
+            return []
+
+    monkeypatch.setattr(bundle_module, "Installer", InstallingInstaller)
+    config = Config.default(prefix=sample.prefix, taps=[sample.tap], cache=sample.cache)
+
+    installed, errors = bundle_install(config, parse_brewfile(brewfile))
+
+    assert errors == []
+    assert installed == ["brew svc"]
+    log = tmp_path / "launchctl.log"
+    assert log.is_file(), "launchctl was not invoked for restart_service"
+    assert "bootstrap" in log.read_text()
+    assert (tmp_path / "agents" / "homebrew.mxcl.svc.plist").is_file()
+
+
+def test_bundle_restart_service_dry_run_does_not_start(monkeypatch, sample, tmp_path) -> None:
+    from pybrew import bundle as bundle_module
+    from pybrew.bundle import bundle_install, parse_brewfile
+    from pybrew.paths import Config
+
+    brewfile = tmp_path / "Brewfile"
+    brewfile.write_text('brew "svc", restart_service: true\n')
+    launchctl = _fake_launchctl(tmp_path, monkeypatch)
+    for name, value in _service_env(tmp_path, launchctl).items():
+        monkeypatch.setenv(name, value)
+
+    captured = []
+
+    class RecordingInstaller:
+        def __init__(self, config, loader) -> None:
+            self.config = config
+            self.loader = loader
+
+        def install(self, formula, options):
+            captured.append(options.dry_run)
+            return []
+
+    monkeypatch.setattr(bundle_module, "Installer", RecordingInstaller)
+    config = Config.default(prefix=sample.prefix, taps=[sample.tap], cache=sample.cache)
+
+    installed, errors = bundle_install(config, parse_brewfile(brewfile), dry_run=True)
+
+    assert errors == []
+    assert installed == ["brew svc"]
+    assert captured == [True]
+    assert not (tmp_path / "launchctl.log").exists()
+    assert not (tmp_path / "agents").exists()
+
+
+def test_bundle_restart_service_without_service_is_error(run_cli, sample, tmp_path) -> None:
+    brewfile = tmp_path / "Brewfile"
+    brewfile.write_text('brew "hello", restart_service: true\n')
+
+    proc = run_cli("bundle", "install", "--file", str(brewfile), bottle_tag=sample.tag)
+
+    assert proc.returncode == 1
+    assert "restart_service requested" in proc.stderr
+    assert "does not define a service" in proc.stderr
+    # The formula itself still installed successfully.
+    assert (sample.prefix / "Cellar" / "hello" / "1.0").is_dir()
+    assert "Installed: brew hello" in proc.stdout
+
+
+def test_bundle_restart_service_start_failure_is_error(monkeypatch, sample, tmp_path) -> None:
+    from pybrew import bundle as bundle_module
+    from pybrew.bundle import bundle_install, parse_brewfile
+    from pybrew.paths import Config
+
+    brewfile = tmp_path / "Brewfile"
+    brewfile.write_text('brew "svc", restart_service: true\n')
+    launchctl = _fake_launchctl(tmp_path, monkeypatch, exit_code=1)
+    for name, value in _service_env(tmp_path, launchctl).items():
+        monkeypatch.setenv(name, value)
+
+    class InstallingInstaller:
+        def __init__(self, config, loader) -> None:
+            self.config = config
+            self.loader = loader
+
+        def install(self, formula, options):
+            _stage_installed_service_keg(self.config, formula)
+            return []
+
+    monkeypatch.setattr(bundle_module, "Installer", InstallingInstaller)
+    config = Config.default(prefix=sample.prefix, taps=[sample.tap], cache=sample.cache)
+
+    installed, errors = bundle_install(config, parse_brewfile(brewfile))
+
+    assert installed == ["brew svc"]
+    assert len(errors) == 1
+    assert errors[0].startswith("svc: failed to start service:")
+    assert "launchctl bootstrap failed" in errors[0]
