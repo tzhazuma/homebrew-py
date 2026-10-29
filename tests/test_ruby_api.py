@@ -1648,3 +1648,29 @@ def test_env_cxx_optimization_and_removal_helpers(
     assert "-Oz" in lines[0] and "-Wall" in lines[0]
     assert "-std=c++17" in lines[1] and "-DFOO" not in lines[1]
     assert "-lfoo" in lines[2] and "-lbar" not in lines[2]
+
+
+def test_utils_submodules_and_superenv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-utils-modules",
+        "1.0",
+        (
+            '  (prefix/"utils").write [\n'
+            '    Utils::Git.available?.to_s,\n'
+            '    Utils::Curl.respond_to?(:curl).to_s,\n'
+            '    Utils::Gzip.respond_to?(:gzip).to_s,\n'
+            '    Utils::Tar.respond_to?(:tar).to_s,\n'
+            '    Utils::Zip.respond_to?(:zip).to_s,\n'
+            '    Utils::Cp.respond_to?(:cp).to_s,\n'
+            '    Utils::Popen.respond_to?(:popen_read).to_s,\n'
+            '    ENV.superenv?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    lines = (keg / "utils").read_text().splitlines()
+    assert lines[0] in ("true", "false")
+    assert lines[1:] == ["true"] * 7

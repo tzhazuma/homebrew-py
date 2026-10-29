@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-487 passed, 5 skipped in 66.70s
+488 passed, 5 skipped in 70.70s
 ```
 
 Breakdown of the feature slices:
@@ -37,7 +37,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
-71 passed      # declarative + opt-in Ruby bridge/API + compiler flags
+72 passed      # declarative + opt-in Ruby bridge/API + compiler flags + Utils modules
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_patches.py tests/test_post_install.py
 47 passed      # patch url/file/:DATA application + post_install
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py tests/test_service_ruby.py
@@ -456,6 +456,12 @@ local remote, commits a change, and confirms the CLI updates it.
   `container type: :nupkg` (and other type values are preserved).
 - Archive detection still uses suffix/magic; `nupkg` archives are zip payloads
   and already extract as zip.
+
+## Utils submodules
+
+- Added `Utils::Git`, `Utils::Curl`, `Utils::Gzip`, `Utils::Tar`, `Utils::Zip`,
+  `Utils::Cp`, `Utils::Popen` wrappers and `ENV.superenv?`.
+- These are thin wrappers over the existing `Utils` subprocess/file helpers.
 
 ## Final parallel batch
 

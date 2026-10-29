@@ -1184,6 +1184,58 @@ module Utils
   end
 end
 
+module Utils
+  module Git
+    def self.git(*args)
+      Utils.git(*args)
+    end
+
+    def self.available?
+      !Utils.which("git").nil?
+    end
+  end
+
+  module Curl
+    def self.curl(*args)
+      Utils.curl(*args)
+    end
+  end
+
+  module Gzip
+    def self.gzip(*args)
+      Utils.gzip(*args)
+    end
+  end
+
+  module Tar
+    def self.tar(*args)
+      Utils.safe_system("tar", *args)
+    end
+  end
+
+  module Zip
+    def self.zip(*args)
+      Utils.safe_system("zip", *args)
+    end
+  end
+
+  module Cp
+    def self.cp(source, destination, **options)
+      FileUtils.cp_r(source.to_s, destination.to_s, **options)
+    end
+  end
+
+  module Popen
+    def self.popen_read(*args, **options)
+      Utils.popen_read(*args, **options)
+    end
+
+    def self.pipe_output(*args)
+      Utils.pipe_output(*args)
+    end
+  end
+end
+
 class Object
   def deep_dup
     Utils.deep_dup(self)
@@ -1661,6 +1713,10 @@ class << ENV
       end
     end
     nil
+  end
+
+  def superenv?
+    true
   end
 
   def compiler
