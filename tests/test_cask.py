@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 import zipfile
@@ -361,3 +362,41 @@ end
         "launchctl": "com.example.helper",
         "quit": "com.example.app",
     }
+
+
+def test_install_completion_artifacts(tmp_path: Path) -> None:
+    archive = tmp_path / "Complety.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("completions/tool.bash", "complete -W tool tool\n")
+        bundle.writestr("completions/_tool", "#compdef tool\n")
+        bundle.writestr("completions/tool.fish", "complete -c tool\n")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "c" / "complety.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        f'''cask "complety" do
+  version "1.0"
+  sha256 "{digest}"
+  url "{archive.as_uri()}"
+  bash_completion "completions/tool.bash"
+  zsh_completion "completions/_tool"
+  fish_completion "completions/tool.fish"
+end
+'''
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    installer.install(CaskLoader(discover_taps([tap])).load("complety"))
+
+    assert (config.prefix / "share/bash-completion/completions/tool.bash").is_file()
+    assert (config.prefix / "share/zsh/site-functions/_tool").is_file()
+    assert (config.prefix / "share/fish/vendor_completions.d/tool.fish").is_file()

@@ -566,17 +566,16 @@ def test_unknown_stanzas_are_recorded_not_fatal(allow_ruby: None) -> None:
     cask = evaluate_cask_source(source)
 
     assert cask.version == "1.0"
-    assert [item.kind for item in cask.artifacts] == ["app"]
+    assert [item.kind for item in cask.artifacts] == ["zsh_completion", "app"]
     unsupported = cask.extra["ruby_unsupported"]
     assert [entry["stanza"] for entry in unsupported] == [
         "container",
         "rename",
-        "zsh_completion",
         "preflight_steps",
     ]
     assert unsupported[0]["kwargs"] == {"type": ":naked"}
     assert unsupported[1]["args"] == ["Old.app", "New.app"]
-    assert unsupported[3]["block"] is True
+    assert unsupported[2]["block"] is True
     warnings = cask.extra["ruby_warnings"]
     assert any("container" in warning for warning in warnings)
 

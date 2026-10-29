@@ -165,10 +165,12 @@ _ARTIFACT_KINDS = frozenset(
     {
         "app",
         "appimage",
+        "bash_completion",
         "artifact",
         "audio_unit_plugin",
         "binary",
         "colorpicker",
+        "fish_completion",
         "dictionary",
         "font",
         "input_method",
@@ -183,6 +185,7 @@ _ARTIFACT_KINDS = frozenset(
         "suite",
         "vst3_plugin",
         "vst_plugin",
+        "zsh_completion",
     }
 )
 

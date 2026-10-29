@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-481 passed, 5 skipped in 91.55s
+482 passed, 5 skipped in 64.98s
 ```
 
 Breakdown of the feature slices:
@@ -33,7 +33,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_ruby.py
-54 passed      # cask base + Ruby evaluator + --ruby-cask CLI + script merge
+55 passed      # cask base + Ruby evaluator + completion artifacts
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
@@ -419,6 +419,14 @@ local remote, commits a change, and confirms the CLI updates it.
   `uses_from_macos`, `requirements`, `conflicts` and `link_overwrite`.
 - Payload carries each category separately; `deps`/`runtime_dependencies` keep
   their existing merged/runtime semantics.
+
+## Cask shell completion artifacts
+
+- Added `bash_completion`, `zsh_completion`, `fish_completion` artifact kinds.
+- Installer copies them under `<prefix>/share/bash-completion/completions`,
+  `<prefix>/share/zsh/site-functions` and
+  `<prefix>/share/fish/vendor_completions.d`.
+- Supported by both the literal parser and arbitrary-Ruby evaluator.
 
 ## Final parallel batch
 

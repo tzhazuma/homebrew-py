@@ -467,6 +467,12 @@ def _safe_extract_zip(archive: Path, destination: Path) -> None:
 
 # Homebrew-style artifact kinds that install into the user's Library tree.
 # Values are paths relative to CaskInstaller.library_root.
+COMPLETION_ARTIFACT_DIRS: dict[str, str] = {
+    "bash_completion": "share/bash-completion/completions",
+    "zsh_completion": "share/zsh/site-functions",
+    "fish_completion": "share/fish/vendor_completions.d",
+}
+
 LIBRARY_ARTIFACT_DIRS: dict[str, str] = {
     "font": "Fonts",
     "colorpicker": "ColorPickers",
@@ -900,6 +906,10 @@ class CaskInstaller:
                     if not destination.exists():
                         shutil.copytree(app_source, destination, symlinks=True)
                         installed.append(str(destination))
+            elif artifact.kind in COMPLETION_ARTIFACT_DIRS:
+                self._install_completion_artifact(
+                    cask, artifact, source_root, force, installed
+                )
             elif artifact.kind in LIBRARY_ARTIFACT_DIRS:
                 self._install_library_artifact(
                     cask, artifact, source_root, force, installed
@@ -910,6 +920,29 @@ class CaskInstaller:
             else:
                 raise CaskError(f"{cask.token}: unsupported artifact {artifact.kind}")
         return installed
+
+    def _install_completion_artifact(
+        self,
+        cask: Cask,
+        artifact: Artifact,
+        source_root: Path,
+        force: bool,
+        installed: list[str],
+    ) -> None:
+        source = self._find(source_root, artifact.source)
+        if source is None:
+            raise CaskError(
+                f"{cask.token}: {artifact.kind} {artifact.source!r} not found in archive"
+            )
+        relative = _safe_artifact_target(artifact.target, source.name, cask.token)
+        destination = self.config.prefix / COMPLETION_ARTIFACT_DIRS[artifact.kind] / relative
+        if destination.exists() or destination.is_symlink():
+            if not force:
+                raise CaskError(f"{cask.token}: {destination} already exists")
+            self._remove_path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        installed.append(str(destination))
 
     def _install_library_artifact(
         self,
