@@ -1361,6 +1361,11 @@ class RubyFormulaParser:
                     spec.url = str(inner_args[0])
                 else:
                     spec.unsupported_reason = "patch url is missing"
+            elif inner == "file":
+                if inner_args:
+                    spec.file = str(inner_args[0])
+                else:
+                    spec.unsupported_reason = "patch file is missing"
             elif inner == "sha256":
                 if inner_args:
                     value = str(inner_args[0])

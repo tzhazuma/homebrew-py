@@ -1141,6 +1141,21 @@ class SourceBuilder:
         if patch.data is not None:
             content = patch.data.encode("utf-8")
             label = f"inline patch #{index}"
+        elif patch.file:
+            path = Path(patch.file)
+            if not path.is_absolute():
+                if self.formula.path is None:
+                    raise BuildError(
+                        f"{name}: patch #{index} file {patch.file!r} needs a formula path"
+                    )
+                path = Path(self.formula.path).parent / path
+            try:
+                content = path.read_bytes()
+            except OSError as error:
+                raise BuildError(
+                    f"{name}: cannot read patch #{index} file {path}: {error}"
+                ) from error
+            label = str(path)
         else:
             if not patch.url:
                 raise BuildError(f"{name}: patch #{index} has no url or inline data")

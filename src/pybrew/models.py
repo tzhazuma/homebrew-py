@@ -113,6 +113,7 @@ class PatchSpec:
     """
 
     url: Optional[str] = None
+    file: Optional[str] = None
     sha256: Optional[str] = None
     strip: int = 1
     data: Optional[str] = None

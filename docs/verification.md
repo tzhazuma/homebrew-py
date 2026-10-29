@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-375 passed, 6 skipped in 687.33s
+379 passed, 5 skipped in 84.83s
 ```
 
 Breakdown of the feature slices:
@@ -39,7 +39,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py test
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
 65 passed      # declarative + opt-in Ruby bridge/API + resource staging + compiler helpers
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_patches.py tests/test_post_install.py
-45 passed      # patch application + post_install
+47 passed      # patch url/file/:DATA application + post_install
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
 34 passed      # service DSL fields + launchd/systemd rendering
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_formula_test.py
@@ -348,8 +348,9 @@ local remote, commits a change, and confirms the CLI updates it.
 ## Patch / post_install / compiler batch
 
 - Formula `patch do ... end` / `patch :DATA` is parsed and applied with
-  `patch -pN` before install; inline patches supported; missing checksum,
-  downloader or patch command fails clearly.
+  `patch -pN` before install; `url`, relative `file` and inline patches are
+  supported; missing checksum, downloader, formula path or patch command fails
+  clearly.
 - Formula `post_install do ... end` runs after install/link under Ruby; failures
   abort and receipt records `post_install_ran`.
 - Opt-in Ruby ENV gained compiler helpers (`append_to_cflags`, `O0..O3`,

@@ -203,7 +203,7 @@ __END__
     assert formula.patches[0].data == diff
 
 
-def test_file_patch_is_reported_not_silently_skipped() -> None:
+def test_file_patch_is_captured() -> None:
     source = '''class FilePatchFixture < Formula
   url "https://example.com/file-patch-1.0.tar.gz"
   sha256 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -219,8 +219,8 @@ end
     formula = parse_formula_source(source, name="file-patch-fixture")
 
     assert len(formula.patches) == 1
-    assert formula.patches[0].unsupported_reason
-    assert "file" in formula.patches[0].unsupported_reason
+    assert formula.patches[0].file == "Patches/fix.diff"
+    assert formula.patches[0].unsupported_reason is None
 
 
 def test_patch_data_without_end_section_is_reported() -> None:
@@ -435,7 +435,7 @@ end
 '''
     formula = parse_formula_source(source, name="file-patch-fixture")
 
-    with pytest.raises(BuildError, match="unsupported"):
+    with pytest.raises(BuildError, match="needs a formula path"):
         _build(tmp_path, formula, downloader=None, build_root=project)
 
 
@@ -583,3 +583,29 @@ end
 
     installed = config.keg_path("hello", "1.0") / "bin" / "hello.txt"
     assert installed.read_text() == "hello installed patched\n"
+
+
+def test_patch_file_is_resolved_relative_to_formula(tmp_path: Path) -> None:
+    build_root = tmp_path / "build"
+    build_root.mkdir()
+    (build_root / "hello.txt").write_text("hello\n")
+
+    formula_dir = tmp_path / "tap" / "Formula"
+    formula_dir.mkdir(parents=True)
+    patch_file = formula_dir / "local.patch"
+    patch_file.write_text(_diff("hello.txt", "hello\n", "hello local\n"))
+    formula = _formula()
+    formula.path = formula_dir / "patched.rb"
+    formula.patches = [PatchSpec(file="local.patch", strip=1)]
+
+    keg = _build(tmp_path, formula, build_root=build_root)
+    assert (keg / "bin" / "hello.txt").read_text() == "hello local\n"
+
+
+def test_patch_file_missing_fails_clearly(tmp_path: Path) -> None:
+    formula = _formula()
+    formula.path = tmp_path / "Formula" / "patched.rb"
+    formula.patches = [PatchSpec(file="missing.patch")]
+
+    with pytest.raises(BuildError, match="cannot read patch"):
+        _build(tmp_path, formula)

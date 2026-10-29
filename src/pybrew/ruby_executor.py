@@ -2201,8 +2201,66 @@ class PybrewFormulaRef
     prefix + "test"
   end
 
+  def desc
+    @info["desc"].to_s
+  end
+
+  def homepage
+    @info["homepage"].to_s
+  end
+
+  def license
+    @info["license"]
+  end
+
+  def tap
+    @info["tap"]
+  end
+
+  def path
+    raw = @info["path"]
+    raw.nil? || raw.to_s.empty? ? nil : Pathname.new(raw.to_s)
+  end
+
   def keg_only?
-    false
+    !!@info["keg_only"]
+  end
+
+  def keg_only_reason
+    @info["keg_only_reason"]
+  end
+
+  def versioned_formula?
+    name.include?("@")
+  end
+
+  def linked_keg
+    link = opt_prefix
+    return nil unless link.symlink?
+
+    Pathname.new(link.readlink).basename.to_s
+  rescue StandardError
+    nil
+  end
+
+  def optlinked?
+    !linked_keg.nil?
+  end
+
+  def spec
+    :stable
+  end
+
+  def stable
+    @info["stable"] || {}
+  end
+
+  def head
+    @info["head"] || {}
+  end
+
+  def bottle
+    @info["bottle"]
   end
 end
 
@@ -2844,6 +2902,16 @@ def _formula_reference_map(
         "opt_prefix": str(config.opt_path(formula.name)),
         "dependencies": dependencies,
         "runtime_dependencies": _runtime_dependency_names(formula),
+        "desc": formula.desc,
+        "homepage": formula.homepage,
+        "license": formula.license,
+        "tap": formula.tap,
+        "path": str(formula.path) if formula.path is not None else None,
+        "keg_only": bool(formula.keg_only),
+        "keg_only_reason": formula.keg_only_reason,
+        "stable": {"url": formula.stable.url, "sha256": formula.stable.sha256},
+        "head": {"url": formula.head.url},
+        "bottle": None,
         "resources": {},
     }
     entries: dict[str, dict[str, Any]] = {formula.name: current}

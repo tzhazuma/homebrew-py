@@ -1439,3 +1439,39 @@ def test_superenv_compiler_and_build_helpers(
     assert lines[7] in ("true", "false")
     assert lines[8] in ("true", "false")
     assert lines[9] in ("true", "false")
+
+
+def test_formula_metadata_and_keg_only_api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-metadata",
+        "1.0",
+        (
+            '  ref = Formula["ruby-metadata"]\n'
+            '  (prefix/"meta").write [\n'
+            '    ref.desc, ref.homepage, ref.license.to_s, ref.tap.to_s,\n'
+            '    ref.versioned_formula?, ref.keg_only?, ref.spec,\n'
+            '    ref.linked_keg.to_s, ref.optlinked?\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.desc = "metadata fixture"
+    formula.homepage = "https://example.com/metadata"
+    formula.license = "MIT"
+    formula.tap = "homebrew/core"
+    formula.keg_only = True
+    formula.path = tmp_path / "Formula" / "ruby-metadata.rb"
+
+    keg = _build(tmp_path, formula)
+    lines = (keg / "meta").read_text().splitlines()
+    assert lines[0] == "metadata fixture"
+    assert lines[1] == "https://example.com/metadata"
+    assert lines[2] == "MIT"
+    assert lines[3] == "homebrew/core"
+    assert lines[4] == "false"
+    assert lines[5] == "true"
+    assert lines[6] == "stable"
+    assert lines[7] == ""
+    assert lines[8] == "false"
