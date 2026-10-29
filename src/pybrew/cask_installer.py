@@ -236,16 +236,54 @@ module Hardware
   end
 end
 
+# Argument normalisation shared by the ``system``/``system_command`` helpers.
+# Cask scripts use several call styles, so accept a leading environment hash,
+# positional argument lists, a trailing options hash, and the keyword forms
+# ``env:``/``chdir:``.  Commands are always executed without a shell unless the
+# caller passes a single string (the usual ``Kernel.system`` behaviour).
+module PybrewCaskSystem
+  module_function
+
+  def stringify_environment(environment)
+    return {} unless environment.is_a?(Hash)
+
+    environment.each_with_object({}) do |(key, value), normalized|
+      normalized[key.to_s] = value.nil? ? nil : value.to_s
+    end
+  end
+
+  def normalize(args, options = {}, label = "system")
+    arguments = args.dup
+    options = options.dup
+    environment = arguments.shift if arguments.first.is_a?(Hash)
+    trailing = arguments.pop if arguments.last.is_a?(Hash)
+    options = trailing.merge(options) if trailing
+    env_option = options.delete(:env)
+    environment = (environment || {}).merge(env_option) if env_option.is_a?(Hash)
+    chdir = options.delete(:chdir)
+    options[:chdir] = chdir.to_s unless chdir.nil?
+    command = arguments.flatten.compact.map(&:to_s)
+    raise ArgumentError, "#{label}: no command given" if command.empty?
+
+    [stringify_environment(environment), command, options]
+  end
+
+  def run(args, options = {}, label = "system")
+    environment, command, spawn_options = normalize(args, options, label)
+    Kernel.system(environment, *command, **spawn_options)
+  end
+end
+
 # Command helpers used by some cask scripts through ``Utils``.  They are
 # intentionally limited to non-interactive execution: no sudo helper is
 # provided and pybrew never prompts for a password.
 module Utils
   module_function
 
-  def safe_system(*args)
+  def safe_system(*args, **options)
     raise ArgumentError, "Utils.safe_system: no command given" if args.empty?
 
-    success = Kernel.system(*args)
+    success = PybrewCaskSystem.run(args, options, "Utils.safe_system")
     unless success
       status = $?
       code = status.respond_to?(:exitstatus) ? status.exitstatus : 1
@@ -254,10 +292,11 @@ module Utils
     true
   end
 
-  def quiet_system(*args)
+  def quiet_system(*args, **options)
     return false if args.empty?
 
-    Kernel.system(*args, out: File::NULL, err: File::NULL)
+    PybrewCaskSystem.run(args, { out: File::NULL, err: File::NULL }.merge(options),
+                         "Utils.quiet_system")
   rescue StandardError
     false
   end
@@ -282,7 +321,7 @@ class PybrewCaskScriptResult
 end
 
 class PybrewCaskScriptContext
-  attr_reader :token, :version, :appdir, :staged_path, :bin, :prefix
+  attr_reader :token, :version, :bin, :prefix
 
   def initialize(token:, version:, appdir:, staged_path:, bin:, prefix:)
     @token = token
@@ -293,29 +332,56 @@ class PybrewCaskScriptContext
     @prefix = Pathname(prefix)
   end
 
-  def system_command(command, args: [], env: {}, print_stdout: false,
-                     print_stderr: true, sudo: false, **_options)
-    argv = [command.to_s, *Array(args).map(&:to_s)]
-    argv.unshift("sudo") if sudo && Process.uid != 0
-    stdout, stderr, status = Open3.capture3(env.transform_keys(&:to_s), *argv)
+  # ``appdir`` and ``staged_path`` are Pathname objects, matching the Homebrew
+  # cask DSL, so scripts can use ``appdir.join("Foo.app")`` and friends.
+  def appdir
+    @appdir
+  end
+
+  def staged_path
+    @staged_path
+  end
+
+  # Accepts the Homebrew keyword form (``args:``/``env:``/``chdir:``), a plain
+  # positional argument list, and the leading environment hash form:
+  #
+  #   system_command "/bin/echo", args: ["hi"], env: { "LC_ALL" => "C" }
+  #   system_command "/bin/echo", "hi"
+  #   system_command ["/bin/echo", "hi"]
+  #   system_command({ "LC_ALL" => "C" }, "/bin/echo", "hi")
+  def system_command(command = nil, *positional, **options)
+    options = options.dup
+    args_option = options.delete(:args)
+    print_stdout = options.delete(:print_stdout)
+    print_stderr = options.key?(:print_stderr) ? options.delete(:print_stderr) : true
+    if options.delete(:sudo) || options.delete(:sudo_as_root)
+      raise ArgumentError, "system_command: sudo is not supported by pybrew cask scripts"
+    end
+    arguments = [command, *Array(args_option), *positional]
+    environment, argv, spawn_options =
+      PybrewCaskSystem.normalize(arguments, options, "system_command")
+    stdout, stderr, status = Open3.capture3(environment, *argv, **spawn_options)
     $stdout.print(stdout) if print_stdout && !stdout.empty?
     $stderr.print(stderr) if print_stderr && !stderr.empty?
     PybrewCaskScriptResult.new(stdout: stdout, stderr: stderr,
                                exit_status: status.exitstatus || 1)
   end
 
-  def system_command!(command, **options)
-    result = system_command(command, **options)
+  def system_command!(*args, **options)
+    result = system_command(*args, **options)
     unless result.success?
-      raise "command failed (exit #{result.exit_status}): #{command}"
+      raise "command failed (exit #{result.exit_status}): #{args.flatten.compact.join(' ')}"
     end
     result
   end
 
+  # Same call styles as ``system_command`` (minus the captured-output
+  # options); returns true/false and raises when no command is given.
   def system(*args, **options)
+    options = options.dup
     command = options.delete(:command)
-    args = [command, *Array(options.delete(:args))] if command
-    Kernel.system(*args.map(&:to_s))
+    args = [command, *Array(options.delete(:args)), *args] unless command.nil?
+    PybrewCaskSystem.run(args, options, "system") ? true : false
   end
 
   def shell_command(command, **options)

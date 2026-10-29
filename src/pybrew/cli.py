@@ -27,6 +27,7 @@ from .cellar import Cellar, Linker, read_receipt
 from .doctor import diagnose, diagnose_issues
 from .download import Downloader
 from .errors import FormulaNotFound, PybrewError, UsageError
+from .formula_test import FormulaTestError, run_formula_test
 from .installer import InstallOptions, Installer
 from .maintenance import (
     autoremove,
@@ -290,6 +291,9 @@ def build_parser() -> argparse.ArgumentParser:
     parse = subparsers.add_parser("parse", parents=[common], help="parse a formula file (debug)")
     parse.add_argument("file", type=Path)
     parse.add_argument("--json", action="store_true")
+
+    test_cmd = subparsers.add_parser("test", parents=[common], help="run a formula's test block")
+    test_cmd.add_argument("formula")
     return parser
 
 
@@ -1346,6 +1350,24 @@ def cmd_analytics(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_test(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    loader = _loader(config)
+    formula = _load_formula(args.formula, loader)
+    try:
+        result = run_formula_test(formula, config)
+    except FormulaTestError as error:
+        print(f"FAIL: {formula.name}")
+        details = str(error).strip()
+        if details:
+            print(f"Error: {details}", file=sys.stderr)
+        return 1
+    print(f"PASS: {formula.name}")
+    if getattr(args, "verbose", False) and result.stdout:
+        print(result.stdout, end="")
+    return 0
+
+
 def cmd_parse(args: argparse.Namespace) -> int:
     path = Path(args.file).expanduser()
     if not path.is_file():
@@ -1395,6 +1417,7 @@ _COMMANDS = {
     "config": cmd_config,
     "analytics": cmd_analytics,
     "parse": cmd_parse,
+    "test": cmd_test,
 }
 
 

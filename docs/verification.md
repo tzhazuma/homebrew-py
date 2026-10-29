@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-219 passed, 5 skipped in 51.41s
+257 passed, 5 skipped in 81.35s
 ```
 
 Breakdown of the feature slices:
@@ -32,10 +32,14 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 17 passed      # 15 parametrized real formulae + 2 aggregate checks
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
-$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_scripts.py tests/test_cask_rollback.py
-70 passed      # base/depth/system install/uninstall/scripts/rollback
-$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py
-33 passed      # declarative + expanded opt-in Ruby bridge
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_scripts.py
+40 passed      # cask base + expanded script shim
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
+38 passed      # depth/system install/uninstall/rollback
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
+48 passed      # declarative + expanded opt-in Ruby bridge/API
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_formula_test.py
+16 passed      # formula test DSL + CLI
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
 8 passed       # launchd + systemd unit generation, orphan cleanup
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_taps.py
@@ -298,6 +302,20 @@ editor.
 `update` updates every installed tap via `git pull --ff-only`; the test taps a
 local remote, commits a change, and confirms the CLI updates it.
 
+## Ruby API expansion batch
+
+- Opt-in Ruby shim now covers a broad common subset: Pathname extensions,
+  Utils (inflections/IO/git/curl/gzip), Hardware::CPU, OS::Mac/Linux, MacOS
+  SDK/language fallbacks, ENV compiler helpers, `Formula[]` lookup,
+  `resource` staged-path errors, `patch`/`option`/`depends_on` warnings, and
+  clear `method_missing` failures.
+- New `pybrew test <formula>` runs the captured `test do ... end` under Ruby
+  with shell_output/pipe_output/assert_*; 16 tests.
+- This is **not** the complete Homebrew Ruby API: full Formula/spec/resource
+  download/patch application, Homebrew internals, superenv/compiler selection,
+  services DSL and many cask APIs remain incomplete. See
+  `docs/ruby-api-coverage.md`.
+
 ## Final parallel batch
 
 - Cask preflight/postflight scripts are parsed inertly and executed only with
@@ -385,7 +403,7 @@ install, `doctor`, `list`, `deps`, `search`, `config`, and `parse`.
 - Cask login items and complete script API coverage; exotic cask script APIs
   outside the shim still fail explicitly.
 - `brew lgtm`, remaining advanced Brewfile options.
-- Full Homebrew Ruby API coverage; the bridge remains an opt-in shim.
+- Full Homebrew Ruby API coverage; the bridge/test runner remain partial shims.
 
 These are tracked in the README roadmap and `docs/parity.md`.
 

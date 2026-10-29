@@ -1,14 +1,19 @@
 """Tests for opt-in cask preflight/postflight scripts.
 
-No test executes Ruby and no captured cask source is ever evaluated: every
-install that opts in points ``PYBREW_RUBY`` at a throwaway POSIX shell script
-which records its argv and exits with a configurable status.
+No test executes a captured cask script body and no test evaluates untrusted
+cask source: every install that opts in points ``PYBREW_RUBY`` at a throwaway
+POSIX shell script which records its argv and exits with a configurable status.
+One compile-only test (``ruby -c``) checks that the generated shim parses; it
+never runs a script body.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import shutil
+import subprocess
+import tempfile
 import zipfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -580,3 +585,232 @@ def test_generated_shim_file_contains_expanded_api(
     ):
         assert snippet in shim
     assert "def sudo" not in shim
+
+
+# -- shim: command helpers and Pathname accessors ----------------------
+
+
+def test_ruby_shim_command_helpers_support_env_chdir_and_positional_forms() -> None:
+    from pybrew.cask_installer import _CASK_SCRIPT_SHIM
+
+    for snippet in (
+        "module PybrewCaskSystem",
+        "def stringify_environment",
+        'def normalize(args, options = {}, label = "system")',
+        'def run(args, options = {}, label = "system")',
+        "environment = arguments.shift if arguments.first.is_a?(Hash)",
+        "options.delete(:env)",
+        "options.delete(:chdir)",
+        "options[:chdir] = chdir.to_s unless chdir.nil?",
+        "def system_command(command = nil, *positional, **options)",
+        "args_option = options.delete(:args)",
+        "arguments = [command, *Array(args_option), *positional]",
+        "Open3.capture3(environment, *argv, **spawn_options)",
+        "def system_command!(*args, **options)",
+        "def system(*args, **options)",
+        'PybrewCaskSystem.run(args, options, "system")',
+        "Kernel.system(environment, *command, **spawn_options)",
+    ):
+        assert snippet in _CASK_SCRIPT_SHIM
+    # Utils uses the same normalisation, so it accepts env:/chdir: as well.
+    assert "PybrewCaskSystem.run(args, options, \"Utils.safe_system\")" in _CASK_SCRIPT_SHIM
+    assert '"Utils.quiet_system"' in _CASK_SCRIPT_SHIM
+
+
+def test_ruby_shim_exposes_pathname_cask_accessors() -> None:
+    from pybrew.cask_installer import _CASK_SCRIPT_SHIM
+
+    assert "attr_reader :token, :version, :bin, :prefix" in _CASK_SCRIPT_SHIM
+    for accessor in ("appdir", "staged_path"):
+        assert f"def {accessor}" in _CASK_SCRIPT_SHIM
+    # Both accessors are Pathname objects, matching the Homebrew cask DSL.
+    assert "@appdir = Pathname(appdir)" in _CASK_SCRIPT_SHIM
+    assert "@staged_path = Pathname(staged_path)" in _CASK_SCRIPT_SHIM
+    assert "@bin = Pathname(bin)" in _CASK_SCRIPT_SHIM
+    assert "@prefix = Pathname(prefix)" in _CASK_SCRIPT_SHIM
+
+
+def test_ruby_shim_has_no_sudo_execution_path() -> None:
+    from pybrew.cask_installer import _CASK_SCRIPT_SHIM
+
+    # No sudo helper and no code path that rewrites an argv to run sudo.
+    assert "def sudo" not in _CASK_SCRIPT_SHIM
+    assert "argv.unshift" not in _CASK_SCRIPT_SHIM
+    assert "Process.uid" not in _CASK_SCRIPT_SHIM
+    # Requesting sudo fails loudly rather than silently dropping the option.
+    assert "sudo is not supported" in _CASK_SCRIPT_SHIM
+
+
+def test_generated_shim_is_valid_ruby_syntax_without_running_a_body() -> None:
+    """Compile-only check: ``ruby -c`` parses the shim, nothing is evaluated."""
+
+    ruby = shutil.which("ruby")
+    if ruby is None:
+        pytest.skip("Ruby is not available for a compile-only shim check")
+    from pybrew.cask_installer import _CASK_SCRIPT_SHIM
+
+    with tempfile.TemporaryDirectory(prefix="pybrew-shim-syntax-") as temporary:
+        shim = Path(temporary) / "cask_script_shim.rb"
+        shim.write_text(_CASK_SCRIPT_SHIM, encoding="utf-8")
+        proc = subprocess.run(
+            [ruby, "-c", str(shim)],
+            text=True,
+            capture_output=True,
+        )
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert "Syntax OK" in proc.stdout
+
+
+# -- install: expanded API default no-op and exact argv ----------------
+
+# Records every argument position and copies the generated shim plus the
+# captured body, proving they are separate files.  It never interprets Ruby.
+EXACT_ARGV_RUBY = """#!/bin/sh
+mkdir -p "$FAKE_BODY_CAPTURE_DIR"
+{
+  printf 'argc=%s\\n' "$#"
+  index=1
+  for argument in "$@"; do
+    printf 'arg%s=%s\\n' "$index" "$argument"
+    index=$((index + 1))
+  done
+  printf 'cwd=%s\\n' "$PWD"
+  printf '%s\\n' '---'
+} >> "$FAKE_RUBY_LOG"
+cp "$1" "$FAKE_SHIM_CAPTURE"
+cp "$9" "$FAKE_BODY_CAPTURE_DIR/$2.rb"
+exit 0
+"""
+
+
+def test_default_install_does_not_run_env_chdir_script_api(
+    script_env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_cask(
+        script_env.tap,
+        "envchdir",
+        "1.0",
+        script_env.digest,
+        script_env.archive,
+        "  preflight do\n"
+        '    system_command "/usr/bin/true", "positional", args: ["keyword"],\n'
+        '                   env: { "PYBREW_TEST" => "1" }, chdir: staged_path.to_s\n'
+        "  end\n"
+        "  postflight do\n"
+        '    system "/usr/bin/true", env: { "PYBREW_TEST" => "1" }, chdir: appdir.to_s\n'
+        "  end",
+    )
+    marker = script_env.tmp_path / "ruby-called"
+    fake = script_env.tmp_path / "fake-ruby"
+    fake.write_text(f"#!/bin/sh\ntouch \"{marker}\"\nexit 1\n", encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PYBREW_RUBY", str(fake))
+
+    installer = CaskInstaller(script_env.config)
+    result = installer.install(script_env.loader.load("envchdir"))
+
+    assert result.skipped is False
+    assert not marker.exists()
+    assert (script_env.config.applications / "Scripty.app").is_dir()
+    receipt = _receipt(result.room)
+    assert receipt["scripts_requested"] is False
+    assert receipt["script_results"] == {}
+
+
+def test_run_scripts_enabled_executes_env_chdir_script_api(
+    script_env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_cask(
+        script_env.tap,
+        "envchdirrun",
+        "1.0",
+        script_env.digest,
+        script_env.archive,
+        "  preflight do\n"
+        '    system_command "/usr/bin/true", "positional", args: ["keyword"],\n'
+        '                   env: { "PYBREW_TEST" => "1" }, chdir: staged_path.to_s\n'
+        "  end\n"
+        "  postflight do\n"
+        '    system "/usr/bin/true", env: { "PYBREW_TEST" => "1" }, chdir: appdir.to_s\n'
+        "  end",
+    )
+    _, log = _fake_ruby(script_env.tmp_path, monkeypatch)
+
+    installer = CaskInstaller(script_env.config, run_scripts=True)
+    result = installer.install(script_env.loader.load("envchdirrun"))
+
+    entries = _read_log(log)
+    assert [entry["name"] for entry in entries] == ["preflight", "postflight"]
+    assert entries[0]["app_state"] == "absent"
+    assert entries[1]["app_state"] == "present"
+    assert entries[0]["token"] == "envchdirrun"
+    assert _receipt(result.room)["script_results"] == {
+        "preflight": {"status": "ok", "exit_code": 0},
+        "postflight": {"status": "ok", "exit_code": 0},
+    }
+
+
+def test_fake_ruby_receives_shim_and_body_as_separate_files(
+    script_env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pybrew.cask_installer import _CASK_SCRIPT_SHIM
+
+    _write_cask(
+        script_env.tap,
+        "argvy",
+        "2.0",
+        script_env.digest,
+        script_env.archive,
+        '  preflight do\n    puts "preflight-body"\n  end\n'
+        '  postflight do\n    puts "postflight-body"\n  end',
+    )
+    cask = script_env.loader.load("argvy")
+
+    script = script_env.tmp_path / "argv-ruby"
+    log = script_env.tmp_path / "argv-ruby.log"
+    shim_capture = script_env.tmp_path / "captured-shim.rb"
+    body_dir = script_env.tmp_path / "captured-bodies"
+    body_dir.mkdir()
+    script.write_text(EXACT_ARGV_RUBY, encoding="utf-8")
+    script.chmod(0o755)
+    monkeypatch.setenv("PYBREW_RUBY", str(script))
+    monkeypatch.setenv("FAKE_RUBY_LOG", str(log))
+    monkeypatch.setenv("FAKE_SHIM_CAPTURE", str(shim_capture))
+    monkeypatch.setenv("FAKE_BODY_CAPTURE_DIR", str(body_dir))
+
+    installer = CaskInstaller(script_env.config, run_scripts=True)
+    result = installer.install(cask)
+
+    entries = _read_log(log)
+    assert [entry["arg2"] for entry in entries] == ["preflight", "postflight"]
+    preflight, postflight = entries
+    # Nine arguments after the interpreter: shim path, script name, token,
+    # version, appdir, staged_path, bin, prefix and the captured body file.
+    for entry in (preflight, postflight):
+        assert entry["argc"] == "9"
+        assert "arg10" not in entry
+        assert Path(entry["arg1"]).name == "cask_script_shim.rb"
+        assert Path(entry["arg9"]).name == f"{entry['arg2']}.rb"
+    assert preflight["arg3"] == "argvy"
+    assert preflight["arg4"] == "2.0"
+    assert preflight["arg5"] == str(script_env.config.applications)
+    assert preflight["arg6"] == str(result.room)
+    assert preflight["arg7"] == str(script_env.config.bin)
+    assert preflight["arg8"] == str(script_env.config.prefix)
+    assert preflight["cwd"] == postflight["cwd"]
+    assert Path(preflight["cwd"]).name.startswith("pybrew-cask-")
+
+    # The shim and the body are separate files: the body is never interpolated
+    # into the shim source, and the body file is exactly the captured block.
+    shim_text = shim_capture.read_text(encoding="utf-8")
+    assert shim_text == _CASK_SCRIPT_SHIM
+    assert "preflight-body" not in shim_text
+    preflight_body = (body_dir / "preflight.rb").read_text(encoding="utf-8")
+    postflight_body = (body_dir / "postflight.rb").read_text(encoding="utf-8")
+    assert preflight_body == cask.preflight + "\n"
+    assert "preflight-body" in preflight_body
+    assert "postflight-body" in postflight_body
+    assert _receipt(result.room)["script_results"] == {
+        "preflight": {"status": "ok", "exit_code": 0},
+        "postflight": {"status": "ok", "exit_code": 0},
+    }

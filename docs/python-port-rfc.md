@@ -61,7 +61,7 @@ A clean-room Python 3.9+ package (`pybrew`) with no runtime dependencies:
 
 ## Validation
 
-- 219 tests pass, 5 opt-in tests skipped (`pytest -q`).
+- 257 tests pass, 5 opt-in tests skipped (`pytest -q`).
 - 15 real homebrew-core formulae (bash, git, curl, openssl@3, python@3.12, ...)
   parse to exactly the desc/homepage/license/version/dependency values returned
   by `brew info --json=v2` (Homebrew 7.0.9).
@@ -83,7 +83,7 @@ A clean-room Python 3.9+ package (`pybrew`) with no runtime dependencies:
 - Full cask coverage: package scripts, login items and system pkg
   uninstall/rollback are not implemented.
 - Analytics is local-only and opt-in; no telemetry upload. Arbitrary Ruby is an
-  opt-in shim, not a full Homebrew Ruby environment. Some advanced Brewfile
+  opt-in shim, not the complete Homebrew Ruby API. Some advanced Brewfile
   options and full Ruby API coverage remain incomplete.
 - Running arbitrary Ruby from formulae.
 

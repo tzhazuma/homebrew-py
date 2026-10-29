@@ -31,7 +31,7 @@ asks three concrete questions:
 
 ## Testing
 
-- `pytest -q` in the linked prototype: **219 passed, 5 skipped**.
+- `pytest -q` in the linked prototype: **257 passed, 5 skipped**.
 - 15 real homebrew-core formulae parse to exactly the desc/homepage/license/
   version/dependency values returned by `brew info --json=v2` (Homebrew 7.0.9).
 - A real cached `libslirp 4.9.6` Homebrew bottle installs offline; synthetic
@@ -41,8 +41,9 @@ asks three concrete questions:
   artifact kinds, stage_only, cask upgrade artifact cleanup, on_arm/on_intel
   source conditionals, Brewfile args/mas/vscode/restart_service, opt-in system
   pkg installs with tracked uninstall, opt-in cask scripts, local analytics,
-  opt-in arbitrary-Ruby installs, system pkg upgrade rollback, and real Linux
-  patchelf verification on arm64 and x86_64 (libslirp/tree via OrbStack).
+  opt-in arbitrary-Ruby installs, a partial formula test DSL, system pkg
+  upgrade rollback, and real Linux patchelf verification on arm64 and x86_64
+  (libslirp/tree via OrbStack).
 - No Homebrew Ruby code is copied or executed; the prototype is BSD-2-Clause.
 
 ## AI disclosure and review

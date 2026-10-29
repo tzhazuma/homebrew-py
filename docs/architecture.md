@@ -207,12 +207,18 @@ same for a local cask artifact.
 exposes `analytics state/on/off/log/clear`; successful install/uninstall/upgrade
 commands append local events when enabled.
 
+## Formula tests
+
+`formula_test.py` runs a formula's captured `test do ... end` under Ruby with a
+limited assertion/`shell_output` shim; `pybrew test <formula>` exposes it. The
+runner is opt-in and requires an installed keg.
+
 ## Known limitations
 
 - Source builds support a common literal `def install` subset (on_arm/on_intel,
   predicates, resources and HEAD included); an opt-in Ruby bridge covers
   arbitrary install bodies with a broader Utils/MacOS/OS/Shellwords shim, but not
-  every Homebrew Ruby API.
+  every Homebrew Ruby API; see `docs/ruby-api-coverage.md`.
 - ELF relocation needs `patchelf` for long RPATH replacements; Mach-O uses
   `install_name_tool`; further edge cases remain.
 - Cask `.pkg` payloads are expanded under `--pkg-root`; `--system-pkg` delegates

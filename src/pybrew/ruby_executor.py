@@ -21,6 +21,7 @@ determined.
 from __future__ import annotations
 
 import base64
+import functools
 import json
 import os
 import platform
@@ -36,6 +37,7 @@ from .errors import BuildError, UnsupportedInstall
 from .models import Formula
 from .paths import Config
 from .ruby_parser import Lexer, Token
+from .version import compare_versions
 
 #: Environment variable that opts a build into the arbitrary-Ruby bridge.
 ALLOW_ENV = "PYBREW_ALLOW_ARBITRARY_RUBY"
@@ -232,6 +234,7 @@ def extract_install_body(formula: Formula) -> tuple[str, int]:
 # quotes, heredocs or non-ASCII text in the formula.
 _RUBY_SHIM = r'''
 require "base64"
+require "digest/sha2"
 require "etc"
 require "fileutils"
 require "json"
@@ -275,16 +278,78 @@ module OS
   end
 end
 
+module PybrewCPU
+  module_function
+
+  # A conservative subset of Homebrew's Linux CPU-model table.  Unknown
+  # models fall back to :dunno rather than guessing.
+  def linux_intel_family(family, model)
+    return :dunno unless family == 0x06
+
+    case model
+    when 0x3a, 0x3e then :ivybridge
+    when 0x2a, 0x2d then :sandybridge
+    when 0x25, 0x2c, 0x2f then :westmere
+    when 0x1a, 0x1e, 0x1f, 0x2e then :nehalem
+    when 0x17, 0x1d then :penryn
+    when 0x0f, 0x16 then :merom
+    when 0x3c, 0x3f, 0x45, 0x46 then :haswell
+    when 0x3d, 0x47, 0x4f, 0x56 then :broadwell
+    when 0x4e, 0x5e, 0x8e, 0x9e, 0xa5, 0xa6 then :skylake
+    when 0x66 then :cannonlake
+    when 0x6a, 0x6c, 0x7d, 0x7e then :icelake
+    when 0xa7 then :rocketlake
+    when 0x8c, 0x8d then :tigerlake
+    when 0x97, 0x9a, 0xbe, 0xb7, 0xba, 0xbf, 0xaa, 0xac then :alderlake
+    else :dunno
+    end
+  end
+end
+
 module Hardware
   module CPU
     HOST_CPU = (PYBREW_CONFIG["arch"] || RbConfig::CONFIG["host_cpu"]).to_s.downcase
+
+    INTEL_FAMILIES = {
+      0x73d67300 => :core,
+      0x426f69ef => :core2,
+      0x78ea4fbc => :penryn,
+      0x6b5a4cd2 => :nehalem,
+      0x573b5eec => :westmere,
+      0x5490b78c => :sandybridge,
+      0x1f65e835 => :ivybridge,
+      0x10b282dc => :haswell,
+      0x582ed09c => :broadwell,
+      0x37fc219f => :skylake,
+      0x0f817246 => :kabylake,
+      0x38435547 => :icelake,
+      0x1cf8a03e => :cometlake,
+    }.freeze
+
+    ARM_FAMILIES = {
+      0x2c91a47e => :arm_typhoon,
+      0x92fb37c8 => :arm_twister,
+      0x67ceee93 => :arm_hurricane_zephyr,
+      0xe81e7ef6 => :arm_monsoon_mistral,
+      0x07d34b9f => :arm_vortex_tempest,
+      0x462504d2 => :arm_lightning_thunder,
+      0x573b5eec => :arm_firestorm_icestorm,
+      0xda33d83d => :arm_blizzard_avalanche,
+      0xfa33415e => :arm_ibiza,
+      0x5f4dea93 => :arm_lobos,
+      0x72015832 => :arm_palma,
+      0x6f5129ac => :arm_donan,
+      0x17d5b93a => :arm_brava,
+      0x1d5a87e8 => :arm_hidra,
+      0xf76c5b1a => :arm_sotra,
+    }.freeze
 
     def self.arm?
       !!(HOST_CPU =~ /arm|aarch64/)
     end
 
     def self.arm64?
-      arm?
+      arm? && is_64_bit?
     end
 
     def self.intel?
@@ -292,7 +357,11 @@ module Hardware
     end
 
     def self.x86_64?
-      intel?
+      intel? && is_64_bit?
+    end
+
+    def self.ppc?
+      !!(HOST_CPU =~ /ppc|powerpc/)
     end
 
     def self.is_arm?
@@ -301,6 +370,142 @@ module Hardware
 
     def self.is_intel?
       intel?
+    end
+
+    def self.bits
+      return @bits if defined?(@bits)
+
+      @bits = case HOST_CPU
+              when /x86_64|amd64|aarch64|arm64|ppc64|powerpc64/ then 64
+              when /i[3-6]86|arm|ppc|powerpc/ then 32
+              else
+                RbConfig::CONFIG["host_cpu"].to_s =~ /64/ ? 64 : 32
+              end
+    end
+
+    def self.is_64_bit?
+      bits == 64
+    end
+
+    def self.is_32_bit?
+      bits == 32
+    end
+
+    def self.arch
+      case bits
+      when 64
+        arm? ? :arm64 : (intel? ? :x86_64 : :dunno)
+      when 32
+        arm? ? :arm : (intel? ? :i386 : :dunno)
+      else
+        :dunno
+      end
+    end
+
+    def self.type
+      if arm?
+        :arm
+      elsif intel?
+        :intel
+      elsif ppc?
+        :ppc
+      else
+        :dunno
+      end
+    end
+
+    def self.flags
+      return @flags if defined?(@flags)
+
+      values = []
+      begin
+        if OS.mac?
+          output = `/usr/sbin/sysctl -n machdep.cpu.features machdep.cpu.extfeatures machdep.cpu.leaf7_features 2>/dev/null`.to_s
+          values = output.split
+        elsif File.file?("/proc/cpuinfo")
+          text = File.read("/proc/cpuinfo")
+          match = text[/^(?:flags|Features)\s*:\s*(.*)$/, 1]
+          values = match.to_s.split
+        end
+      rescue StandardError
+        values = []
+      end
+      @flags = values.map { |value| value.to_s.downcase }.uniq
+    end
+
+    def self.features
+      @features ||= flags.map { |flag| flag.to_sym }
+    end
+
+    def self.feature?(name)
+      features.include?(name.to_sym)
+    end
+
+    def self.neon?
+      return true if arm? && OS.mac?
+
+      flags.include?("neon") || flags.include?("asimd")
+    end
+
+    def self.sse4?
+      flags.include?("sse4_1") || flags.include?("sse4_2") || sysctl_flag?("hw.optional.sse4_1")
+    end
+
+    def self.avx?
+      flags.include?("avx") || sysctl_flag?("hw.optional.avx1_0")
+    end
+
+    def self.avx2?
+      flags.include?("avx2") || sysctl_flag?("hw.optional.avx2_0")
+    end
+
+    def self.model
+      return @model if defined?(@model)
+
+      @model = begin
+        if OS.mac?
+          value = sysctl_value("machdep.cpu.model")
+          value.nil? ? nil : (value =~ /\A\d+\z/ ? value.to_i : nil)
+        elsif File.file?("/proc/cpuinfo")
+          match = File.read("/proc/cpuinfo")[/^model\s*:\s*(\d+)/, 1]
+          match.nil? ? nil : match.to_i
+        end
+      rescue StandardError
+        nil
+      end
+    end
+
+    def self.family
+      return @family if defined?(@family)
+
+      @family = begin
+        if OS.mac?
+          value = sysctl_value("hw.cpufamily")
+          key = value.nil? ? nil : value.to_i
+          if arm?
+            ARM_FAMILIES[key] || :dunno
+          elsif intel?
+            INTEL_FAMILIES[key] || :dunno
+          else
+            :dunno
+          end
+        elsif File.file?("/proc/cpuinfo")
+          if arm?
+            :arm
+          elsif intel?
+            text = File.read("/proc/cpuinfo")
+            family_number = text[/^cpu family\s*:\s*(\d+)/, 1].to_i
+            model_number = text[/^model\s*:\s*(\d+)/, 1].to_i
+            PybrewCPU.linux_intel_family(family_number, model_number)
+          else
+            :dunno
+          end
+        else
+          :dunno
+        end
+      rescue StandardError
+        :dunno
+      end
     end
 
     def self.cores
@@ -326,6 +531,20 @@ module Hardware
       rescue StandardError
         cores
       end
+    end
+
+    def self.sysctl_value(key)
+      return nil unless OS.mac?
+
+      output = `/usr/sbin/sysctl -n #{key} 2>/dev/null`.to_s.strip
+      output.empty? ? nil : output
+    rescue StandardError
+      nil
+    end
+
+    def self.sysctl_flag?(key)
+      value = sysctl_value(key)
+      !value.nil? && value.to_i == 1
     end
   end
 end
@@ -374,6 +593,8 @@ class PybrewBuild
   end
 end
 
+class PybrewChecksumMismatch < RuntimeError; end
+
 class PybrewVersion < String
   def major
     split(".")[0].to_s
@@ -393,6 +614,19 @@ class PybrewVersion < String
 
   def dots_to_hyphens
     tr(".", "-")
+  end
+end
+
+class PybrewSDK
+  attr_reader :version, :path
+
+  def initialize(version, path)
+    @version = version
+    @path = path
+  end
+
+  def to_s
+    path.to_s
   end
 end
 
@@ -480,10 +714,143 @@ module MacOS
   def self.version_symbol
     version.to_sym
   end
+
+  # The SDK helpers below are best-effort: they never raise just because the
+  # host is not macOS or the developer tools are missing.  Callers get nil or
+  # an empty fallback instead.
+  def self.sdk(version = nil)
+    return nil unless OS.mac?
+
+    requested = version.nil? ? nil : version.to_s
+    return @sdk if requested.nil? && defined?(@sdk) && @sdk
+
+    raw = ENV["HOMEBREW_SDKROOT"].to_s.strip
+    if raw.empty?
+      command = if requested.nil?
+        "/usr/bin/xcrun --show-sdk-path"
+      else
+        "/usr/bin/xcrun --sdk macosx#{requested} --show-sdk-path"
+      end
+      raw = `#{command} 2>/dev/null`.to_s.strip
+    end
+    if raw.empty?
+      fallback = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+      raw = fallback if File.directory?(fallback)
+    end
+    return nil if raw.empty?
+
+    version_text = `/usr/bin/xcrun --show-sdk-version 2>/dev/null`.to_s.strip
+    version_text = requested if version_text.empty? && !requested.nil?
+    version_text = MacOS.version.to_s if version_text.empty?
+    found = PybrewSDK.new(PybrewVersion.new(version_text), Pathname.new(raw))
+    @sdk = found if requested.nil?
+    found
+  rescue StandardError
+    nil
+  end
+
+  def self.sdk_path(version = nil)
+    found = sdk(version)
+    found.nil? ? nil : found.path
+  end
+
+  def self.latest_sdk_version
+    @latest_sdk_version ||= begin
+      text = if OS.mac?
+        found = sdk
+        found.nil? ? MacOS.version.to_s : found.version.to_s
+      else
+        "0"
+      end
+      PybrewVersion.new(text)
+    rescue StandardError
+      PybrewVersion.new("0")
+    end
+  end
+
+  def self.preferred_perl_version
+    if OS.mac? && version >= :sonoma
+      "5.34"
+    else
+      "5.30"
+    end
+  end
+
+  def self.languages
+    @languages ||= begin
+      values = []
+      if OS.mac?
+        output = `/usr/bin/defaults read -g AppleLanguages 2>/dev/null`.to_s
+        if output.strip.empty?
+          output = `/usr/bin/defaults read /Library/Preferences/.GlobalPreferences AppleLanguages 2>/dev/null`.to_s
+        end
+        values = output.scan(/[^ \n"(),]+/)
+      end
+      values
+    rescue StandardError
+      []
+    end
+  end
+
+  def self.language
+    languages.first
+  end
+
+  def self.active_developer_dir
+    return @active_developer_dir if defined?(@active_developer_dir)
+
+    raw = `/usr/bin/xcode-select -print-path 2>/dev/null`.to_s.strip
+    if raw.empty?
+      fallback = "/Applications/Xcode.app/Contents/Developer"
+      raw = fallback if File.directory?(fallback)
+    end
+    @active_developer_dir = raw
+  rescue StandardError
+    ""
+  end
+end
+
+module Linux
+  def self.os_version
+    @os_version ||= begin
+      output = `/usr/bin/lsb_release -a 2>/dev/null`.to_s
+      description = output[/^Description:\s*(.*)$/, 1]
+      codename = output[/^Codename:\s*(.*)$/, 1]
+      if !description.nil? && !description.strip.empty?
+        codename = codename.to_s.strip
+        if codename.empty? || codename == "n/a"
+          description.strip
+        else
+          "#{description.strip} (#{codename})"
+        end
+      else
+        OS_VERSION
+      end
+    rescue StandardError
+      "Unknown"
+    end
+  end
+
+  def self.languages
+    []
+  end
+
+  def self.language
+    languages.first
+  end
+
+  def self.wsl?
+    !!(OS.kernel_release =~ /microsoft/i)
+  end
+
+  def self.inside_docker?
+    File.file?("/.dockerenv") || File.file?("/run/.containerenv")
+  end
 end
 
 module OS
   Mac = ::MacOS
+  Linux = ::Linux
 end
 
 OS_VERSION = begin
@@ -552,6 +919,213 @@ module Utils
 
   def quiet_system(*args, **options)
     PybrewSystem.quiet(args, options)
+  end
+
+  # -- small ActiveSupport-style inflections used by formula code ----------
+
+  def deconstantize(path)
+    path.to_s.rpartition("::").first
+  end
+
+  def demodulize(path)
+    raise ArgumentError, "No constant path provided" if path.nil?
+
+    path.to_s.rpartition("::").last
+  end
+
+  def underscore(camel_cased_word)
+    return camel_cased_word.to_s unless /[A-Z-]|::/.match?(camel_cased_word.to_s)
+
+    word = camel_cased_word.to_s.gsub("::", "/")
+    word.gsub!(/[A-Z](?=[A-Z][a-z])|[a-z\d](?=[A-Z])/, '\0_')
+    word.tr!("-", "_")
+    word.downcase!
+    word
+  end
+
+  def pluralize(stem, count, plural: "s", singular: "", include_count: false)
+    case stem
+    when "formula"
+      plural = "e"
+    when "dependency", "try"
+      stem = stem.delete_suffix("y")
+      plural = "ies"
+      singular = "y"
+    end
+
+    prefix = include_count ? "#{count} " : ""
+    suffix = (count == 1) ? singular : plural
+    "#{prefix}#{stem}#{suffix}"
+  end
+
+  UNSAFE_FILENAME = /[[:cntrl:]\/\\]/.freeze
+
+  def safe_filename?(basename)
+    !UNSAFE_FILENAME.match?(basename.to_s)
+  end
+
+  def safe_filename(basename)
+    basename.to_s.gsub(UNSAFE_FILENAME, "")
+  end
+
+  # -- deep collection helpers ---------------------------------------------
+
+  def deep_dup(object)
+    case object
+    when Hash
+      object.each_with_object({}) do |(key, value), result|
+        result[deep_dup(key)] = deep_dup(value)
+      end
+    when Array
+      object.map { |value| deep_dup(value) }
+    else
+      begin
+        object.dup
+      rescue TypeError
+        object
+      end
+    end
+  end
+
+  def deep_merge(left, right, &block)
+    result = left.dup
+    right.each do |key, value|
+      if result.key?(key) && result[key].is_a?(Hash) && value.is_a?(Hash)
+        result[key] = deep_merge(result[key], value, &block)
+      elsif result.key?(key) && block
+        result[key] = block.call(key, result[key], value)
+      else
+        result[key] = value
+      end
+    end
+    result
+  end
+
+  def deep_merge!(left, right, &block)
+    left.replace(deep_merge(left, right, &block))
+    left
+  end
+
+  # -- subprocess helpers ---------------------------------------------------
+
+  def which(command, path = nil)
+    command = command.to_s
+    search_path = (path.nil? ? ENV.fetch("PATH", "") : path).to_s
+    search_path.split(File::PATH_SEPARATOR).each do |directory|
+      candidate = File.join(directory, command)
+      return Pathname.new(candidate) if File.file?(candidate) && File.executable?(candidate)
+    end
+    nil
+  end
+
+  def popen(args, mode = "r", options = {}, &block)
+    arguments = args.is_a?(Array) ? args.dup : [args]
+    environment = arguments.first.is_a?(Hash) ? arguments.shift : {}
+    command = arguments.flatten.compact.map { |argument| argument.to_s }
+    raise ArgumentError, "popen: no command given" if command.empty?
+
+    options = options.dup
+    normalized_env = {}
+    environment.each do |key, value|
+      normalized_env[key.to_s] = value.nil? ? nil : value.to_s
+    end
+    IO.popen([normalized_env, *command], mode, options) do |pipe|
+      block.nil? ? pipe.read : block.call(pipe)
+    end
+  end
+
+  def popen_read(*args, safe: false, **options, &block)
+    options = options.dup
+    options[:in] ||= File::NULL
+    output = popen(args, "rb", options, &block)
+    status = $?
+    if safe && !(status && status.success?)
+      raise "Failed executing: #{args.flatten.compact.map(&:to_s).join(' ')}"
+    end
+
+    output
+  end
+
+  def popen_read_text(*args, **options)
+    output = popen_read(*args, **options)
+    raise TypeError, "Expected command output to be a String" unless output.is_a?(String)
+
+    output.force_encoding(Encoding.default_external)
+  end
+
+  def safe_popen_read(*args, **options, &block)
+    popen_read(*args, safe: true, **options, &block)
+  end
+
+  def popen_write(*args, safe: false, **options)
+    output = ""
+    popen(args, "w+b", options) do |pipe|
+      yield pipe
+      pipe.close_write
+      output = pipe.read
+    end
+    status = $?
+    if safe && !(status && status.success?)
+      raise "Failed executing: #{args.flatten.compact.map(&:to_s).join(' ')}"
+    end
+
+    output
+  end
+
+  def safe_popen_write(*args, **options, &block)
+    popen_write(*args, safe: true, **options, &block)
+  end
+
+  def pipe_output(command, input = nil, result = nil)
+    output = IO.popen(command.to_s, "w+") do |pipe|
+      pipe.write(input.to_s) unless input.nil?
+      pipe.close_write
+      pipe.read
+    end
+    unless result.nil?
+      status = $?
+      actual = status.nil? ? nil : status.exitstatus
+      raise "pipe_output: expected exit status #{result}, got #{actual.inspect}" unless actual == result
+    end
+    output
+  end
+
+  def git(*args)
+    popen_read("git", *args)
+  end
+
+  def curl(*args)
+    popen_read("curl", *args)
+  end
+
+  def gzip(*args)
+    safe_system("gzip", *args)
+  end
+end
+
+class Object
+  def deep_dup
+    Utils.deep_dup(self)
+  end
+end
+
+class Hash
+  def deep_dup
+    Utils.deep_dup(self)
+  end
+
+  def deep_merge(other_hash, &block)
+    Utils.deep_merge(self, other_hash, &block)
+  end
+
+  def deep_merge!(other_hash, &block)
+    Utils.deep_merge!(self, other_hash, &block)
+  end
+end
+
+class Array
+  def deep_dup
+    Utils.deep_dup(self)
   end
 end
 
@@ -623,6 +1197,114 @@ module PybrewInstall
   end
 end
 
+module PybrewBinary
+  module_function
+
+  # Return :executable, :dylib, :bundle or nil for a Mach-O / ELF file.  Any
+  # unreadable or unrecognised file simply reports nil.
+  def kind(path)
+    data = read_header(path)
+    return nil if data.nil? || data.bytesize < 4
+
+    magic = data[0, 4]
+    return elf_kind(data) if magic == "\x7FELF".b
+
+    mach_o_kind(data, magic)
+  rescue StandardError
+    nil
+  end
+
+  def read_header(path)
+    return nil unless File.file?(path.to_s)
+
+    File.open(path.to_s, "rb") { |file| file.read(64) }
+  rescue StandardError
+    nil
+  end
+
+  def elf_kind(data)
+    return nil if data.bytesize < 18
+
+    little_endian = data.getbyte(5) == 1
+    type = little_endian ? data[16, 2].unpack("v").first : data[16, 2].unpack("n").first
+    case type
+    when 2 then :executable
+    when 3 then :dylib
+    end
+  end
+
+  def mach_o_kind(data, magic)
+    case magic
+    when "\xFE\xED\xFA\xCE".b then little_endian = false
+    when "\xCE\xFA\xED\xFE".b then little_endian = true
+    when "\xFE\xED\xFA\xCF".b then little_endian = false
+    when "\xCF\xFA\xED\xFE".b then little_endian = true
+    when "\xCA\xFE\xBA\xBE".b, "\xBE\xBA\xFE\xCA".b then return :executable
+    else return nil
+    end
+    return nil if data.bytesize < 16
+
+    filetype = little_endian ? data[12, 4].unpack("V").first : data[12, 4].unpack("N").first
+    case filetype
+    when 2 then :executable
+    when 6 then :dylib
+    when 8 then :bundle
+    end
+  end
+end
+
+module PybrewInfo
+  module_function
+
+  def executable
+    return @executable if defined?(@executable)
+
+    @executable = begin
+      found = nil
+      ["/usr/bin/install-info", "/usr/local/bin/install-info", "/opt/homebrew/bin/install-info"].each do |candidate|
+        if File.file?(candidate) && File.executable?(candidate)
+          found = candidate
+          break
+        end
+      end
+      if found.nil?
+        ENV.fetch("PATH", "").split(File::PATH_SEPARATOR).each do |directory|
+          candidate = File.join(directory, "install-info")
+          if File.file?(candidate) && File.executable?(candidate)
+            found = candidate
+            break
+          end
+        end
+      end
+      found
+    end
+  end
+
+  def install_info(path)
+    tool = executable
+    if tool.nil?
+      $stderr.puts "Warning: install-info not found; skipping info entry for #{path}"
+      return nil
+    end
+    Kernel.system(tool, "--quiet", path.to_s, (path.dirname + "dir").to_s)
+    nil
+  rescue StandardError
+    nil
+  end
+
+  def uninstall_info(path)
+    tool = executable
+    if tool.nil?
+      $stderr.puts "Warning: install-info not found; skipping info entry removal for #{path}"
+      return nil
+    end
+    Kernel.system(tool, "--delete", "--quiet", path.to_s, (path.dirname + "dir").to_s)
+    nil
+  rescue StandardError
+    nil
+  end
+end
+
 module PybrewPathHelpers
   def install(*sources)
     PybrewInstall.install_into(self, sources)
@@ -643,6 +1325,197 @@ module PybrewPathHelpers
     FileUtils.mkdir_p(dirname.to_s)
     File.binwrite(to_s, content.to_s)
     content.to_s.bytesize
+  end
+
+  def atomic_write(content)
+    FileUtils.mkdir_p(dirname.to_s)
+    temporary = dirname + ".#{basename}.#{Process.pid}.#{rand(1_000_000)}.tmp"
+    begin
+      File.open(temporary.to_s, "wb") { |file| file.write(content.to_s) }
+      File.rename(temporary.to_s, to_s)
+    ensure
+      FileUtils.rm_f(temporary.to_s) if temporary.exist?
+    end
+    nil
+  end
+
+  def append_lines(content, **open_args)
+    raise "Cannot append file that doesn't exist: #{self}" unless exist?
+
+    File.open(to_s, "a", **open_args) { |file| file.puts(content) }
+    nil
+  end
+
+  def sha256
+    Digest::SHA256.file(to_s).hexdigest
+  end
+
+  def verify_checksum(expected)
+    expected_text = expected.to_s.strip
+    if expected_text.empty?
+      raise ArgumentError, "verify_checksum: no expected checksum given for #{self}"
+    end
+    return nil if expected_text == "no_check"
+
+    expected_text = expected_text.sub(/\Asha256:/i, "").downcase
+    actual = sha256.downcase
+    unless actual == expected_text
+      raise PybrewChecksumMismatch, "SHA256 mismatch for #{self}: expected #{expected_text}, got #{actual}"
+    end
+    nil
+  end
+
+  def rmdir_if_possible
+    Dir.rmdir(to_s)
+    true
+  rescue Errno::ENOTEMPTY
+    ds_store = self + ".DS_Store"
+    if ds_store.exist? && children.one?
+      ds_store.unlink
+      retry
+    end
+    false
+  rescue Errno::EEXIST, Errno::ENOENT, Errno::EACCES, Errno::EPERM, Errno::EBUSY, Errno::ENOTDIR
+    false
+  end
+
+  def subdirs
+    children.select { |child| child.directory? }
+  end
+
+  def text_executable?
+    return false unless file?
+
+    /\A#!\s*\S+/n.match?(File.binread(to_s, 1024).to_s)
+  rescue StandardError
+    false
+  end
+
+  def binary_executable?
+    PybrewBinary.kind(to_s) == :executable
+  end
+
+  def dylib?
+    PybrewBinary.kind(to_s) == :dylib
+  end
+
+  def mach_o_bundle?
+    PybrewBinary.kind(to_s) == :bundle
+  end
+
+  def make_relative_symlink(src)
+    source = Pathname.new(File.expand_path(src.to_s))
+    base = Pathname.new(File.expand_path(dirname.to_s))
+    FileUtils.mkdir_p(base.to_s)
+    File.symlink(source.relative_path_from(base).to_s, to_s)
+    nil
+  end
+
+  def ensure_writable
+    raise ArgumentError, "Pathname#ensure_writable requires a block" unless block_given?
+
+    saved_perms = nil
+    unless writable?
+      saved_perms = stat.mode
+      FileUtils.chmod("u+rw", to_s)
+    end
+    yield
+  ensure
+    chmod(saved_perms) if saved_perms
+  end
+
+  def install_info
+    PybrewInfo.install_info(self)
+    nil
+  end
+
+  def uninstall_info
+    PybrewInfo.uninstall_info(self)
+    nil
+  end
+
+  def write_exec_script(*targets)
+    targets = targets.flatten
+    if targets.empty?
+      $stderr.puts "Warning: Tried to write exec scripts to #{self} for an empty list of targets"
+      return nil
+    end
+    FileUtils.mkdir_p(to_s)
+    targets.each do |target|
+      target = Pathname.new(target.to_s)
+      script = join(target.basename)
+      script.write("#!/bin/bash\nexec \"#{target}\" \"$@\"\n")
+      script.chmod(0o755)
+    end
+    nil
+  end
+
+  def write_env_script(target, args_or_env, env = nil)
+    if env.nil?
+      raise ArgumentError, "#{args_or_env.inspect} is not a Hash" unless args_or_env.is_a?(Hash)
+
+      env = args_or_env
+      args = nil
+    elsif args_or_env.is_a?(Array)
+      args = args_or_env.join(" ")
+    else
+      args = args_or_env
+    end
+    raise ArgumentError, "write_env_script: env must be a Hash" unless env.is_a?(Hash)
+
+    exports = ""
+    env.each { |key, value| exports << "#{key}=\"#{value}\" " }
+    FileUtils.mkdir_p(dirname.to_s)
+    write("#!/bin/bash\n#{exports}exec \"#{target}\" #{args} \"$@\"\n")
+    chmod(0o555)
+    nil
+  end
+
+  def install_p(src, new_basename = nil)
+    source = Pathname.new(src.to_s)
+    raise Errno::ENOENT, source.to_s if !source.symlink? && !source.exist?
+
+    name = new_basename.nil? ? source.basename.to_s : new_basename.to_s
+    destination = self + name
+    FileUtils.mkdir_p(to_s)
+    FileUtils.rm_rf(destination.to_s) if destination.exist? || destination.symlink?
+    if source.symlink?
+      File.symlink(source.readlink.to_s, destination.to_s)
+      FileUtils.rm_f(source.to_s)
+    else
+      FileUtils.mv(source.to_s, destination.to_s)
+    end
+    nil
+  end
+
+  def install_symlink_p(src, new_basename = nil)
+    FileUtils.mkdir_p(to_s)
+    directory = realpath
+    source = Pathname.new(src.to_s).expand_path(directory)
+    source = source.dirname.realpath + source.basename if source.dirname.exist?
+    name = new_basename.nil? ? source.basename.to_s : new_basename.to_s
+    link = directory + name
+    FileUtils.rm_rf(link.to_s) if link.exist? || link.symlink?
+    File.symlink(source.relative_path_from(directory).to_s, link.to_s)
+    nil
+  end
+
+  def resolved_path
+    symlink? ? dirname + readlink.to_s : self
+  end
+
+  def resolved_path_exists?
+    target = readlink
+  rescue ArgumentError, Errno::EINVAL
+    false
+  else
+    (dirname + target.to_s).exist?
+  end
+
+  def cd
+    raise ArgumentError, "Pathname#cd requires a block" unless block_given?
+
+    Dir.chdir(to_s) { yield self }
   end
 end
 
@@ -666,16 +1539,110 @@ class << ENV
     prepend_path(name, value)
   end
 
-  def append(name, value)
-    current = self[name]
-    parts = [current, value.to_s].compact.reject(&:empty?)
-    self[name] = parts.join(" ")
+  def append(keys, value, separator = " ")
+    value = value.to_s
+    Array(keys).each do |key|
+      current = self[key]
+      self[key] = if current.nil? || current.empty?
+        value
+      else
+        current + separator + value
+      end
+    end
+    nil
   end
 
-  def prepend(name, value)
-    current = self[name]
-    parts = [value.to_s, current].compact.reject(&:empty?)
-    self[name] = parts.join(" ")
+  def prepend(keys, value, separator = " ")
+    value = value.to_s
+    Array(keys).each do |key|
+      current = self[key]
+      self[key] = if current.nil? || current.empty?
+        value
+      else
+        value + separator + current
+      end
+    end
+    nil
+  end
+
+  def remove(keys, value)
+    return nil if value.nil?
+
+    Array(keys).each do |key|
+      current = self[key]
+      next if current.nil?
+
+      updated = current.sub(value.to_s, "")
+      if updated.empty?
+        delete(key)
+      else
+        self[key] = updated
+      end
+    end
+    nil
+  end
+
+  def cc
+    self["CC"] || RbConfig::CONFIG["CC"] || "cc"
+  end
+
+  def cxx
+    self["CXX"] || RbConfig::CONFIG["CXX"] || "c++"
+  end
+
+  def cflags
+    self["CFLAGS"]
+  end
+
+  def cxxflags
+    self["CXXFLAGS"]
+  end
+
+  def cppflags
+    self["CPPFLAGS"]
+  end
+
+  def ldflags
+    self["LDFLAGS"]
+  end
+
+  def fc
+    self["FC"]
+  end
+
+  def fflags
+    self["FFLAGS"]
+  end
+
+  def make_jobs
+    flags = self["MAKEFLAGS"].to_s
+    match = flags[/-j\s*(\d+)/, 1]
+    return match.to_i unless match.nil?
+
+    begin
+      require "etc"
+      count = Etc.nprocessors
+      count > 0 ? count : 1
+    rescue StandardError
+      1
+    end
+  end
+
+  def with_build_environment(env: nil, cc: nil, build_bottle: false, bottle_arch: nil, debug_symbols: false)
+    raise ArgumentError, "ENV.with_build_environment requires a block" unless block_given?
+
+    old_env = to_hash
+    begin
+      if env.is_a?(Hash)
+        env.each do |key, value|
+          self[key.to_s] = value.nil? ? nil : value.to_s
+        end
+      end
+      self["CC"] = cc.to_s unless cc.nil?
+      yield
+    ensure
+      replace(old_env)
+    end
   end
 end
 
@@ -727,6 +1694,231 @@ class PybrewInreplace
   def get_make_var(flag)
     @inreplace_string[/^#{Regexp.escape(flag)}[ \t]*[\\?+:!]?=[ \t]*((?:.*\\\n)*.*)$/, 1] ||
       raise(ArgumentError, "expected to find make variable #{flag.inspect}")
+  end
+end
+
+class PybrewFormulaRef
+  attr_reader :name
+
+  def initialize(name)
+    @name = name.to_s
+    @info = (PYBREW_CONFIG["formulae"] || {})[@name] || {}
+  end
+
+  def self.homebrew_prefix
+    value = PYBREW_CONFIG["homebrew_prefix"] || ENV["HOMEBREW_PREFIX"]
+    if value.nil? || value.to_s.empty?
+      raise "Formula lookup is not available: HOMEBREW_PREFIX is not set"
+    end
+    value.to_s
+  end
+
+  def self.cellar
+    value = PYBREW_CONFIG["cellar"] || ENV["HOMEBREW_CELLAR"]
+    if value.nil? || value.to_s.empty?
+      raise "Formula lookup is not available: HOMEBREW_CELLAR is not set"
+    end
+    value.to_s
+  end
+
+  # Natural sort key so that, for example, 2.0.1 is newer than 2.0.
+  def self.version_key(text)
+    text.to_s.scan(/\d+|[A-Za-z]+/).map do |part|
+      part =~ /\A\d+\z/ ? [0, part.to_i] : [1, part.downcase]
+    end
+  end
+
+  def installed_kegs
+    rack = Pathname.new(File.join(self.class.cellar, name))
+    return [] unless rack.directory?
+
+    rack.children.select { |child| child.directory? }
+  end
+
+  def latest_installed_keg
+    kegs = installed_kegs
+    return nil if kegs.empty?
+
+    kegs.sort_by { |keg| self.class.version_key(keg.basename.to_s) }.last
+  end
+
+  def opt_prefix
+    raw = @info["opt_prefix"]
+    raw = File.join(self.class.homebrew_prefix, "opt", name) if raw.nil? || raw.to_s.empty?
+    Pathname.new(raw.to_s)
+  end
+
+  def prefix
+    raw = @info["prefix"]
+    if raw.nil? || raw.to_s.empty?
+      keg = latest_installed_keg
+      if keg.nil?
+        raise "Formula[#{name.inspect}] is not installed: no keg found under #{self.class.cellar}/#{name}"
+      end
+      raw = keg.to_s
+    end
+    Pathname.new(raw.to_s)
+  end
+
+  def rack
+    Pathname.new(File.join(self.class.cellar, name))
+  end
+
+  def version
+    raw = @info["version"]
+    if raw.nil? || raw.to_s.empty?
+      keg = latest_installed_keg
+      raw = keg.nil? ? nil : keg.basename.to_s
+    end
+    raw.nil? || raw.to_s.empty? ? nil : PybrewVersion.new(raw.to_s)
+  end
+
+  def installed?
+    raw = @info["prefix"]
+    return true unless raw.nil? || raw.to_s.empty?
+
+    !latest_installed_keg.nil?
+  end
+
+  def any_version_installed?
+    installed?
+  end
+
+  def latest_version_installed?
+    installed?
+  end
+
+  def any_installed_prefix
+    installed? ? prefix : nil
+  end
+
+  def opt_bin
+    opt_prefix + "bin"
+  end
+
+  def opt_sbin
+    opt_prefix + "sbin"
+  end
+
+  def opt_lib
+    opt_prefix + "lib"
+  end
+
+  def opt_include
+    opt_prefix + "include"
+  end
+
+  def opt_share
+    opt_prefix + "share"
+  end
+
+  def opt_pkgshare
+    opt_share + name
+  end
+
+  def opt_libexec
+    opt_prefix + "libexec"
+  end
+
+  def bin
+    prefix + "bin"
+  end
+
+  def sbin
+    prefix + "sbin"
+  end
+
+  def lib
+    prefix + "lib"
+  end
+
+  def share
+    prefix + "share"
+  end
+
+  def pkgshare
+    share + name
+  end
+
+  def libexec
+    prefix + "libexec"
+  end
+
+  def keg_only?
+    false
+  end
+end
+
+module Formula
+  def self.[](name)
+    PybrewFormulaRef.new(name)
+  end
+end
+
+class PybrewResource
+  attr_reader :name, :url, :sha256
+
+  def initialize(name, info)
+    @name = name.to_s
+    @info = info || {}
+    @url = @info["url"]
+    @sha256 = @info["sha256"]
+  end
+
+  def version
+    nil
+  end
+
+  def staged_path
+    staged = @info["staged"]
+    if staged.nil? || staged.to_s.empty?
+      raise "resource(#{name.inspect}) has not been staged: the pybrew opt-in Ruby bridge does not download formula resources"
+    end
+    Pathname.new(staged.to_s)
+  end
+
+  def stage(*_args, &block)
+    path = staged_path
+    if block.nil?
+      path
+    else
+      Dir.chdir(path.to_s) { block.call(path) }
+    end
+  end
+
+  def fetch
+    staged_path
+  end
+
+  def to_s
+    staged_path.to_s
+  end
+end
+
+class PybrewPatch
+  attr_reader :name, :url, :sha256, :strip_level
+
+  def initialize(name = nil)
+    @name = name
+  end
+
+  def url(value = nil)
+    @url = value unless value.nil?
+    @url
+  end
+
+  def sha256(value = nil)
+    @sha256 = value unless value.nil?
+    @sha256
+  end
+
+  def strip(value = nil)
+    @strip_level = value unless value.nil?
+    @strip_level
+  end
+
+  def apply(*_args)
+    nil
   end
 end
 
@@ -1002,6 +2194,49 @@ class PybrewInstallContext
       block.call
     end
   end
+
+  # ``resource("name")`` never downloads anything in the opt-in bridge.  The
+  # object can still be queried (name/url/sha256); touching its staged path
+  # raises a clear error instead of silently building the wrong tree.
+  def resource(name)
+    key = name.to_s
+    info = (PYBREW_CONFIG["resources"] || {})[key]
+    if info.nil?
+      raise "resource(#{key.inspect}) is not defined in formula #{@formula_name}"
+    end
+    PybrewResource.new(key, info)
+  end
+
+  # Formula patches cannot be applied by the bridge.  Consume the block DSL
+  # (so url/sha256 calls do not explode) and warn rather than silently
+  # pretending the patch happened.
+  def patch(*args, &block)
+    target = args.empty? ? nil : args.first
+    if block
+      definition = PybrewPatch.new(target)
+      definition.instance_eval(&block)
+      opoo("patch #{target.nil? ? 'block' : target.inspect} was not applied: the pybrew opt-in Ruby bridge does not apply patches")
+    else
+      opoo("patch #{target.inspect} was not applied: the pybrew opt-in Ruby bridge does not apply patches")
+    end
+    nil
+  end
+
+  def option(*_args)
+    nil
+  end
+
+  def depends_on(*_args)
+    nil
+  end
+
+  # Unknown formula APIs fail loudly with a pointer to the shim instead of a
+  # bare NoMethodError deep inside instance_eval.
+  def method_missing(method_name, *args, &block)
+    raise NoMethodError,
+          "unsupported Homebrew formula API `#{method_name}' in the pybrew arbitrary-Ruby install shim; " \
+          "see src/pybrew/ruby_executor.py for the supported API"
+  end
 end
 
 context = PybrewInstallContext.new(PYBREW_CONFIG)
@@ -1053,6 +2288,91 @@ def _failure_message(
     return heading + "\n" + "\n".join(details[1:] + [tail])
 
 
+def _latest_keg(config: Config, name: str) -> Optional[Path]:
+    """Return the newest installed keg for ``name``, or ``None``."""
+
+    rack = config.cellar / name
+    try:
+        candidates = [child for child in rack.iterdir() if child.is_dir()]
+    except OSError:
+        return None
+    if not candidates:
+        return None
+    return max(
+        candidates,
+        key=functools.cmp_to_key(
+            lambda left, right: compare_versions(left.name, right.name)
+        ),
+    )
+
+
+def _formula_reference_map(
+    formula: Formula, config: Config, keg: Path
+) -> dict[str, dict[str, Optional[str]]]:
+    """Metadata backing ``Formula["name"].prefix``/``opt_prefix`` in the shim.
+
+    The current formula and its declared dependencies are included.  The
+    ``prefix`` entry is ``None`` when no keg is installed; the Ruby side turns
+    that into a clear error only when the method is actually called.
+    """
+
+    entries: dict[str, dict[str, Optional[str]]] = {
+        formula.name: {
+            "prefix": str(keg),
+            "opt_prefix": str(config.opt_path(formula.name)),
+            "version": formula.pkg_version,
+        }
+    }
+    names: list[str] = []
+    for collection in (
+        formula.dependencies,
+        formula.head_dependencies,
+        formula.build_dependencies,
+        formula.test_dependencies,
+        formula.recommended_dependencies,
+        formula.optional_dependencies,
+    ):
+        for dependency in collection:
+            name = getattr(dependency, "name", None)
+            if name is None:
+                name = str(dependency)
+            name = str(name)
+            if name and name not in names:
+                names.append(name)
+    for name in names:
+        if name in entries:
+            continue
+        installed = _latest_keg(config, name)
+        entries[name] = {
+            "prefix": str(installed) if installed is not None else None,
+            "opt_prefix": str(config.opt_path(name)),
+            "version": installed.name if installed is not None else None,
+        }
+    return entries
+
+
+def _resource_metadata(formula: Formula) -> dict[str, dict[str, Optional[str]]]:
+    """Return resource name/url/sha256 metadata for the Ruby shim.
+
+    Resources are deliberately never downloaded here: the shim only exposes
+    their metadata and raises a clear error when a staged path is requested.
+    """
+
+    resources = getattr(formula, "resources", None) or {}
+    payload: dict[str, dict[str, Optional[str]]] = {}
+    try:
+        items = resources.items()
+    except AttributeError:
+        return payload
+    for name, resource in items:
+        payload[str(name)] = {
+            "url": getattr(resource, "url", None),
+            "sha256": getattr(resource, "sha256", None),
+            "staged": None,
+        }
+    return payload
+
+
 def execute_install_body(
     formula: Formula,
     config: Config,
@@ -1089,6 +2409,10 @@ def execute_install_body(
         "macos_version": platform.mac_ver()[0],
         "kernel_version": platform.release(),
         "body_line": body_line,
+        "homebrew_prefix": str(config.prefix),
+        "cellar": str(config.cellar),
+        "formulae": _formula_reference_map(formula, config, keg),
+        "resources": _resource_metadata(formula),
     }
     script = _render_script(body, body_line, payload)
 
