@@ -507,9 +507,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `501126d` (opt-in arbitrary Ruby cask DSL evaluator)
-- CI run for `501126d`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40936087663>
+- Latest feature commit: `0734e38` (preserve multiline cask keyword arguments)
+- CI run for `0734e38`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40936882960>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
