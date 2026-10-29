@@ -336,15 +336,16 @@ Homebrew's PR-template bot because the body did not match
 the submission, the body was updated with the template and AI disclosure, the
 AI-disclosure checkbox was checked, and the template bot reopened the PR:
 
-- state: open, ready for review (draft=false)
 - reopened by `github-actions[bot]` on 2026-10-28
+- **closed by maintainer MikeMcQuaid on 2026-10-28** with the comment
+  "Not interested in this, sorry." (see the PR page)
 - `brew lgtm` remains unchecked with an explanatory note because the PR only
   adds an RFC document and does not change Homebrew Ruby code
-- no attempt was made to misrepresent authorship or bypass the bot
+- no attempt was made to misrepresent authorship or bypass the template bot
 
-The submitting human is responsible for answering maintainer review comments
-without AI. PR state should be re-checked on GitHub; the bot may re-evaluate
-the template after edits.
+The maintainer's close is a final scope decision; no further reopen attempts
+were made. The submitting human owns any future upstream communication and
+must not use AI to answer review comments.
 
 ## GitHub repository, CI and upstream tracking
 
@@ -364,13 +365,14 @@ the template after edits.
 
 ## Upstream RFC PR outcome
 
-The RFC PR <https://github.com/Homebrew/brew/pull/24362> is now **open and ready
-for review** after the template bot reopened it. The body includes the current
-Homebrew template checkboxes and the AI disclosure; the AI checkbox was checked
-only after the submitting human explicitly confirmed that they had reviewed the
-body and authorized submission. The fork branch
-`tzhazuma/brew:python-port-rfc` contains the RFC document.
+The RFC PR <https://github.com/Homebrew/brew/pull/24362> was reopened by the
+template bot after the human-authorized template/AI-disclosure update, then
+**closed by Homebrew maintainer MikeMcQuaid** on 2026-10-28 with
+"Not interested in this, sorry." This is an upstream scope decision; the PR was
+not reopened again. The fork branch `tzhazuma/brew:python-port-rfc` and the RFC
+document remain for reference.
 
 The guarded helper `scripts/open_upstream_pr.py` still performs no writes without
-`--authorized`. The human submitter must answer maintainer review comments
-without AI and remains responsible for the upstream submission.
+`--authorized`; it is not a tool for overriding a maintainer's close. The human
+submitter owns any future upstream communication and must not use AI to answer
+review comments.

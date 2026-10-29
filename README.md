@@ -190,21 +190,20 @@ homebrew-core 变更。
 
 ## 上游 PR
 
-已提交并重新打开 RFC PR（不是要求合并的代码 PR），用于说明 Python 原型、验证结果、
-差异和需要维护者反馈的问题：
+RFC PR 已提交，Homebrew maintainer 已给出最终范围决定：
 
 - PR：<https://github.com/Homebrew/brew/pull/24362>
-- 状态：open，ready for review（2026-10-28 由 Homebrew 模板机器人重新打开）
+- 状态：**closed**（2026-10-28，MikeMcQuaid：*"Not interested in this, sorry."*）
+- 关闭评论：<https://github.com/Homebrew/brew/pull/24362#issuecomment-...>（以 GitHub 页面为准）
 - 提案正文：[docs/python-port-rfc.md](docs/python-port-rfc.md)
 - PR 正文：[docs/upstream-pr/PR_BODY.md](docs/upstream-pr/PR_BODY.md)
 
-PR 曾因缺少 Homebrew 的 `PULL_REQUEST_TEMPLATE.md` 被自动关闭；补全模板、披露 AI
-使用并经提交者明确确认后，机器人自动重新打开。AI 披露复选框已由提交者授权勾选；
-`brew lgtm` 因本 PR 只新增 RFC 文档、未修改 Homebrew Ruby 代码而保留未勾选，并在正文中
-注明原因。
+PR 曾因缺少 Homebrew 的 `PULL_REQUEST_TEMPLATE.md` 被机器人关闭；补全模板、披露 AI
+使用并获提交者明确确认后，机器人重新打开。随后 maintainer 明确表示不感兴趣并关闭了
+PR。这是上游的范围决定，不是技术 review；不再尝试重开或绕过该决定。
 
-根据 Homebrew 的 Contributing/Responsible AI 规则，提交者本人必须审核所有 AI 生成内容、
-在 PR 中披露 AI 工具、并亲自回答 maintainer 的 review。PR 后续状态以 GitHub 页面为准。
+根据 Homebrew 的 Contributing/Responsible AI 规则，提交者本人负责后续上游沟通；
+本项目保留 RFC、验证记录和实现作为独立原型。
 
 ## 目录结构
 

@@ -1,22 +1,23 @@
 # Upstream PR review and submission
 
 This folder holds the upstream PR material for Homebrew/brew. The repository
-owner reviewed and explicitly authorized submission, so the PR has been
-submitted and reopened by the template bot.
+owner reviewed and explicitly authorized submission; the PR was submitted,
+reopened by the template bot, and then closed by a Homebrew maintainer as out
+of scope.
 
 ## Current state
 
-- PR: <https://github.com/Homebrew/brew/pull/24362> — **open, ready for review**
-  (draft=false), reopened by Homebrew's PR-template bot on 2026-10-28.
+- PR: <https://github.com/Homebrew/brew/pull/24362> — **closed** on 2026-10-28
+  by maintainer MikeMcQuaid ("Not interested in this, sorry.").
+- The PR had been reopened by Homebrew's PR-template bot after the authorized
+  template/AI-disclosure update.
 - Fork branch with the RFC file: `tzhazuma/brew:python-port-rfc`
-- Body includes the current Homebrew template checkboxes and AI disclosure.
-- The AI-disclosure checkbox was checked only after the human explicitly
-  confirmed they reviewed the body and authorized it.
-- `brew lgtm` is unchecked with a note that this docs-only RFC does not change
-  Homebrew Ruby code.
-- Homebrew's Contributing rules still require the submitting human to answer
-  review comments without AI; there may only be one open AI-assisted PR from a
-  non-maintainer.
+- Body includes the Homebrew template checkboxes and AI disclosure; the AI
+  checkbox was checked only after the human confirmed review/authorization.
+- `brew lgtm` is unchecked with a docs-only note.
+- Do **not** reopen or resubmit against the maintainer's decision. The human
+  submitter owns any future upstream communication and must not use AI to answer
+  review comments.
 
 ## Files
 
