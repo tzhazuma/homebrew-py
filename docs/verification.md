@@ -481,11 +481,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `89eb964` (local file patches, Formula metadata API)
-- CI run for `89eb964`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40930821120>
-  (Ubuntu Python 3.9/3.12 jobs green; the macOS job was still queued at the
-  last poll, not failed.)
+- Latest feature commit: `a0b8a44` (opt-in cask uninstall scripts)
+- CI run for `a0b8a44`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40932903013>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
