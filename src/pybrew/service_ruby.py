@@ -96,6 +96,7 @@ _SERVICE_FIELDS = (
     "stop_timeout",
     "root_dir",
     "input_path",
+    "cron",
     "sockets",
 )
 
@@ -482,7 +483,7 @@ class PybrewServiceDSL
   SCALAR_FIELDS = %w[
     working_dir log_path error_log_path interval process_type run_at_load
     require_root throttle_interval launch_only_once macos_legacy_timers nice
-    restart_delay stop_timeout root_dir input_path
+    restart_delay stop_timeout root_dir input_path cron
   ].freeze
 
   def initialize
@@ -508,6 +509,7 @@ class PybrewServiceDSL
       "stop_timeout" => nil,
       "root_dir" => nil,
       "input_path" => nil,
+      "cron" => nil,
       "sockets" => {},
       "warnings" => []
     }

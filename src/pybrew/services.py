@@ -69,6 +69,7 @@ class ServiceSpec:
     stop_timeout: Optional[int] = None
     root_dir: Optional[str] = None
     input_path: Optional[str] = None
+    cron: dict[str, Any] = field(default_factory=dict)
     sockets: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
@@ -403,6 +404,38 @@ def _parse_sockets(args: list[Any]) -> dict[str, dict[str, str]]:
     return {str(name): _parse_socket(value) for name, value in mapping.items()}
 
 
+def _parse_cron(value: Any) -> dict[str, Any]:
+    text = str(value).strip()
+    parsed: dict[str, Any] = {
+        "Minute": "*",
+        "Hour": "*",
+        "Day": "*",
+        "Month": "*",
+        "Weekday": "*",
+    }
+    presets = {
+        "@hourly": {"Minute": 0},
+        "@daily": {"Minute": 0, "Hour": 0},
+        "@weekly": {"Minute": 0, "Hour": 0, "Weekday": 0},
+        "@monthly": {"Minute": 0, "Hour": 0, "Day": 1},
+        "@yearly": {"Minute": 0, "Hour": 0, "Day": 1, "Month": 1},
+        "@annually": {"Minute": 0, "Hour": 0, "Day": 1, "Month": 1},
+    }
+    if text in presets:
+        parsed.update(presets[text])
+        return parsed
+    parts = text.split()
+    if len(parts) != 5:
+        raise ServiceError("cron expects a five-field expression or @daily/@hourly/... preset")
+    for key, part in zip(("Minute", "Hour", "Day", "Month", "Weekday"), parts):
+        if part != "*":
+            try:
+                parsed[key] = int(part)
+            except ValueError as error:
+                raise ServiceError(f"cron field {key} must be an integer or '*', got {part!r}") from error
+    return parsed
+
+
 def _apply_service_directive(spec: ServiceSpec, name: str, args: list[Any]) -> None:
     if name == "run":
         value = args[0] if args else []
@@ -453,6 +486,8 @@ def _apply_service_directive(spec: ServiceSpec, name: str, args: list[Any]) -> N
         spec.root_dir = str(args[0])
     elif name == "input_path" and args:
         spec.input_path = str(args[0])
+    elif name == "cron" and args:
+        spec.cron = _parse_cron(args[0])
     elif name == "sockets":
         spec.sockets = _parse_sockets(args)
     # Unknown directives (nice, run_type, cron, ...) are intentionally ignored
@@ -703,6 +738,8 @@ class ServiceManager:
             payload["ExitTimeOut"] = spec.stop_timeout
         if spec.nice is not None:
             payload["Nice"] = spec.nice
+        if spec.cron:
+            payload["StartCalendarInterval"] = dict(spec.cron)
         keep_alive = _launchd_keep_alive(spec)
         if keep_alive is not None:
             payload["KeepAlive"] = keep_alive

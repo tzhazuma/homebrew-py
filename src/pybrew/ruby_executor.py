@@ -2287,6 +2287,10 @@ class PybrewServiceRef
     @info["input_path"]
   end
 
+  def cron
+    @info["cron"] || {}
+  end
+
   def sockets
     @info["sockets"] || {}
   end
@@ -3818,6 +3822,7 @@ def _service_metadata(formula: Formula, config: Config) -> Optional[dict[str, An
         "stop_timeout": spec.stop_timeout,
         "root_dir": spec.root_dir,
         "input_path": spec.input_path,
+        "cron": dict(spec.cron),
         "sockets": dict(spec.sockets),
     }
 

@@ -594,3 +594,24 @@ def test_parse_multiline_keyword_and_parenthesized_hash(
     spec = parse_service_block(formula, config)
     assert spec.keep_alive == {"network_state": True, "successful_exit": False}
     assert spec.environment_variables["FOO"] == "bar"
+
+
+def test_service_cron_renders_launchd_calendar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula_with_service(
+        'run [opt_bin/"svc"]\ncron "@daily"'
+    )
+    manager = ServiceManager(config)
+    spec = manager.spec_for(formula)
+    assert spec.cron["Minute"] == 0
+    assert spec.cron["Hour"] == 0
+    payload = manager.plist_payload(formula, spec)
+    assert payload["StartCalendarInterval"] == {
+        "Minute": 0,
+        "Hour": 0,
+        "Day": "*",
+        "Month": "*",
+        "Weekday": "*",
+    }

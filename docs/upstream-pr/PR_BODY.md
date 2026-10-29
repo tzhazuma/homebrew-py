@@ -31,7 +31,7 @@ asks three concrete questions:
 
 ## Testing
 
-- `pytest -q` in the linked prototype: **521 passed, 5 skipped**.
+- `pytest -q` in the linked prototype: **522 passed, 5 skipped**.
 - 15 real homebrew-core formulae parse to exactly the desc/homepage/license/
   version/dependency values returned by `brew info --json=v2` (Homebrew 7.0.9).
 - A real cached `libslirp 4.9.6` Homebrew bottle installs offline; synthetic
