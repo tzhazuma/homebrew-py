@@ -91,6 +91,7 @@ _SERVICE_FIELDS = (
     "throttle_interval",
     "launch_only_once",
     "macos_legacy_timers",
+    "nice",
     "sockets",
 )
 
@@ -476,7 +477,7 @@ class PybrewServiceDSL
   # Directives whose value is a single scalar/path argument.
   SCALAR_FIELDS = %w[
     working_dir log_path error_log_path interval process_type run_at_load
-    require_root throttle_interval launch_only_once macos_legacy_timers
+    require_root throttle_interval launch_only_once macos_legacy_timers nice
   ].freeze
 
   def initialize
@@ -497,6 +498,7 @@ class PybrewServiceDSL
       "throttle_interval" => nil,
       "launch_only_once" => false,
       "macos_legacy_timers" => false,
+      "nice" => nil,
       "sockets" => {},
       "warnings" => []
     }

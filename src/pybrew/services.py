@@ -64,6 +64,7 @@ class ServiceSpec:
     throttle_interval: Optional[int] = None
     launch_only_once: bool = False
     macos_legacy_timers: bool = False
+    nice: Optional[int] = None
     sockets: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
@@ -438,6 +439,8 @@ def _apply_service_directive(spec: ServiceSpec, name: str, args: list[Any]) -> N
         spec.launch_only_once = _service_bool(args[0], "launch_only_once")
     elif name == "macos_legacy_timers" and args:
         spec.macos_legacy_timers = _service_bool(args[0], "macos_legacy_timers")
+    elif name == "nice" and args:
+        spec.nice = _service_int(args[0], "nice")
     elif name == "sockets":
         spec.sockets = _parse_sockets(args)
     # Unknown directives (nice, run_type, cron, ...) are intentionally ignored
@@ -645,6 +648,8 @@ class ServiceManager:
         ]
         if spec.working_dir:
             lines.append(f"WorkingDirectory={spec.working_dir}")
+        if spec.nice is not None:
+            lines.append(f"Nice={spec.nice}")
         for key, value in spec.environment_variables.items():
             escaped = str(value).replace('"', '\\"')
             lines.append(f'Environment="{key}={escaped}"')
@@ -674,6 +679,8 @@ class ServiceManager:
         }
         if spec.working_dir:
             payload["WorkingDirectory"] = spec.working_dir
+        if spec.nice is not None:
+            payload["Nice"] = spec.nice
         keep_alive = _launchd_keep_alive(spec)
         if keep_alive is not None:
             payload["KeepAlive"] = keep_alive

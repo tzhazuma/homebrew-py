@@ -468,6 +468,7 @@ def test_systemd_unit_renders_extended_fields(
         error_log_path var/"log/svc.err.log"
         keep_alive successful_exit: false
         throttle_interval 20
+        nice 5
         launch_only_once true
         environment_variables FOO: "bar"
         """
@@ -479,6 +480,7 @@ def test_systemd_unit_renders_extended_fields(
     assert "Type=oneshot" in unit
     assert "Restart=on-failure" in unit
     assert "RestartSec=20" in unit
+    assert "Nice=5" in unit
     assert "ExecStart=" in unit
     assert f"WorkingDirectory={config.prefix / 'var' / 'lib' / 'svc'}" in unit
     assert f"StandardOutput=append:{config.prefix / 'var' / 'log' / 'svc.log'}" in unit
