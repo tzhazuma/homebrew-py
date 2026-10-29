@@ -443,9 +443,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `af0efc4` (expanded Homebrew Ruby API shim and formula test DSL)
-- CI run for `af0efc4`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40837746973>
+- Latest feature commit: `7d219e7` (caveats DSL, expanded formula test DSL, Formula object API)
+- CI run for `7d219e7`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40840927274>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
