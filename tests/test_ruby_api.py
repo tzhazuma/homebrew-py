@@ -1481,6 +1481,7 @@ def test_formula_spec_bottle_and_status_api(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv(ALLOW_ENV, "1")
+    monkeypatch.setenv("PYBREW_BOTTLE_TAG", "sonoma")
     formula = _formula(
         "ruby-spec",
         "1.2.3",
@@ -1512,8 +1513,8 @@ def test_formula_spec_bottle_and_status_api(
     assert lines[2] == "1.2.3"
     assert lines[3] == "https://example.com/head.tar.gz"
     assert lines[4] == "HEAD"
-    assert lines[5] in {"sonoma", "arm64_sonoma"}
-    assert lines[6] in {"b" * 64, "c" * 64}
+    assert lines[5] == "sonoma"
+    assert lines[6] == "b" * 64
     assert lines[7] == "2"
     assert lines[8] == "true"
     assert lines[9] == "true"
