@@ -528,9 +528,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `7ac39bc` (opt-in arbitrary Ruby service DSL evaluator)
-- CI run for `7ac39bc`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40941091207>
+- Latest feature commit: `1586c83` (lazy referenced-resource staging)
+- CI run for `1586c83`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40941896224>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
