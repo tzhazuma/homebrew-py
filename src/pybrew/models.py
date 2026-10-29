@@ -229,6 +229,11 @@ class Formula:
     keg_only_reason: Optional[str] = None
     oldname: Optional[str] = None
     aliases: list[str] = field(default_factory=list)
+    options: list[str] = field(default_factory=list)
+    deprecated_options: dict[str, str] = field(default_factory=dict)
+    fails_with: list[dict[str, Any]] = field(default_factory=list)
+    preserve_rpath: bool = False
+    skip_clean: list[str] = field(default_factory=list)
 
     stable: SourceSpec = field(default_factory=SourceSpec)
     head: SourceSpec = field(default_factory=SourceSpec)

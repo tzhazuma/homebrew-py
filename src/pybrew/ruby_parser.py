@@ -1062,7 +1062,27 @@ class RubyFormulaParser:
         elif name == "deny_network_access!":
             self.formula.deny_network_access = True
         elif name == "option":
-            self.formula.extra.setdefault("option", []).append(list(args))
+            if args:
+                self.formula.options.append(str(args[0]))
+        elif name == "deprecated_option":
+            for arg in args:
+                if isinstance(arg, dict):
+                    for key, value in arg.items():
+                        self.formula.deprecated_options[str(key)] = str(value)
+            for key, value in kwargs.items():
+                self.formula.deprecated_options[str(key)] = str(value)
+        elif name == "fails_with":
+            entry = {str(key): value for key, value in kwargs.items()}
+            if entry:
+                self.formula.fails_with.append(entry)
+        elif name == "preserve_rpath":
+            self.formula.preserve_rpath = True
+        elif name == "skip_clean":
+            for arg in args:
+                if isinstance(arg, list):
+                    self.formula.skip_clean.extend(str(item) for item in arg)
+                else:
+                    self.formula.skip_clean.append(str(arg))
         elif name in {"deprecate!", "disable!"}:  # pragma: no cover
             pass
         else:

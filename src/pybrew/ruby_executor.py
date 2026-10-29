@@ -2583,6 +2583,26 @@ class PybrewFormulaRef
   def patches
     Array(@info["patches"]).map { |entry| PybrewPatchRef.new(entry) }
   end
+
+  def options
+    Array(@info["options"]).map(&:to_s)
+  end
+
+  def deprecated_options
+    @info["deprecated_options"] || {}
+  end
+
+  def fails_with
+    Array(@info["fails_with"])
+  end
+
+  def preserve_rpath?
+    !!@info["preserve_rpath"]
+  end
+
+  def skip_clean(*args)
+    @info["skip_clean"] || []
+  end
 end
 
 module Formula
@@ -3286,6 +3306,11 @@ def _formula_reference_map(
         "disable_reason": formula.disable_reason,
         "aliases": list(formula.aliases),
         "oldname": formula.oldname,
+        "options": list(formula.options),
+        "deprecated_options": dict(formula.deprecated_options),
+        "fails_with": list(formula.fails_with),
+        "preserve_rpath": bool(formula.preserve_rpath),
+        "skip_clean": list(formula.skip_clean),
         "patches": [
             {
                 "url": patch.url,

@@ -179,3 +179,22 @@ end
     )
     assert [requirement.name for requirement in formula.requirements] == ["macos", "xcode"]
     assert formula.dependencies == []
+
+
+def test_option_and_cleanup_metadata() -> None:
+    formula = parse_formula_source(
+        '''class Optiony < Formula
+  option "with-extra", "Enable extra"
+  deprecated_option "with-old" => "with-extra"
+  preserve_rpath
+  skip_clean "bin"
+  url "https://example.com/optiony-1.0.tar.gz"
+  sha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+end
+''',
+        name="optiony",
+    )
+    assert formula.options == ["with-extra"]
+    assert formula.deprecated_options == {"with-old": "with-extra"}
+    assert formula.preserve_rpath is True
+    assert formula.skip_clean == ["bin"]

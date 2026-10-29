@@ -1728,3 +1728,33 @@ def test_formula_oldname_and_aliases(
     lines = (keg / "aliases").read_text().splitlines()
     assert lines[0] == "old-ruby-aliases"
     assert lines[1] == "short-name,other-name"
+
+
+def test_formula_option_metadata_api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-options",
+        "1.0",
+        (
+            '  ref = Formula["ruby-options"]\n'
+            '  (prefix/"options").write [\n'
+            '    ref.options.join(","),\n'
+            '    ref.deprecated_options.to_a.map { |pair| pair.join("=>") }.join(","),\n'
+            '    ref.preserve_rpath?.to_s,\n'
+            '    ref.skip_clean.join(",")\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.options = ["with-extra"]
+    formula.deprecated_options = {"with-old": "with-extra"}
+    formula.preserve_rpath = True
+    formula.skip_clean = ["bin"]
+
+    keg = _build(tmp_path, formula)
+    lines = (keg / "options").read_text().splitlines()
+    assert lines[0] == "with-extra"
+    assert lines[1] == "with-old=>with-extra"
+    assert lines[2] == "true"
+    assert lines[3] == "bin"
