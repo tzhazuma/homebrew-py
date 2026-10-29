@@ -393,6 +393,11 @@ def _cask_from_result(
         cask.disabled = True
         cask.disable_reason = str(data.get("disable_reason") or "") or None
 
+    os_map = data.get("os_map")
+    if isinstance(os_map, dict):
+        for key, value in os_map.items():
+            if str(value).strip():
+                cask.os[str(key)] = str(value)
     os_value = data.get("os")
     if os_value is not None and str(os_value).strip():
         platform_key = "macos" if sys.platform.startswith("darwin") else "linux"
@@ -578,6 +583,7 @@ class PybrewCaskDSL
       "deprecated" => false,
       "deprecation_reason" => nil,
       "disabled" => false,
+      "os_map" => {},
       "no_autobump" => false,
       "no_autobump_reason" => nil,
       "disable_reason" => nil,
@@ -736,6 +742,7 @@ class PybrewCaskDSL
     kwargs.each { |key, value| @os_map[key.to_s] = value.to_s }
     @os_value = @os_map[host_platform == "darwin" ? "macos" : "linux"]
     @data["os"] = @os_value
+    @data["os_map"] = @os_map
     @os_value
   end
 

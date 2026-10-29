@@ -795,5 +795,4 @@ def test_cask_ruby_os_stanza(allow_ruby: None) -> None:
         '  app "Osy.app"\n'
     )
     cask = evaluate_cask_source(source)
-    key = "macos" if sys.platform.startswith("darwin") else "linux"
-    assert cask.os[key] == ">= :sonoma"
+    assert cask.os["macos"] == ">= :sonoma"
