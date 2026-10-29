@@ -8,7 +8,7 @@ Formula 解析、依赖解析、Cellar、bottle 安装、链接/卸载和 receip
 
 > **状态：v0.1 原型（可运行、可测试）**
 >
-> - 492 个测试通过（另有 5 个 opt-in 测试跳过；`pytest -q`）
+> - 493 个测试通过（另有 5 个 opt-in 测试跳过；`pytest -q`）
 > - 15 个真实 homebrew-core 公式（bash、git、curl、openssl@3、python@3.12 等）与
 >   `brew info --json=v2` 的元数据逐项对比通过
 > - 使用真实 `hello 2.12.3` Formula 完成 autotools 源码构建并运行成功
@@ -99,7 +99,7 @@ Installer(config, loader).install(formula, InstallOptions())
 | Cellar / 链接 | ✅ | `Cellar/<name>/<version>`、`opt` 链接、bin/lib/share/... 相对符号链接、冲突检测、`--overwrite`、卸载清理 |
 | Source 安装 | ✅ 常用子集 | `system`（含 `std_configure_args`/`std_cmake_args`/`std_meson_args`/`std_cargo_args`）、`inreplace`、`ENV`、`bin.install`/`prefix.install`、`resource(...).stage`、`--HEAD` 源码安装、`on_macos`/`on_linux`/`on_arm`/`on_intel`、`Hardware::CPU`/`build.with?`/`args.include?` 条件、`ENV["X"]` 读取；新增 opt-in 任意 Ruby 桥 `PYBREW_ALLOW_ARBITRARY_RUBY=1` / `install --allow-arbitrary-ruby`（Ruby shim 扩展到 Pathname/Utils/Hardware/OS/MacOS/ENV/Formula[]/resource/patch；有 downloader 时只下载 install body 引用的 resource 并安全解压；支持 patch 应用（url/`file`/`:DATA`）与 post_install）；autotools/cmake/cargo 有真实构建测试，meson 也已完成真实项目手工构建验证 |
 | Tap 管理 | ✅ | `tap`/`untap`/`tap --list`/`tap --update`/`update`，支持 GitHub 与本地 git URL，自动发现 Formula/Casks |
-| Cask | ✅ zip/dmg/pkg 子集 | app/binary/suite 安装、receipt、uninstall、`--zap`；`pkg` 可展开 payload 到 `--pkg-root`；支持 `--api`、`outdated`/`upgrade`/`reinstall`（含 `--cask` 别名）、`search --cask`、`uninstall quit/delete/pkgutil`；新增 font/colorpicker/prefpane/qlplugin/mdimporter/screen_saver/service/audio_unit/vst/vst3/dictionary/input_method/keyboard_layout 等 Library artifact，以及 bash/zsh/fish completion、manpage artifact、`rename` 预安装重命名、`container type:` 解析、`stage_only`、`--library-root`；支持 opt-in `--system-pkg`（root + macOS installer）、系统 pkg 卸载与升级回滚；新增 opt-in `--run-scripts` 执行 cask preflight/postflight/uninstall_preflight/uninstall_postflight；cask caveats 支持 block/literal 渲染（`caveats --cask`）；新增 opt-in `PYBREW_ALLOW_CASK_RUBY=1` / `--ruby-cask` 任意 Ruby cask DSL 求值（变量/循环/条件/平台分支；合并默认 parser 捕获的 scripts）；默认 cask parser 修复逗号换行 kwargs 丢失；升级会清理被移除的旧 artifact |
+| Cask | ✅ zip/dmg/pkg 子集 | app/binary/suite 安装、receipt、uninstall、`--zap`；`pkg` 可展开 payload 到 `--pkg-root`；支持 `--api`、`outdated`/`upgrade`/`reinstall`（含 `--cask` 别名）、`search --cask`、`uninstall quit/delete/pkgutil`；新增 font/colorpicker/prefpane/qlplugin/mdimporter/screen_saver/service/audio_unit/vst/vst3/dictionary/input_method/keyboard_layout 等 Library artifact，以及 bash/zsh/fish completion、manpage、appimage artifact、`rename` 预安装重命名、`container type:` 解析、`stage_only`、`--library-root`；支持 opt-in `--system-pkg`（root + macOS installer）、系统 pkg 卸载与升级回滚；新增 opt-in `--run-scripts` 执行 cask preflight/postflight/uninstall_preflight/uninstall_postflight；cask caveats 支持 block/literal 渲染（`caveats --cask`）；新增 opt-in `PYBREW_ALLOW_CASK_RUBY=1` / `--ruby-cask` 任意 Ruby cask DSL 求值（变量/循环/条件/平台分支；合并默认 parser 捕获的 scripts）；默认 cask parser 修复逗号换行 kwargs 丢失；升级会清理被移除的旧 artifact |
 | Services | ✅ launchd + systemd | macOS 生成 launchd plist；Linux 生成 systemd user unit；start/stop/restart/list/info |
 | Cask/Services/Tap 命令 | ✅ | 集成到 `pybrew` CLI |
 | 下载/源码查看 | ✅ | `fetch` formula bottle/source 或 `fetch --cask` artifact、`cat`/`home`/`edit` formula 与 cask |
@@ -150,7 +150,7 @@ Installer(config, loader).install(formula, InstallOptions())
 
 ```bash
 pytest -q
-# 492 passed, 5 skipped
+# 493 passed, 5 skipped
 ```
 
 测试覆盖：

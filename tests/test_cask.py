@@ -479,3 +479,37 @@ def test_parse_container_type() -> None:
         'end\n'
     )
     assert cask.container == "nupkg"
+
+
+def test_install_appimage_artifact(tmp_path: Path) -> None:
+    archive = tmp_path / "Appy.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("Appy.AppImage", "#!/bin/sh\necho appy\n")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "a" / "appy.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        f'''cask "appy" do
+  version "1.0"
+  sha256 "{digest}"
+  url "{archive.as_uri()}"
+  appimage "Appy.AppImage"
+end
+'''
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    installer.install(CaskLoader(discover_taps([tap])).load("appy"))
+
+    image = tmp_path / "Applications" / "Appy.AppImage"
+    assert image.is_file()
+    assert image.stat().st_mode & 0o111

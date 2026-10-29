@@ -896,6 +896,20 @@ class CaskInstaller:
             elif artifact.kind in ("pkg", "installer"):
                 self._install_pkg(cask, artifact, source_root, room, force, installed, archive)
 
+            elif artifact.kind == "appimage":
+                source = self._find(source_root, artifact.source)
+                if source is None:
+                    raise CaskError(
+                        f"{cask.token}: appimage {artifact.source!r} not found in archive"
+                    )
+                destination = appdir / (artifact.target or source.name)
+                if destination.exists() or destination.is_symlink():
+                    if not force:
+                        raise CaskError(f"{cask.token}: {destination} already exists")
+                    self._remove_path(destination)
+                shutil.copy2(source, destination)
+                destination.chmod(destination.stat().st_mode | 0o111)
+                installed.append(str(destination))
             elif artifact.kind == "suite":
                 source = self._find(source_root, artifact.source)
                 if source is None:
