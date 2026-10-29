@@ -605,9 +605,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `ef299e4` (Formula requirements API)
-- CI run for `ef299e4`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40949895025>
+- Latest feature commit: `1ac4f6f` (cask appimage artifacts)
+- CI run for `1ac4f6f`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40950694192>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
