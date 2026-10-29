@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-498 passed, 5 skipped in 79.21s
+499 passed, 5 skipped in 71.83s
 ```
 
 Breakdown of the feature slices:
@@ -33,7 +33,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_ruby.py
-60 passed      # cask base + Ruby evaluator + completion/manpage/rename/container/appimage/7z
+61 passed      # cask base + Ruby evaluator + artifacts + uninstall actions
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
@@ -516,6 +516,13 @@ local remote, commits a change, and confirms the CLI updates it.
 - Added `PybrewBottleFile`, `PybrewBottleSpec#bottle_tags`,
   `#bottle_for_tag` and `#bottle_url`.
 - Payload carries the formula name so ghcr bottle URLs resolve correctly.
+
+## Cask uninstall launchctl/signal
+
+- `uninstall launchctl:` now calls `launchctl bootout` (fallback `remove`).
+- `uninstall signal:` sends the requested signal via `pkill`.
+- Both use env-overridable executables and ignore missing tools like the other
+  best-effort uninstall actions.
 
 ## Final parallel batch
 

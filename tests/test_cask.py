@@ -563,3 +563,49 @@ end
     installer.install(CaskLoader(discover_taps([tap])).load("seven"))
 
     assert (tmp_path / "Applications" / "Tool.app" / "Contents" / "Info.plist").is_file()
+
+
+def test_uninstall_launchctl_and_signal_actions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "u" / "uninstally.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        '''cask "uninstally" do
+  version "1.0"
+  stage_only true
+  uninstall launchctl: "com.example.helper", signal: ["TERM", "Uninstally"]
+end
+'''
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    cask = CaskLoader(discover_taps([tap])).load("uninstally")
+    installer.install(cask)
+
+    log = tmp_path / "actions.log"
+    launchctl = tmp_path / "fake-launchctl"
+    launchctl.write_text('#!/bin/sh\necho "launchctl $*" >> "$ACTION_LOG"\n', encoding="utf-8")
+    launchctl.chmod(0o755)
+    pkill = tmp_path / "fake-pkill"
+    pkill.write_text('#!/bin/sh\necho "pkill $*" >> "$ACTION_LOG"\n', encoding="utf-8")
+    pkill.chmod(0o755)
+    monkeypatch.setenv("PYBREW_LAUNCHCTL", str(launchctl))
+    monkeypatch.setenv("PYBREW_PKILL", str(pkill))
+    monkeypatch.setenv("ACTION_LOG", str(log))
+    monkeypatch.setattr("pybrew.cask_installer.sys.platform", "darwin")
+
+    installer.uninstall("uninstally", cask=cask)
+
+    actions = log.read_text()
+    assert "launchctl bootout gui/" in actions
+    assert "com.example.helper" in actions
+    assert "pkill -TERM -f Uninstally" in actions

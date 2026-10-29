@@ -1858,6 +1858,42 @@ class CaskInstaller:
                     )
                 except (OSError, subprocess.TimeoutExpired):
                     pass
+        launchctl_value = cask.uninstall.get("launchctl")
+        if launchctl_value and sys.platform == "darwin":
+            labels = launchctl_value if isinstance(launchctl_value, list) else [launchctl_value]
+            executable = os.environ.get("PYBREW_LAUNCHCTL", "launchctl")
+            for label in labels:
+                try:
+                    result = subprocess.run(
+                        [executable, "bootout", f"gui/{os.getuid()}/{label}"],
+                        text=True,
+                        capture_output=True,
+                        timeout=30,
+                    )
+                    if result.returncode != 0:
+                        subprocess.run(
+                            [executable, "remove", str(label)],
+                            text=True,
+                            capture_output=True,
+                            timeout=30,
+                        )
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+        signal_value = cask.uninstall.get("signal")
+        if signal_value:
+            values = signal_value if isinstance(signal_value, list) else [signal_value]
+            if len(values) >= 2:
+                signal_name, target = str(values[0]), str(values[1])
+                executable = os.environ.get("PYBREW_PKILL", "pkill")
+                try:
+                    subprocess.run(
+                        [executable, f"-{signal_name}", "-f", target],
+                        text=True,
+                        capture_output=True,
+                        timeout=30,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
         delete_value = cask.uninstall.get("delete")
         if delete_value:
             paths = delete_value if isinstance(delete_value, list) else [delete_value]
