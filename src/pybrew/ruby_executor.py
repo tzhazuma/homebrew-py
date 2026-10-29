@@ -831,6 +831,64 @@ module MacOS
   rescue StandardError
     ""
   end
+
+  module CLT
+    def self.installed?
+      path = `/usr/bin/xcode-select -print-path 2>/dev/null`.to_s.strip
+      !path.empty? && File.directory?(path)
+    rescue StandardError
+      false
+    end
+
+    def self.version
+      raw = `/usr/sbin/pkgutil --pkg-info=com.apple.pkg.CLTools_Executables 2>/dev/null`.to_s
+      match = raw[/^version:\s*(\S+)/, 1]
+      match.nil? || match.empty? ? nil : PybrewVersion.new(match)
+    rescue StandardError
+      nil
+    end
+
+    def self.sdk_path
+      MacOS.sdk_path
+    end
+  end
+end
+
+module DevelopmentTools
+  module_function
+
+  def clang
+    Utils.which("clang")
+  end
+
+  def clang_version
+    output = Utils.popen_read("clang", "--version", safe: true) rescue ""
+    output[/clang version\s+(\S+)/, 1]
+  end
+
+  def default_compiler
+    :clang
+  end
+
+  def installed?
+    !clang.nil?
+  end
+
+  def needs_clt?
+    OS.mac? && !installed?
+  end
+
+  def xcode_installed?
+    OS.mac? && File.directory?(MacOS.active_developer_dir.to_s)
+  end
+
+  def sdk_path
+    MacOS.sdk_path
+  end
+
+  def locate
+    clang
+  end
 end
 
 module Linux
@@ -1603,6 +1661,13 @@ class << ENV
       end
     end
     nil
+  end
+
+  def compiler
+    configured = self["HOMEBREW_CC"].to_s
+    return configured.to_sym unless configured.empty?
+
+    find_tool("clang") ? :clang : :gcc
   end
 
   def cc

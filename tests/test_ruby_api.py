@@ -1595,3 +1595,29 @@ def test_formula_dependency_categories_and_conflicts(
         "bin/ruby-deps",
         "0",
     ]
+
+
+def test_development_tools_clt_and_compiler_api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-tools",
+        "1.0",
+        (
+            '  (prefix/"tools").write [\n'
+            '    DevelopmentTools.default_compiler.to_s,\n'
+            '    DevelopmentTools.installed?.to_s,\n'
+            '    DevelopmentTools.needs_clt?.to_s,\n'
+            '    MacOS::CLT.installed?.to_s,\n'
+            '    ENV.compiler.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    lines = (keg / "tools").read_text().splitlines()
+    assert lines[0] == "clang"
+    assert lines[1] in ("true", "false")
+    assert lines[2] in ("true", "false")
+    assert lines[3] in ("true", "false")
+    assert lines[4] in ("clang", "gcc")
