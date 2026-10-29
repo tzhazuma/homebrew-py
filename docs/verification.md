@@ -770,9 +770,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `10ed80f` (expose extended service fields on Formula ref)
-- CI run for `10ed80f`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40970663746>
+- Latest feature commit: `4b80cca` (Formula fetch_defined?)
+- CI run for `4b80cca`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40971194869>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
