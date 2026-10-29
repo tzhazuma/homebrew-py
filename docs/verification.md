@@ -474,9 +474,11 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `07a1105` (patch application, post_install, compiler ENV helpers)
-- CI run for `07a1105`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40929863684>
+- Latest feature commit: `89eb964` (local file patches, Formula metadata API)
+- CI run for `89eb964`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40930821120>
+  (Ubuntu Python 3.9/3.12 jobs green; the macOS job was still queued at the
+  last poll, not failed.)
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
