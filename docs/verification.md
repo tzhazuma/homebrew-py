@@ -591,9 +591,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `cf0debe` (Formula patches metadata API)
-- CI run for `cf0debe`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40948227404>
+- Latest feature commit: `c1e1651` (Formula oldname and aliases)
+- CI run for `c1e1651`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40949082459>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
