@@ -311,16 +311,103 @@ class FormulaTestContext
     raise_failure("Expected #{collection.inspect} to not include #{object.inspect}", message)
   end
 
-  def assert_output(expected, actual, message = nil)
+  def assert_output(expected, actual = nil, message = nil)
+    if block_given?
+      require "stringio"
+      old_stdout = $stdout
+      buffer = StringIO.new
+      $stdout = buffer
+      begin
+        yield
+      ensure
+        $stdout = old_stdout
+      end
+      actual = buffer.string
+    end
     return if expected == actual
 
     raise_failure("Expected output #{expected.inspect} to equal #{actual.inspect}", message)
   end
 
-  def refute_output(expected, actual, message = nil)
+  def refute_output(expected, actual = nil, message = nil)
+    if block_given?
+      require "stringio"
+      old_stdout = $stdout
+      buffer = StringIO.new
+      $stdout = buffer
+      begin
+        yield
+      ensure
+        $stdout = old_stdout
+      end
+      actual = buffer.string
+    end
     return unless expected == actual
 
     raise_failure("Expected output #{expected.inspect} to not equal #{actual.inspect}", message)
+  end
+
+  def assert_not_equal(expected, actual, message = nil)
+    refute_equal(expected, actual, message)
+  end
+
+  def assert_operator(left, operator, right, message = nil)
+    return if left.__send__(operator, right)
+
+    raise_failure("Expected #{left.inspect} #{operator} #{right.inspect}", message)
+  end
+
+  def assert_kind_of(klass, object, message = nil)
+    return if object.is_a?(klass)
+
+    raise_failure("Expected #{object.inspect} to be a kind of #{klass}", message)
+  end
+
+  def assert_instance_of(klass, object, message = nil)
+    return if object.instance_of?(klass)
+
+    raise_failure("Expected #{object.inspect} to be an instance of #{klass}", message)
+  end
+
+  def assert_respond_to(object, method_name, message = nil)
+    return if object.respond_to?(method_name)
+
+    raise_failure("Expected #{object.inspect} to respond to #{method_name}", message)
+  end
+
+  def assert_raises(*exceptions)
+    raise ArgumentError, "assert_raises needs at least one exception class" if exceptions.empty?
+    raise ArgumentError, "assert_raises requires a block" unless block_given?
+
+    begin
+      yield
+    rescue *exceptions => error
+      return error
+    end
+    raise_failure("Expected #{exceptions.inspect} to be raised", nil)
+  end
+
+  def assert_silent(message = nil)
+    require "stringio"
+    old_stdout = $stdout
+    old_stderr = $stderr
+    out = StringIO.new
+    err = StringIO.new
+    $stdout = out
+    $stderr = err
+    begin
+      yield
+    ensure
+      $stdout = old_stdout
+      $stderr = old_stderr
+    end
+    if !out.string.empty? || !err.string.empty?
+      raise_failure("Expected silence, got stdout=#{out.string.inspect} stderr=#{err.string.inspect}", message)
+    end
+  end
+
+  def assert_path_not_exists(path, message = nil)
+    refute_path_exists(path, message)
   end
 
   def assert_path_exists(path, message = nil)

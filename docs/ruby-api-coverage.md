@@ -22,6 +22,7 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
 | Build helpers | `build.head?/stable?/with?/without?`, `args`, `on_macos`/`on_linux`/`on_arm`/`on_intel`, `std_configure_args`, `std_cmake_args`, `std_meson_args`, `std_cargo_args`, `std_go_args`, `std_pip_args`, `std_service_path_env` |
 | Test DSL | `shell_output`/`pipe_output` with `stderr:`/`env:`/`chdir:`, `assert_output`, path/directory/symlink assertions, `assert_equal`, `assert_match`, `assert_predicate`, `assert_empty`, `assert_includes`, `assert_nil`, `refute_*` |
 | Cask scripts | opt-in preflight/postflight/uninstall_preflight/uninstall_postflight; command/env/chdir forms; no sudo |
+| Cask DSL | opt-in arbitrary-Ruby evaluator (`PYBREW_ALLOW_CASK_RUBY=1`): fields, artifacts, platform/arch, language, uninstall/zap, depends_on; scripts/unknown stanzas recorded |
 | Cask caveats | `caveats --cask`: captured block/literal, token/version/appdir/paths, platform blocks |
 | Caveats DSL | `pybrew caveats`: heredocs/strings, platform/arch blocks, paths, `ohai`/`opoo`/`puts`, ENV/Utils |
 | post_install | `post_install do ... end` after install, with paths/Formula/system/Utils/FileUtils |
@@ -38,7 +39,8 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
 - Full `MacOS`/SDK/Xcode/CLT detection, `DevelopmentTools`, `SystemConfig`.
 - Services DSL (`service do ... end`), caveats DSL, livecheck DSL.
 - Full cask DSL and cask script APIs (`Utils` internals, `MacOS` cask helpers,
-  `system_command` variants are partial); uninstall scripts are opt-in only.
+  `system_command` variants are partial); the arbitrary-Ruby evaluator records
+  unsupported stanzas instead of applying them, and scripts remain opt-in.
 - Full test DSL (Minitest block forms, `Formula["x"].test`, all path/type
   assertions and dependency lookup).
 - Any Ruby gem or third-party API used by formulae.

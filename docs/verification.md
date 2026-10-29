@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-389 passed, 5 skipped in 57.00s
+424 passed, 5 skipped in 71.67s
 ```
 
 Breakdown of the feature slices:
@@ -32,8 +32,8 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 17 passed      # 15 parametrized real formulae + 2 aggregate checks
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
-$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_scripts.py
-44 passed      # cask base + install/uninstall script shim
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_ruby.py
+51 passed      # cask base + opt-in arbitrary Ruby DSL evaluator
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
@@ -48,6 +48,8 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_caveats.py
 22 passed      # formula caveats DSL + CLI
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_caveats.py
 6 passed       # cask caveats block/literal + CLI
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_scripts.py
+27 passed      # cask install/uninstall script shim
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
 8 passed       # launchd + systemd unit generation, orphan cleanup
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_taps.py
@@ -375,6 +377,16 @@ local remote, commits a change, and confirms the CLI updates it.
 - `pybrew caveats --cask <token>` renders cask caveats with the Ruby shim
   (token/version/appdir/paths/platform blocks); literal caveats print directly.
 - This is separate from cask install/uninstall scripts and does not run them.
+
+## Arbitrary Ruby cask DSL
+
+- `PYBREW_ALLOW_CASK_RUBY=1` makes `CaskLoader` evaluate cask source under Ruby
+  with a JSON-collecting shim instead of the literal parser.
+- Supports variables/loops/conditionals/interpolation, platform/arch blocks,
+  language defaults, all artifact kinds, sha256 maps, uninstall/zap,
+  depends_on/conflicts, stage_only/auto_updates.
+- Scripts and unknown stanzas are not executed/captured; they are recorded as
+  warnings/unsupported. Default parser remains unchanged when the env is unset.
 
 ## Final parallel batch
 

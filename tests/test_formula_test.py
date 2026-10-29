@@ -495,3 +495,23 @@ def test_cli_test_requires_test_block(run_cli, sample) -> None:
     assert proc.returncode == 1
     assert "FAIL: hello-notest" in proc.stdout
     assert "no test block" in proc.stderr
+
+
+@requires_ruby
+def test_extended_assertion_helpers(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path,
+        '''do
+  assert_operator 2, :>, 1
+  assert_kind_of String, "value"
+  assert_instance_of String, "value"
+  assert_respond_to "value", :upcase
+  assert_not_equal 1, 2
+  assert_path_not_exists prefix/"missing"
+  assert_output("hello\\n") { puts "hello" }
+  assert_silent { }
+  assert_raises(RuntimeError) { raise "boom" }
+end''',
+    )
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True

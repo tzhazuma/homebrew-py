@@ -85,6 +85,10 @@ class CaskLoader:
             if self.allow_api:
                 return fetch_cask(token)
             raise
+        if os.environ.get("PYBREW_ALLOW_CASK_RUBY") == "1":
+            from .cask_ruby import evaluate_cask_file
+
+            return evaluate_cask_file(path, tap=tap.name)
         return parse_cask_file(path, tap=tap.name)
 
     def search(self, pattern: str) -> list[Cask]:
