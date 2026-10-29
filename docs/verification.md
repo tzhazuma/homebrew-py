@@ -674,9 +674,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `d96b4e5` (Formula block presence helpers)
-- CI run for `d96b4e5`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40957957337>
+- Latest feature commit: `c36bdd4` (Formula path and cleanup helpers)
+- CI run for `c36bdd4`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40958709688>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
