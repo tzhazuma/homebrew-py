@@ -660,9 +660,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `c328978` (Formula versioned helpers)
-- CI run for `c328978`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40956501899>
+- Latest feature commit: `fa83a98` (cask disable! metadata and install rejection)
+- CI run for `fa83a98`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40957426349>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
