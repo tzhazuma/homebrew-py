@@ -349,9 +349,9 @@ the template after edits.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `7774a60` (cask `pkgutil` uninstall action)
-- CI run for the pkgutil-uninstall feature commit `7774a60`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40557380180>
+- Latest parallel-batch feature commit: `40089f7` (cask depth, source DSL, Brewfile, ELF)
+- CI run for the parallel-batch commit `40089f7`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40816301690>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
