@@ -220,11 +220,11 @@ platform/path shim; `pybrew caveats <formula>` does not require installation.
 
 ## Resource staging
 
-When the opt-in Ruby bridge has a downloader, declared formula resources with
-`url`+`sha256` are fetched and safely extracted into
-`build_root/.pybrew-resources/<name>` before the install body runs. This is
-eager (all declared resources), unlike Homebrew's lazy staging; patches remain
-warnings rather than applied changes.
+When the opt-in Ruby bridge has a downloader, formula resources referenced by
+literal `resource("name")` calls in the install body and declaring `url`+`sha256`
+are fetched and safely extracted into `build_root/.pybrew-resources/<name>`
+before the install body runs. Dynamic `resources.each`/variable uses stage all
+conservatively. Patches are applied by the source builder before install.
 
 ## Patches and post_install
 

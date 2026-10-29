@@ -3192,11 +3192,38 @@ def _extract_resource_archive(archive: Path, destination: Path) -> None:
         raise BuildError(f"cannot read resource archive {archive}: {error}") from error
 
 
+_RESOURCE_LITERAL_CALL = re.compile(
+    r"""resource\s*\(\s*(['"])([^'"]+)\1"""
+)
+
+
+def _referenced_resource_names(body: str) -> Optional[set[str]]:
+    """Return literal resource names used by an install body.
+
+    ``None`` means the body uses a dynamic form (``resources.each`` or a
+    variable name), so the caller must conservatively stage every resource.
+    A set means only those literal ``resource("name")`` calls need staging.
+    """
+
+    if not re.search(r"\bresource\b", body):
+        return set()
+    names = set(_RESOURCE_LITERAL_CALL.findall(body))
+    # The regex above returns (quote, name) pairs.
+    literal_names = {name for _quote, name in names}
+    # Any other mention of resource/resources means we cannot prove the set.
+    without_literals = _RESOURCE_LITERAL_CALL.sub("", body)
+    if re.search(r"\bresource", without_literals):
+        return None
+    return literal_names
+
+
 def _stage_resources(
     formula: Formula,
     resources: dict[str, dict[str, Optional[str]]],
     build_root: Path,
     downloader: Optional[Any],
+    *,
+    only: Optional[set[str]] = None,
 ) -> None:
     """Download and stage declared resources for the Ruby shim.
 
@@ -3216,6 +3243,9 @@ def _stage_resources(
     staged_root = Path(build_root) / RESOURCE_STAGE_DIR
     for name, info in resources.items():
         if info.get("staged"):
+            continue
+        if only is not None and name not in only:
+            info["staged_error"] = "the resource is not referenced by the install body"
             continue
         url = info.get("url")
         sha256 = info.get("sha256")
@@ -3275,7 +3305,13 @@ def execute_install_body(
     ruby = _ruby_binary(formula)
     version = formula.version or "HEAD"
     resources = _resource_metadata(formula)
-    _stage_resources(formula, resources, build_root, downloader)
+    _stage_resources(
+        formula,
+        resources,
+        build_root,
+        downloader,
+        only=_referenced_resource_names(body),
+    )
     formulae = _formula_reference_map(formula, config, keg)
     formulae[formula.name]["resources"] = resources
     payload = {

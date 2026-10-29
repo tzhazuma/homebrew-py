@@ -1520,3 +1520,31 @@ def test_formula_spec_bottle_and_status_api(
     assert lines[9] == "true"
     assert lines[10] == "use other"
     assert lines[11] == "broken"
+
+
+def test_only_referenced_resources_are_staged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    archive = _tar_resource(
+        tmp_path / "src" / "used-1.0.tar.gz",
+        "used-1.0",
+        {"tool": "#!/bin/sh\necho used\n"},
+    )
+    formula = _formula(
+        "ruby-lazy-resource",
+        "1.0",
+        '''  resource("used").stage { bin.install "tool" }\n''',
+    )
+    formula.resources["used"] = SourceSpec(
+        url=archive.as_uri(), sha256=_sha256(archive)
+    )
+    # This URL must never be fetched: it does not exist and would fail loudly.
+    formula.resources["unused"] = SourceSpec(
+        url=(tmp_path / "does-not-exist.tar.gz").as_uri(),
+        sha256="0" * 64,
+    )
+
+    keg = _build(tmp_path, formula, downloader=_downloader(tmp_path))
+    assert (keg / "bin" / "tool").read_text() == "#!/bin/sh\necho used\n"
+    assert not (tmp_path / "build" / ".pybrew-resources" / "unused").exists()
