@@ -458,9 +458,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `7d219e7` (caveats DSL, expanded formula test DSL, Formula object API)
-- CI run for `7d219e7`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40840927274>
+- Latest feature commit: `8af280d` (resource auto-staging, expanded service DSL)
+- CI run for `8af280d`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40843298495>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
