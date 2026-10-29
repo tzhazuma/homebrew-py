@@ -792,9 +792,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `016f70b` (systemd cron timer support)
-- CI run for `016f70b`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40973068248>
+- Latest feature commit: `e145652` (cask livecheck source)
+- CI run for `e145652`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40973706641>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
