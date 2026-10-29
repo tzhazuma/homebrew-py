@@ -607,6 +607,19 @@ def _throttle_interval(spec: ServiceSpec) -> Optional[int]:
     return None
 
 
+def _systemd_on_calendar(cron: dict[str, Any]) -> str:
+    minute = "*" if cron.get("Minute") == "*" else f"{int(cron['Minute']):02d}"
+    hour = "*" if cron.get("Hour") == "*" else f"{int(cron['Hour']):02d}"
+    day = "*" if cron.get("Day") == "*" else str(int(cron["Day"]))
+    month = "*" if cron.get("Month") == "*" else str(int(cron["Month"]))
+    weekday = cron.get("Weekday", "*")
+    prefix = ""
+    if weekday != "*":
+        names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        prefix = f"{names[int(weekday) % 7]} "
+    return f"{prefix}*-{month}-{day} {hour}:{minute}:00"
+
+
 def _systemd_restart(spec: ServiceSpec) -> str:
     value = spec.keep_alive
     if value is True:
@@ -709,6 +722,30 @@ class ServiceManager:
         lines += ["", "[Install]", "WantedBy=default.target", ""]
         return "\n".join(lines) + "\n"
 
+    def timer_path(self, formula: Formula) -> Path:
+        return self.directory / f"{self.label(formula)}.timer"
+
+    def timer_text(self, formula: Formula, spec: ServiceSpec) -> str:
+        if not spec.cron:
+            raise ServiceError(f"{formula.name} service does not define cron")
+        return (
+            "[Unit]\n"
+            f"Description={formula.name} (pybrew) timer\n"
+            "\n"
+            "[Timer]\n"
+            f"OnCalendar={_systemd_on_calendar(spec.cron)}\n"
+            "Persistent=true\n"
+            "\n"
+            "[Install]\n"
+            "WantedBy=timers.target\n"
+        )
+
+    def write_timer(self, formula: Formula, spec: ServiceSpec) -> Path:
+        self.directory.mkdir(parents=True, exist_ok=True)
+        path = self.timer_path(formula)
+        path.write_text(self.timer_text(formula, spec))
+        return path
+
     def write_unit(self, formula: Formula, spec: ServiceSpec) -> Path:
         if not spec.run:
             raise ServiceError(f"{formula.name} service has no run command")
@@ -781,8 +818,13 @@ class ServiceManager:
         spec = self.spec_for(formula)
         if self.backend == "systemd":
             path = self.write_unit(formula, spec)
+            if spec.cron:
+                self.write_timer(formula, spec)
             self.runner.daemon_reload()
-            self.runner.start(f"{self.label(formula)}.service")
+            if spec.cron:
+                self.runner.start(f"{self.label(formula)}.timer")
+            else:
+                self.runner.start(f"{self.label(formula)}.service")
         else:
             path = self.write_plist(formula, spec)
             self.runner.start(path)
@@ -793,6 +835,9 @@ class ServiceManager:
         if not path.exists():
             return None
         if self.backend == "systemd":
+            timer = self.timer_path(formula)
+            if timer.exists():
+                self.runner.stop(f"{self.label(formula)}.timer")
             self.runner.stop(f"{self.label(formula)}.service")
         else:
             self.runner.stop(self.label(formula), path)
@@ -806,10 +851,16 @@ class ServiceManager:
         path = self.unit_path(formula) if self.backend == "systemd" else self.plist_path(formula)
         if path.exists():
             if self.backend == "systemd":
+                timer = self.timer_path(formula)
+                if timer.exists():
+                    self.runner.stop(f"{self.label(formula)}.timer")
                 self.runner.stop(f"{self.label(formula)}.service")
             else:
                 self.runner.stop(self.label(formula), path)
             path.unlink()
+            timer = self.timer_path(formula)
+            if timer.exists():
+                timer.unlink()
 
     def status(self, formula: Formula) -> str:
         path = self.unit_path(formula) if self.backend == "systemd" else self.plist_path(formula)
@@ -830,7 +881,10 @@ class ServiceManager:
             return removed
         for path in sorted(self.directory.iterdir()):
             name = path.name
-            if not (name.startswith("homebrew.mxcl.") and name.endswith((".plist", ".service"))):
+            if not (
+                name.startswith("homebrew.mxcl.")
+                and name.endswith((".plist", ".service", ".timer"))
+            ):
                 continue
             formula_name = name[len("homebrew.mxcl.") :].rsplit(".", 1)[0]
             if self.config.opt_path(formula_name).is_dir():

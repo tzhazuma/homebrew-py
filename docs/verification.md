@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-522 passed, 5 skipped in 84.44s
+523 passed, 5 skipped in 73.45s
 ```
 
 Breakdown of the feature slices:
@@ -37,7 +37,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
-98 passed      # declarative + opt-in Ruby bridge/API + service cron
+99 passed      # declarative + opt-in Ruby bridge/API + service timers
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_patches.py tests/test_post_install.py
 47 passed      # patch url/file/:DATA application + post_install
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py tests/test_service_ruby.py
@@ -665,6 +665,12 @@ local remote, commits a change, and confirms the CLI updates it.
   cron expressions.
 - launchd renders `StartCalendarInterval`; `Formula#service.cron` exposes the
   parsed fields.
+
+## systemd cron timer
+
+- Added `timer_path`/`timer_text`/`write_timer` and wired cron services to
+  start/stop/remove the `.timer` unit on systemd.
+- `OnCalendar` is generated from the parsed cron fields.
 
 ## Final parallel batch
 

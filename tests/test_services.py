@@ -615,3 +615,20 @@ def test_service_cron_renders_launchd_calendar(
         "Month": "*",
         "Weekday": "*",
     }
+
+
+def test_systemd_cron_timer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula_with_service(
+        'run [opt_bin/"svc"]\ncron "@daily"'
+    )
+    manager, _ = _systemd_manager(tmp_path, monkeypatch, config)
+    spec = manager.spec_for(formula)
+    timer = manager.timer_text(formula, spec)
+    assert "OnCalendar=*-*-* 00:00:00" in timer
+    assert "WantedBy=timers.target" in timer
+    path = manager.write_timer(formula, spec)
+    assert path == manager.timer_path(formula)
+    assert path.is_file()
