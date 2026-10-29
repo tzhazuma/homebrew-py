@@ -1907,7 +1907,7 @@ def test_formula_std_build_args_and_python3(
             '    std_npm_args.join(","),\n'
             '    std_npm_args(ignore_scripts: false).join(","),\n'
             '    std_shards_args.join(","),\n'
-            '    std_cabal_v2_args.join(","),\n'
+            '    std_cabal_v2_args.include?("--installdir=#{bin}").to_s,\n'
             '    python3.nil?.to_s\n'
             '  ].join("\\n")\n'
         ),
@@ -1916,6 +1916,32 @@ def test_formula_std_build_args_and_python3(
     lines = (keg / "stdargs").read_text().splitlines()
     assert lines[0] == f"--prefix={keg}/libexec,--ignore-scripts"
     assert lines[1] == f"--prefix={keg}/libexec"
-    assert lines[2] == "--production,--verbose,--no-color"
-    assert lines[3] == f"--installdir={keg}/bin,--overwrite-policy=always"
+    assert lines[2] == "--production,--release,--no-debug"
+    assert lines[3] == "true"
     assert lines[4] in ("true", "false")
+
+
+def test_std_build_args_keywords(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-std-keywords",
+        "1.0",
+        (
+            '  (prefix/"keywords").write [\n'
+            '    std_configure_args(libdir: "lib64").join(","),\n'
+            '    std_cmake_args(install_libdir: "lib64", find_framework: "NEVER").join(","),\n'
+            '    std_go_args(output: bin/"tool", ldflags: "-s").join(","),\n'
+            '    std_pip_args(build_isolation: true).join(","),\n'
+            '    std_cargo_args(features: ["a", "b"]).join(",")\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    lines = (keg / "keywords").read_text().splitlines()
+    assert f"--libdir={keg}/lib64" in lines[0]
+    assert "-DCMAKE_INSTALL_LIBDIR=lib64" in lines[1]
+    assert "-DCMAKE_FIND_FRAMEWORK=NEVER" in lines[1]
+    assert f"-o={keg}/bin/tool" in lines[2]
+    assert "-ldflags=-s" in lines[2]
+    assert "--no-build-isolation" not in lines[3]
+    assert "--features=a,b" in lines[4]

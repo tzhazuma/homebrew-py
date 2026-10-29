@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-505 passed, 5 skipped in 83.40s
+506 passed, 5 skipped in 86.09s
 ```
 
 Breakdown of the feature slices:
@@ -37,7 +37,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
-85 passed      # declarative + opt-in Ruby bridge/API + std build args
+86 passed      # declarative + opt-in Ruby bridge/API + std build args
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_patches.py tests/test_post_install.py
 47 passed      # patch url/file/:DATA application + post_install
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py tests/test_service_ruby.py
@@ -562,6 +562,13 @@ local remote, commits a change, and confirms the CLI updates it.
 
 - Added `std_npm_args`, `std_shards_args`, `std_cabal_v2_args` and
   `python3` to the install context.
+
+## Standard build args keywords
+
+- `std_configure_args`, `std_cmake_args`, `std_meson_args`, `std_cargo_args`,
+  `std_go_args`, `std_pip_args`, `std_cabal_v2_args` now accept Homebrew's
+  keyword arguments.
+- Added `std_cargo_fetch_args`, `std_swift_args`; aligned `std_shards_args`.
 
 ## Final parallel batch
 

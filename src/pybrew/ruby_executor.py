@@ -3192,40 +3192,53 @@ class PybrewInstallContext
     nil
   end
 
-  def std_configure_args
+  def std_configure_args(prefix: self.prefix, libdir: "lib")
     [
       "--disable-debug",
       "--disable-dependency-tracking",
       "--prefix=#{prefix}",
-      "--libdir=#{prefix}/lib",
+      "--libdir=#{prefix}/#{libdir}",
     ]
   end
 
-  def std_cmake_args
+  def std_cmake_args(install_prefix: prefix, install_libdir: "lib", find_framework: "LAST")
     [
-      "-DCMAKE_INSTALL_PREFIX=#{prefix}",
-      "-DCMAKE_INSTALL_LIBDIR=lib",
+      "-DCMAKE_INSTALL_PREFIX=#{install_prefix}",
+      "-DCMAKE_INSTALL_LIBDIR=#{install_libdir}",
       "-DCMAKE_BUILD_TYPE=Release",
-      "-DCMAKE_FIND_FRAMEWORK=LAST",
+      "-DCMAKE_FIND_FRAMEWORK=#{find_framework}",
       "-DCMAKE_VERBOSE_MAKEFILE=ON",
       "-Wno-dev",
     ]
   end
 
-  def std_meson_args
-    ["--prefix=#{prefix}", "--libdir=lib", "--buildtype=release", "--wrap-mode=nofallback"]
+  def std_meson_args(prefix: self.prefix, libdir: "lib")
+    ["--prefix=#{prefix}", "--libdir=#{libdir}", "--buildtype=release", "--wrap-mode=nofallback"]
   end
 
-  def std_cargo_args
-    ["--path", ".", "--root", prefix.to_s]
+  def std_cargo_args(root: prefix, path: ".", features: nil)
+    args = ["--jobs", ENV.make_jobs.to_s, "--locked", "--root=#{root}", "--path=#{path}"]
+    args << "--features=#{Array(features).join(",")}" if features
+    args
   end
 
-  def std_go_args
-    ["-o=#{prefix}/bin/#{name}"]
+  def std_cargo_fetch_args
+    ["--locked", "--target", "host-tuple"]
   end
 
-  def std_pip_args
-    ["--prefix", prefix.to_s]
+  def std_go_args(output: bin/name, ldflags: nil, gcflags: nil, tags: nil)
+    args = ["-o=#{output}"]
+    args << "-ldflags=#{ldflags}" unless ldflags.nil?
+    args << "-gcflags=#{gcflags}" unless gcflags.nil?
+    args << "-tags=#{Array(tags).join(",")}" unless tags.nil?
+    args
+  end
+
+  def std_pip_args(prefix: self.prefix, build_isolation: false)
+    args = ["--verbose", "--no-deps", "--no-binary=:all:", "--ignore-installed", "--no-compile"]
+    args << "--prefix=#{prefix}" if prefix
+    args << "--no-build-isolation" unless build_isolation
+    args
   end
 
   def std_npm_args(prefix: libexec, ignore_scripts: true)
@@ -3235,11 +3248,17 @@ class PybrewInstallContext
   end
 
   def std_shards_args
-    ["--production", "--verbose", "--no-color"]
+    ["--production", "--release", "--no-debug"]
+  end
+
+  def std_swift_args
+    ["--configuration", "release", "--jobs", ENV.make_jobs.to_s]
   end
 
   def std_cabal_v2_args(installdir: bin)
-    ["--installdir=#{installdir}", "--overwrite-policy=always"]
+    args = ["--jobs=#{ENV.make_jobs}", "--max-backjumps=100000"]
+    args += ["--install-method=copy", "--installdir=#{installdir}"] if installdir
+    args
   end
 
   def python3
