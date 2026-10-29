@@ -503,9 +503,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `f94c1ef` (cask caveats rendering)
-- CI run for `f94c1ef`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40933594684>
+- Latest feature commit: `501126d` (opt-in arbitrary Ruby cask DSL evaluator)
+- CI run for `501126d`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40936087663>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
