@@ -45,6 +45,7 @@ class Cask:
     conflicts_with: dict[str, Any] = field(default_factory=dict)
     auto_updates: bool = False
     stage_only: bool = False
+    container: Optional[str] = None
     language: Optional[str] = None
     arch: Optional[str] = None
     arch_map: dict[str, str] = field(default_factory=dict)
@@ -544,6 +545,10 @@ class CaskParser:
             source = str(args[0]) if args else ""
             target = kwargs.get("target")
             cask.artifacts.append(Artifact(name, source, str(target) if target else None, kwargs))
+        elif name == "container":
+            raw_type = kwargs.get("type") or kwargs.get(":type")
+            if raw_type is not None:
+                cask.container = str(raw_type).lstrip(":")
         elif name == "stage_only":
             if args:
                 cask.stage_only = not (

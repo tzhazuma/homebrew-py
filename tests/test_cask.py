@@ -468,3 +468,14 @@ end
 
     assert (tmp_path / "Applications" / "New.app" / "Contents" / "Info.plist").is_file()
     assert not (tmp_path / "Applications" / "Old.app").exists()
+
+
+def test_parse_container_type() -> None:
+    cask = parse_cask_source(
+        'cask "containy" do\n'
+        '  version "1.0"\n'
+        '  container type: :nupkg\n'
+        '  app "Containy.app"\n'
+        'end\n'
+    )
+    assert cask.container == "nupkg"

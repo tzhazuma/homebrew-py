@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-486 passed, 5 skipped in 72.18s
+487 passed, 5 skipped in 66.70s
 ```
 
 Breakdown of the feature slices:
@@ -33,7 +33,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_ruby.py
-57 passed      # cask base + Ruby evaluator + completion/manpage/rename
+58 passed      # cask base + Ruby evaluator + completion/manpage/rename/container
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
@@ -449,6 +449,13 @@ local remote, commits a change, and confirms the CLI updates it.
 - Installer applies renames to the staged source before artifact installation,
   with safe relative targets and clear missing/conflict errors.
 - Literal parser and arbitrary-Ruby evaluator both support it.
+
+## Cask container parsing
+
+- Added `Cask.container` and literal/evaluator support for
+  `container type: :nupkg` (and other type values are preserved).
+- Archive detection still uses suffix/magic; `nupkg` archives are zip payloads
+  and already extract as zip.
 
 ## Final parallel batch
 

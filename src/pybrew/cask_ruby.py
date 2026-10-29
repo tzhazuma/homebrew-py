@@ -378,6 +378,10 @@ def _cask_from_result(
                 )
             )
 
+    container = data.get("container")
+    if container is not None and str(container).strip():
+        cask.container = str(container).strip()
+
     renames = data.get("renames") or []
     if isinstance(renames, list):
         for entry in renames:
@@ -547,6 +551,7 @@ class PybrewCaskDSL
       "conflicts_with" => {},
       "auto_updates" => false,
       "stage_only" => false,
+      "container" => nil,
       "language" => nil,
       "arch" => nil,
       "arch_map" => {},
@@ -800,6 +805,13 @@ class PybrewCaskDSL
     define_method(method_name.to_sym) do |*args|
       record_artifact(kind.to_s, args)
     end
+  end
+
+  def container(*args)
+    _positional, kwargs = PybrewCaskJSON.split_args(args)
+    raw_type = kwargs["type"] || kwargs[:type]
+    @data["container"] = raw_type.to_s.sub(/\A:/, "") unless raw_type.nil?
+    @data["container"]
   end
 
   # -- uninstall / zap / dependencies -----------------------------------
