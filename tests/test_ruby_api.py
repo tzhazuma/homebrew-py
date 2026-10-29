@@ -2137,3 +2137,41 @@ def test_formula_python3_ref(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     )
     keg = _build(tmp_path, formula)
     assert (keg / "python3").read_text().strip() in ("nil", "path")
+
+
+def test_formula_service_ref_extended_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-service-extended",
+        "1.0",
+        (
+            '  service = Formula["ruby-service-extended"].service\n'
+            '  (prefix/"serviceextended").write [\n'
+            '    service.nice.to_s, service.restart_delay.to_s,\n'
+            '    service.stop_timeout.to_s, service.root_dir.to_s,\n'
+            '    service.input_path.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.service = {
+        "source": (
+            "service do\n"
+            "  run \"ruby-service-extended\"\n"
+            "  nice 5\n"
+            "  restart_delay 7\n"
+            "  stop_timeout 9\n"
+            "  root_dir \"/tmp\"\n"
+            "  input_path \"/tmp/in\"\n"
+            "end\n"
+        )
+    }
+    keg = _build(tmp_path, formula)
+    assert (keg / "serviceextended").read_text().splitlines() == [
+        "5",
+        "7",
+        "9",
+        "/tmp",
+        "/tmp/in",
+    ]

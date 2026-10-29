@@ -2267,6 +2267,26 @@ class PybrewServiceRef
     @info["throttle_interval"]
   end
 
+  def nice
+    @info["nice"]
+  end
+
+  def restart_delay
+    @info["restart_delay"]
+  end
+
+  def stop_timeout
+    @info["stop_timeout"]
+  end
+
+  def root_dir
+    @info["root_dir"]
+  end
+
+  def input_path
+    @info["input_path"]
+  end
+
   def sockets
     @info["sockets"] || {}
   end
@@ -3789,6 +3809,11 @@ def _service_metadata(formula: Formula, config: Config) -> Optional[dict[str, An
         "launch_only_once": spec.launch_only_once,
         "macos_legacy_timers": spec.macos_legacy_timers,
         "throttle_interval": spec.throttle_interval,
+        "nice": spec.nice,
+        "restart_delay": spec.restart_delay,
+        "stop_timeout": spec.stop_timeout,
+        "root_dir": spec.root_dir,
+        "input_path": spec.input_path,
         "sockets": dict(spec.sockets),
     }
 
