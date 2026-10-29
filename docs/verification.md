@@ -613,9 +613,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `1ac4f6f` (cask appimage artifacts)
-- CI run for `1ac4f6f`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40950694192>
+- Latest feature commit: `7094781` (cask 7z/rar container extraction)
+- CI run for `7094781`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40951729817>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
