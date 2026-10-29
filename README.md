@@ -8,7 +8,7 @@ Formula 解析、依赖解析、Cellar、bottle 安装、链接/卸载和 receip
 
 > **状态：v0.1 原型（可运行、可测试）**
 >
-> - 330 个测试通过（另有 5 个 opt-in 测试跳过；`pytest -q`）
+> - 375 个测试通过（另有 6 个 opt-in 测试跳过；`pytest -q`）
 > - 15 个真实 homebrew-core 公式（bash、git、curl、openssl@3、python@3.12 等）与
 >   `brew info --json=v2` 的元数据逐项对比通过
 > - 使用真实 `hello 2.12.3` Formula 完成 autotools 源码构建并运行成功
@@ -97,13 +97,14 @@ Installer(config, loader).install(formula, InstallOptions())
 | 依赖解析 | ✅ | 递归依赖、拓扑排序、环检测、build/test/optional/recommended 分类、`uses_from_macos`（Linux 安装）|
 | Bottle 安装 | ✅ | 标签选择与降级、ghcr.io OCI 匿名拉取、本地缓存/SHA 校验、安全解包、`@@HOMEBREW_*@@` 重定位（Mach-O `install_name_tool`、ELF `patchelf` RPATH）、receipt |
 | Cellar / 链接 | ✅ | `Cellar/<name>/<version>`、`opt` 链接、bin/lib/share/... 相对符号链接、冲突检测、`--overwrite`、卸载清理 |
-| Source 安装 | ✅ 常用子集 | `system`（含 `std_configure_args`/`std_cmake_args`/`std_meson_args`/`std_cargo_args`）、`inreplace`、`ENV`、`bin.install`/`prefix.install`、`resource(...).stage`、`--HEAD` 源码安装、`on_macos`/`on_linux`/`on_arm`/`on_intel`、`Hardware::CPU`/`build.with?`/`args.include?` 条件、`ENV["X"]` 读取；新增 opt-in 任意 Ruby 桥 `PYBREW_ALLOW_ARBITRARY_RUBY=1` / `install --allow-arbitrary-ruby`（Ruby shim 扩展到 Pathname/Utils/Hardware/OS/MacOS/ENV/Formula[]/resource/patch；有 downloader 时自动下载并安全解压 resource）；autotools/cmake/cargo 有真实构建测试，meson 也已完成真实项目手工构建验证 |
+| Source 安装 | ✅ 常用子集 | `system`（含 `std_configure_args`/`std_cmake_args`/`std_meson_args`/`std_cargo_args`）、`inreplace`、`ENV`、`bin.install`/`prefix.install`、`resource(...).stage`、`--HEAD` 源码安装、`on_macos`/`on_linux`/`on_arm`/`on_intel`、`Hardware::CPU`/`build.with?`/`args.include?` 条件、`ENV["X"]` 读取；新增 opt-in 任意 Ruby 桥 `PYBREW_ALLOW_ARBITRARY_RUBY=1` / `install --allow-arbitrary-ruby`（Ruby shim 扩展到 Pathname/Utils/Hardware/OS/MacOS/ENV/Formula[]/resource/patch；有 downloader 时自动下载并安全解压 resource；支持 patch 应用与 post_install）；autotools/cmake/cargo 有真实构建测试，meson 也已完成真实项目手工构建验证 |
 | Tap 管理 | ✅ | `tap`/`untap`/`tap --list`/`tap --update`/`update`，支持 GitHub 与本地 git URL，自动发现 Formula/Casks |
 | Cask | ✅ zip/dmg/pkg 子集 | app/binary/suite 安装、receipt、uninstall、`--zap`；`pkg` 可展开 payload 到 `--pkg-root`；支持 `--api`、`outdated`/`upgrade`/`reinstall`（含 `--cask` 别名）、`search --cask`、`uninstall quit/delete/pkgutil`；新增 font/colorpicker/prefpane/qlplugin/mdimporter/screen_saver/service/audio_unit/vst/vst3/dictionary/input_method/keyboard_layout 等 Library artifact、`stage_only`、`--library-root`；支持 opt-in `--system-pkg`（root + macOS installer）、系统 pkg 卸载与升级回滚；新增 opt-in `--run-scripts` 执行 cask preflight/postflight（Ruby shim，含 Utils/MacOS/OS 等）；升级会清理被移除的旧 artifact |
 | Services | ✅ launchd + systemd | macOS 生成 launchd plist；Linux 生成 systemd user unit；start/stop/restart/list/info |
 | Cask/Services/Tap 命令 | ✅ | 集成到 `pybrew` CLI |
 | 下载/源码查看 | ✅ | `fetch` formula bottle/source 或 `fetch --cask` artifact、`cat`/`home`/`edit` formula 与 cask |
 | 维护命令 | ✅ | `leaves`、`uses`、`autoremove`、`outdated`、`upgrade`（安装新版本并清理旧 keg，含 `--dry-run`）、`cleanup`（含 `--prune-cache`）、`reinstall`、`doctor --json`、`pin`/`unpin`、`services cleanup`、`tap --update`、`shellenv`；install `--no-link` |
+| Formula DSL | ✅ 基础 | `patch do ... end` / `patch :DATA` 解析与 `patch -pN` 应用；`post_install` 在安装后执行；source 构建前应用 patch |
 | Formula test | ✅ 基础 | `pybrew test <formula>` 在已安装 keg 上执行 `test do ... end`，支持 shell_output/pipe_output/assert_*、路径断言、`Formula[...]`；不完整 DSL 会明确报错 |
 | Caveats | ✅ 基础 | `pybrew caveats <formula>` 执行 caveats Ruby DSL（heredoc/平台分支/paths），无需安装 |
 | Brewfile | ✅ 基础 | `bundle install/check/list/dump`，支持 `tap`/`brew`/`cask`/`mas`/`vscode` 行，tap `url:`、brew `link:false`/`args:`/`restart_service:true` |
@@ -149,7 +150,7 @@ Installer(config, loader).install(formula, InstallOptions())
 
 ```bash
 pytest -q
-# 330 passed, 5 skipped
+# 375 passed, 6 skipped
 ```
 
 测试覆盖：
@@ -166,6 +167,8 @@ pytest -q
 - `test_ruby_api.py`：Pathname/Utils/Hardware/OS/MacOS/ENV/Formula/resource 等 API 兼容测试
 - `test_formula_test.py`：formula test DSL、PASS/FAIL、缺失安装/Ruby 时的错误
 - `test_caveats.py`：caveats DSL、平台分支、路径、CLI
+- `test_patches.py`：patch 解析/应用、strip、失败/缺失下载器
+- `test_post_install.py`：post_install 执行、失败、fake Ruby、安装集成
 - `test_cask.py`：真实 cask（rectangle/iterm2/VSCode）解析、zip/dmg 安装/卸载/zap、pkg payload、`install --cask`、API 映射、outdated/upgrade/reinstall、uninstall quit/delete
 - `test_cask_depth.py`：13 种 Library artifact、stage_only、target 安全校验、升级 artifact 清理
 - `test_cask_pkg_system.py`：opt-in 系统 pkg 安装（fake installer、root 检查、receipt）

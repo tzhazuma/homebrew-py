@@ -226,6 +226,13 @@ When the opt-in Ruby bridge has a downloader, declared formula resources with
 eager (all declared resources), unlike Homebrew's lazy staging; patches remain
 warnings rather than applied changes.
 
+## Patches and post_install
+
+The parser captures `patch do ... end`/`patch :DATA` into `Formula.patches`;
+the source builder applies them with `patch -pN` before install. Captured
+`post_install` source runs under Ruby after a successful install/link and is
+recorded in the receipt.
+
 ## Known limitations
 
 - Source builds support a common literal `def install` subset (on_arm/on_intel,

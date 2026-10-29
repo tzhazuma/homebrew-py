@@ -33,6 +33,7 @@ from .models import (
     Dependency,
     Formula,
     Opaque,
+    PatchSpec,
     SourceSpec,
     Sym,
     is_linux,
@@ -69,6 +70,11 @@ _KEYWORDS = {
 _OP_MULTI = ("=>", "==", "!=", "<=", ">=", "&&", "||", "::", "..", "**", "+=", "-=", "&.")
 
 _BLOCK_OPENERS = {"def", "do", "class", "module", "case", "begin", "while", "until", "for"}
+
+# Ruby's `__END__` marker and the DATA section after it.  Homebrew uses that
+# section for embedded patches (`patch :DATA`), so it must not be tokenised as
+# formula code.
+_END_MARKER = re.compile(r"(?m)^__END__[ \t]*\r?$")
 
 
 @dataclass
@@ -346,12 +352,31 @@ class RubyFormulaParser:
         self.tap = tap
         derived_name = name or (self.path.stem if self.path else "unknown")
         self.formula = Formula(name=derived_name, path=self.path, tap=tap)
-        self.tokens = Lexer(source).tokenise()
+        code, self.data_section = self._split_data_section(source)
+        self.tokens = Lexer(code).tokenise()
         self.pos = 0
         self._source_ctx = "stable"
         self._in_head = False
         self._conditional_depth = 0
         self._explicit_version = False
+
+    @staticmethod
+    def _split_data_section(source: str) -> tuple[str, Optional[str]]:
+        """Split Ruby ``__END__`` DATA from the formula code.
+
+        Homebrew embeds patches after ``__END__``; tokenising that arbitrary
+        text as Ruby would fail, so only the code prefix is lexed.
+        """
+
+        match = _END_MARKER.search(source)
+        if match is None:
+            return source, None
+        data = source[match.end() :]
+        if data.startswith("\r"):
+            data = data[1:]
+        if data.startswith("\n"):
+            data = data[1:]
+        return source[: match.start()], data
 
     # -- token helpers ---------------------------------------------------
     def peek(self, offset: int = 0) -> Token:
@@ -930,7 +955,10 @@ class RubyFormulaParser:
             if block is not None:
                 self._parse_resource_block(args, kwargs, block)
             return
-        if name in ("test", "livecheck", "patch", "service", "post_install"):
+        if name == "patch":
+            self._handle_patch(args, kwargs, block)
+            return
+        if name in ("test", "livecheck", "service", "post_install"):
             if block is not None:
                 start = block.start
                 end = self._skip_to_matching_end()
@@ -1208,6 +1236,164 @@ class RubyFormulaParser:
                     self._skip_block(self.advance())
         self.formula.resources[resource_name] = spec
 
+    # -- patches ---------------------------------------------------------
+    def _handle_patch(
+        self,
+        args: list[Any],
+        kwargs: dict[Any, Any],
+        block: Optional[Token],
+    ) -> None:
+        """Capture ``patch do ... end``, ``patch :DATA`` and inline patches.
+
+        Homebrew's forms are ``patch [strip] do url/sha256 ... end``,
+        ``patch :DATA``/``patch :p0, :DATA`` for the embedded ``__END__``
+        section and ``patch [strip], "diff..."`` for a literal patch string.
+        Unsupported sources (a local ``file``, for example) are recorded with a
+        reason so applying them fails clearly instead of silently skipping.
+        """
+
+        strip = 1
+        data: Optional[str] = None
+        position = 0
+        if args:
+            first = args[0]
+            if isinstance(first, Sym) and str(first) == "DATA":
+                self._record_data_patch(strip, block)
+                return
+            if isinstance(first, Sym):
+                strip = self._patch_strip(first)
+                position = 1
+            elif isinstance(first, int) and not isinstance(first, bool):
+                strip = first
+                position = 1
+            elif isinstance(first, str):
+                # `patch "diff..."` is Homebrew's inline StringPatch form.
+                data = first
+                position = 1
+            else:
+                raise FormulaParseError(
+                    f"unsupported patch strip value {first!r} at line {self.peek().line}"
+                )
+        if position < len(args):
+            second = args[position]
+            if isinstance(second, Sym) and str(second) == "DATA":
+                self._record_data_patch(strip, block)
+                return
+            if isinstance(second, str):
+                data = second
+                position += 1
+            else:
+                raise FormulaParseError(
+                    f"unsupported patch source {second!r} at line {self.peek().line}"
+                )
+        if position < len(args):
+            raise FormulaParseError(f"too many patch arguments at line {self.peek().line}")
+        keyword_strip = kwargs.get(Sym("strip"), kwargs.get("strip"))
+        if keyword_strip is not None:
+            strip = self._patch_strip(keyword_strip)
+        if data is not None:
+            self._consume_patch_block(block)
+            self.formula.patches.append(PatchSpec(strip=strip, data=data))
+            return
+        if block is None:
+            # `patch :p0` without a block/url: keep it so the build reports the
+            # incomplete declaration instead of dropping it.
+            self.formula.patches.append(PatchSpec(strip=strip))
+            return
+        if block.kind == "punct" and block.value == "{":
+            self._skip_braces()
+            self.formula.patches.append(
+                PatchSpec(
+                    strip=strip,
+                    unsupported_reason="brace patch blocks are not supported",
+                )
+            )
+            return
+        self.formula.patches.append(self._parse_patch_block(strip))
+
+    def _record_data_patch(self, strip: int, block: Optional[Token]) -> None:
+        self._consume_patch_block(block)
+        if self.data_section is None:
+            self.formula.patches.append(
+                PatchSpec(
+                    strip=strip,
+                    unsupported_reason="patch :DATA requires a __END__ section",
+                )
+            )
+            return
+        self.formula.patches.append(PatchSpec(strip=strip, data=self.data_section))
+
+    def _consume_patch_block(self, block: Optional[Token]) -> None:
+        if block is None:
+            return
+        if block.kind == "punct" and block.value == "{":
+            self._skip_braces()
+            return
+        self._skip_to_matching_end()
+
+    @staticmethod
+    def _patch_strip(value: Any) -> int:
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        text = str(value)
+        match = re.fullmatch(r"p(\d+)", text) or re.fullmatch(r"(\d+)", text)
+        if match:
+            return int(match.group(1))
+        raise FormulaParseError(f"unsupported patch strip value {value!r}")
+
+    def _parse_patch_block(self, strip: int) -> PatchSpec:
+        spec = PatchSpec(strip=strip)
+        while True:
+            self.skip_newlines()
+            token = self.peek()
+            if token.kind == "eof":
+                raise FormulaParseError("unterminated patch block")
+            if token.kind == "kw" and token.value == "end":
+                self.advance()
+                return spec
+            if token.kind != "id":
+                self._skip_line()
+                continue
+            inner = str(self.advance().value)
+            inner_args, inner_kwargs = self._parse_arguments()
+            if inner == "url":
+                if inner_args:
+                    spec.url = str(inner_args[0])
+                else:
+                    spec.unsupported_reason = "patch url is missing"
+            elif inner == "sha256":
+                if inner_args:
+                    value = str(inner_args[0])
+                    spec.sha256 = (
+                        value.lower()
+                        if re.fullmatch(r"[a-fA-F0-9]{64}", value)
+                        else value
+                    )
+            elif inner == "strip":
+                value = inner_args[0] if inner_args else inner_kwargs.get(Sym("value"))
+                if value is not None:
+                    spec.strip = self._patch_strip(value)
+            elif inner in ("file", "patch_files"):
+                spec.unsupported_reason = "local file patches are not supported"
+            elif inner == "apply":
+                spec.unsupported_reason = "patch apply is not supported"
+            # `type`, `resolves`, `version` and `directory` are metadata and do
+            # not change how the patch is applied.
+            self._skip_patch_call_block()
+
+    def _skip_patch_call_block(self) -> None:
+        save = self.pos
+        self.skip_newlines()
+        token = self.peek()
+        if token.kind == "kw" and token.value == "do":
+            self.advance()
+            self._skip_to_matching_end()
+        elif token.kind == "punct" and token.value == "{":
+            self.advance()
+            self._skip_braces()
+        else:
+            self.pos = save
+
     def _handle_depends_on(
         self, args: list[Any], kwargs: dict[Any, Any], target: list[Dependency]
     ) -> None:
@@ -1271,6 +1457,7 @@ _BLOCK_CALLS = {
     "livecheck",
     "patch",
     "service",
+    "post_install",
     "on_macos",
     "on_linux",
     "on_arm",

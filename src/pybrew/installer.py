@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
@@ -13,7 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Optional
 
-from .cellar import Cellar, Linker, write_receipt
+from .cellar import Cellar, Linker, read_receipt, receipt_path, write_receipt
 from .download import Downloader, sha256_file
 from .errors import (
     BottleError,
@@ -24,6 +25,7 @@ from .errors import (
 )
 from .models import BottleFile, Formula
 from .paths import Config
+from .post_install import has_post_install, run_post_install
 from .source_builder import build_source
 from .taps import FormulaLoader
 
@@ -66,6 +68,17 @@ class RelocationReport:
     text_files: int = 0
     binary_files: int = 0
     skipped_binaries: int = 0
+
+
+def _record_post_install(keg: Path) -> None:
+    """Mark the install receipt after a successful post_install run."""
+
+    receipt = read_receipt(keg)
+    receipt["post_install_ran"] = True
+    path = receipt_path(keg)
+    path.write_text(
+        json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def safe_extract_tar(archive: Path, destination: Path) -> None:
@@ -553,23 +566,26 @@ class Installer:
             poured_from_bottle=from_bottle,
             installed_as_dependency=as_dependency,
         )
-        if not options.link:
-            return InstallResult(
-                formula.name,
-                package_version,
-                keg,
-                from_bottle=from_bottle,
-                linked=False,
-                dependencies=[dep.name for dep in formula.runtime_dependencies()],
-            )
         linked = False
-        if not formula.keg_only:
-            result = self.linker.link(formula, keg, overwrite=options.overwrite or options.force)
-            linked = bool(result.created or result.skipped or result.opt)
-        else:
-            # keg-only formulae still get the opt link.
-            result = self.linker.link(formula, keg, overwrite=options.force)
-            linked = True
+        if options.link:
+            if not formula.keg_only:
+                result = self.linker.link(
+                    formula, keg, overwrite=options.overwrite or options.force
+                )
+                linked = bool(result.created or result.skipped or result.opt)
+            else:
+                # keg-only formulae still get the opt link.
+                result = self.linker.link(formula, keg, overwrite=options.force)
+                linked = True
+
+        # Homebrew runs post_install as the final step of a successful install,
+        # after the keg has been committed and linked.  A failure aborts the
+        # install (raising PostInstallError with the Ruby stderr attached) and
+        # leaves the keg in place so it can be inspected or retried.
+        if has_post_install(formula):
+            run_post_install(formula, self.config, keg=keg)
+            _record_post_install(keg)
+
         return InstallResult(
             formula.name,
             package_version,

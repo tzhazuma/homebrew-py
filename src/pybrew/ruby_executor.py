@@ -462,6 +462,14 @@ module Hardware
       flags.include?("avx2") || sysctl_flag?("hw.optional.avx2_0")
     end
 
+    def self.sse4_2?
+      flags.include?("sse4_2") || sysctl_flag?("hw.optional.sse4_2")
+    end
+
+    def self.avx512?
+      flags.include?("avx512f") || sysctl_flag?("hw.optional.avx512f")
+    end
+
     def self.model
       return @model if defined?(@model)
 
@@ -593,6 +601,18 @@ class PybrewBuild
 
   def without?(*_args)
     true
+  end
+
+  def arch
+    (PYBREW_CONFIG["arch"] || RbConfig::CONFIG["host_cpu"]).to_s
+  end
+
+  def target
+    arch
+  end
+
+  def options
+    @options ||= PybrewOptions.new
   end
 end
 
@@ -1629,6 +1649,100 @@ class << ENV
     rescue StandardError
       1
     end
+  end
+
+  def append_to_cflags(*flags)
+    append("CFLAGS", flags.join(" "))
+    append("CXXFLAGS", flags.join(" "))
+  end
+
+  def prepend_to_cflags(*flags)
+    prepend("CFLAGS", flags.join(" "))
+    prepend("CXXFLAGS", flags.join(" "))
+  end
+
+  def append_to_ldflags(*flags)
+    append("LDFLAGS", flags.join(" "))
+  end
+
+  def prepend_to_ldflags(*flags)
+    prepend("LDFLAGS", flags.join(" "))
+  end
+
+  def O0
+    set_optimization("-O0")
+  end
+
+  def O1
+    set_optimization("-O1")
+  end
+
+  def O2
+    set_optimization("-O2")
+  end
+
+  def O3
+    set_optimization("-O3")
+  end
+
+  def deparallelize
+    self["MAKEFLAGS"] = "-j1"
+    self["MFLAGS"] = "-j1"
+    nil
+  end
+
+  def cxx11
+    append("CXXFLAGS", "-std=c++11")
+  end
+
+  def libxml2
+    xml2_config = find_tool("xml2-config")
+    if xml2_config
+      append("CPPFLAGS", `#{xml2_config} --cflags 2>/dev/null`.strip)
+      append("LDFLAGS", `#{xml2_config} --libs 2>/dev/null`.strip)
+    else
+      append("CPPFLAGS", "-I#{HOMEBREW_PREFIX}/include/libxml2")
+      append("LDFLAGS", "-L#{HOMEBREW_PREFIX}/lib")
+    end
+    nil
+  end
+
+  def perl
+    find_tool("perl") || "perl"
+  end
+
+  def python
+    find_tool("python3") || find_tool("python") || "python3"
+  end
+
+  def java_home
+    value = self["JAVA_HOME"].to_s
+    return value unless value.empty?
+
+    value = `/usr/libexec/java_home 2>/dev/null`.to_s.strip
+    value.empty? ? nil : value
+  end
+
+  def sdkroot
+    found = MacOS.sdk_path
+    found.nil? ? nil : found.to_s
+  end
+
+  def set_optimization(flag)
+    %w[CFLAGS CXXFLAGS].each do |key|
+      current = self[key].to_s
+      cleaned = current.gsub(/(?:^|\s)-O\d?/, "").strip
+      self[key] = cleaned.empty? ? flag : "#{cleaned} #{flag}"
+    end
+    nil
+  end
+
+  def find_tool(name)
+    ENV.fetch("PATH", "").split(File::PATH_SEPARATOR).each do |directory|
+      candidate = File.join(directory, name)
+      return candidate if File.file?(candidate) && File.executable?(candidate)
+    end
+    nil
   end
 
   def with_build_environment(env: nil, cc: nil, build_bottle: false, bottle_arch: nil, debug_symbols: false)

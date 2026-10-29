@@ -1402,3 +1402,40 @@ def test_expanded_api_stays_opt_in(
 
     with pytest.raises(UnsupportedInstall, match="unsupported"):
         _build(tmp_path, formula)
+
+
+def test_superenv_compiler_and_build_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-superenv",
+        "1.0",
+        (
+            '  ENV.append_to_cflags "-DFOO"\n'
+            '  ENV.prepend_to_cflags "-DBAR"\n'
+            '  ENV.append_to_ldflags "-lfoo"\n'
+            '  ENV.O2\n'
+            '  ENV.deparallelize\n'
+            '  ENV.cxx11\n'
+            '  (prefix/"env").write [\n'
+            '    ENV["CFLAGS"], ENV["CXXFLAGS"], ENV["LDFLAGS"],\n'
+            '    ENV["MAKEFLAGS"], build.arch, build.target,\n'
+            '    build.options.length, Hardware::CPU.sse4_2?,\n'
+            '    Hardware::CPU.avx512?, Hardware::CPU.arm?\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+
+    keg = _build(tmp_path, formula)
+    lines = (keg / "env").read_text().splitlines()
+
+    assert "-DBAR" in lines[0] and "-DFOO" in lines[0] and "-O2" in lines[0]
+    assert "-DBAR" in lines[1] and "-DFOO" in lines[1] and "-O2" in lines[1]
+    assert "-lfoo" in lines[2]
+    assert lines[3] == "-j1"
+    assert lines[4] == lines[5] and lines[4]
+    assert lines[6] == "0"
+    assert lines[7] in ("true", "false")
+    assert lines[8] in ("true", "false")
+    assert lines[9] in ("true", "false")

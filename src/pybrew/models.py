@@ -100,6 +100,25 @@ class SourceSpec:
     mirrors: list[str] = field(default_factory=list)
 
 
+@dataclass
+class PatchSpec:
+    """A formula patch declared with ``patch do ... end`` or ``patch :DATA``.
+
+    ``data`` holds an inline patch body: either the formula's embedded
+    ``__END__`` section (``patch :DATA``) or a literal string passed to
+    ``patch``.  ``unsupported_reason`` is set by the parser when a declaration
+    cannot be represented faithfully (for example a patch that references a
+    local ``file``); applying it then fails with a clear build error instead of
+    silently skipping the patch.
+    """
+
+    url: Optional[str] = None
+    sha256: Optional[str] = None
+    strip: int = 1
+    data: Optional[str] = None
+    unsupported_reason: Optional[str] = None
+
+
 @dataclass(frozen=True)
 class BottleFile:
     tag: str
@@ -220,6 +239,7 @@ class Formula:
     test_source: str = ""
     post_install_source: str = ""
     resources: dict[str, SourceSpec] = field(default_factory=dict)
+    patches: list[PatchSpec] = field(default_factory=list)
 
     deprecated: bool = False
     deprecation_reason: Optional[str] = None

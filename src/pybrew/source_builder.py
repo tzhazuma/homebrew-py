@@ -34,12 +34,13 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
-from .errors import BuildError, UnsupportedInstall
-from .models import Formula, is_linux, is_macos
+from .errors import BuildError, ChecksumMismatch, DownloadError, UnsupportedInstall
+from .models import Formula, PatchSpec, is_linux, is_macos
 from .paths import Config
 from .ruby_executor import arbitrary_ruby_enabled, execute_install_body
 from .ruby_parser import Lexer, Token
@@ -1084,6 +1085,9 @@ class SourceBuilder:
         self._resource_stages: dict[str, Path] = {}
 
     def build(self, build_root: Path, keg: Path) -> None:
+        # Homebrew applies a formula's patches to the unpacked source before
+        # running its install block; both install backends share that step.
+        self._apply_patches(build_root)
         if arbitrary_ruby_enabled():
             # Explicit opt-in (PYBREW_ALLOW_ARBITRARY_RUBY=1): hand the raw
             # `def install` body to Ruby instead of the declarative parser.
@@ -1119,6 +1123,85 @@ class SourceBuilder:
         if not any(keg.iterdir()):
             raise BuildError(
                 f"{self.formula.name}: build completed but installed keg is empty"
+            )
+
+    # -- patches ---------------------------------------------------------
+    def _apply_patches(self, build_root: Path) -> None:
+        """Apply the formula's patches, in declaration order, to the source."""
+
+        for index, patch in enumerate(self.formula.patches, start=1):
+            self._apply_patch(patch, build_root, index)
+
+    def _apply_patch(self, patch: PatchSpec, build_root: Path, index: int) -> None:
+        name = self.formula.name
+        if patch.unsupported_reason:
+            raise BuildError(
+                f"{name}: patch #{index} is unsupported: {patch.unsupported_reason}"
+            )
+        if patch.data is not None:
+            content = patch.data.encode("utf-8")
+            label = f"inline patch #{index}"
+        else:
+            if not patch.url:
+                raise BuildError(f"{name}: patch #{index} has no url or inline data")
+            if not patch.sha256:
+                raise BuildError(
+                    f"{name}: patch #{index} ({patch.url}) has no sha256 checksum"
+                )
+            if self.downloader is None:
+                raise BuildError(
+                    f"{name}: patch #{index} ({patch.url}) requires a downloader"
+                )
+            try:
+                archive = self.downloader.fetch(
+                    patch.url,
+                    patch.sha256,
+                    hint=f"{name}-patch-{index}",
+                )
+            except BuildError:
+                raise
+            except (ChecksumMismatch, DownloadError, OSError) as error:
+                raise BuildError(
+                    f"{name}: cannot download patch #{index} ({patch.url}): {error}"
+                ) from error
+            content = Path(archive).read_bytes()
+            label = patch.url
+
+        patch_command = os.environ.get("PYBREW_PATCH") or "/usr/bin/patch"
+        if self.verbose:
+            print(f"==> {name}: applying patch #{index} ({label}) with -p{patch.strip}")
+        with tempfile.TemporaryDirectory(prefix="pybrew-patch-") as temporary:
+            patch_file = Path(temporary) / "patch.diff"
+            patch_file.write_bytes(content)
+            command = [
+                patch_command,
+                f"-p{patch.strip}",
+                "-f",
+                "-i",
+                str(patch_file),
+            ]
+            try:
+                result = subprocess.run(
+                    command,
+                    cwd=build_root,
+                    env=os.environ.copy(),
+                    text=True,
+                    capture_output=True,
+                    timeout=600,
+                )
+            except FileNotFoundError as error:
+                raise BuildError(
+                    f"{name}: patch command not found: {patch_command}"
+                ) from error
+            except subprocess.TimeoutExpired as error:
+                raise BuildError(f"{name}: patch #{index} timed out") from error
+        if result.returncode != 0:
+            output = (result.stdout or "") + (result.stderr or "")
+            tail = "\n".join(output.strip().splitlines()[-40:])
+            detail = f" ({patch.url})" if patch.url else ""
+            raise BuildError(
+                f"{name}: patch #{index} failed with patch -p{patch.strip}{detail}"
+                + (f"\n{tail}" if tail else "")
             )
 
     def _build_env(self, keg: Path) -> dict[str, str]:
