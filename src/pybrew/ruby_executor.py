@@ -2293,6 +2293,18 @@ class PybrewFormulaRef
     version.nil? ? nil : Pathname.new(self.class.cellar) + name + version.to_s
   end
 
+  def latest_head_pkg_version(*_args, **_kwargs)
+    latest_head_version
+  end
+
+  def head_version_outdated?(*_args, **_kwargs)
+    false
+  end
+
+  def outdated_kegs(*_args, **_kwargs)
+    []
+  end
+
   def plist_name
     "sh.brew.#{name}"
   end

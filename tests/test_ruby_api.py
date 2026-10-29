@@ -2040,3 +2040,24 @@ def test_formula_ref_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     )
     keg = _build(tmp_path, formula)
     assert (keg / "identity").read_text().splitlines() == ["true", "true", "true", "true"]
+
+
+def test_formula_head_pkg_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-headpkg",
+        "1.0",
+        (
+            '  ref = Formula["ruby-headpkg"]\n'
+            '  (prefix/"headpkg").write [\n'
+            '    ref.latest_head_pkg_version.to_s,\n'
+            '    ref.head_version_outdated?.to_s,\n'
+            '    ref.outdated_kegs.length.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.head = SourceSpec(url="https://example.com/head.tar.gz")
+    keg = _build(tmp_path, formula)
+    assert (keg / "headpkg").read_text().splitlines() == ["HEAD", "false", "0"]
