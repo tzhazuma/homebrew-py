@@ -1548,3 +1548,50 @@ def test_only_referenced_resources_are_staged(
     keg = _build(tmp_path, formula, downloader=_downloader(tmp_path))
     assert (keg / "bin" / "tool").read_text() == "#!/bin/sh\necho used\n"
     assert not (tmp_path / "build" / ".pybrew-resources" / "unused").exists()
+
+
+def test_formula_dependency_categories_and_conflicts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-deps",
+        "1.0",
+        (
+            '  ref = Formula["ruby-deps"]\n'
+            '  (prefix/"deps").write [\n'
+            '    ref.build_dependencies.map(&:name).join(","),\n'
+            '    ref.test_dependencies.map(&:name).join(","),\n'
+            '    ref.recommended_dependencies.map(&:name).join(","),\n'
+            '    ref.optional_dependencies.map(&:name).join(","),\n'
+            '    ref.head_dependencies.map(&:name).join(","),\n'
+            '    ref.uses_from_macos.map(&:name).join(","),\n'
+            '    ref.conflicts.join(","),\n'
+            '    ref.link_overwrite.join(","),\n'
+            '    ref.requirements.length\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.dependencies = [Dependency("runtime")]
+    formula.build_dependencies = [Dependency("build", frozenset({"build"}))]
+    formula.test_dependencies = [Dependency("test", frozenset({"test"}))]
+    formula.recommended_dependencies = [Dependency("recommended", frozenset({"recommended"}))]
+    formula.optional_dependencies = [Dependency("optional", frozenset({"optional"}))]
+    formula.head_dependencies = [Dependency("head")]
+    formula.uses_from_macos = [Dependency("macos")]
+    formula.conflicts_with = ["old-ruby-deps"]
+    formula.link_overwrite = ["bin/ruby-deps"]
+
+    keg = _build(tmp_path, formula)
+    lines = (keg / "deps").read_text().splitlines()
+    assert lines == [
+        "build",
+        "test",
+        "recommended",
+        "optional",
+        "head",
+        "macos",
+        "old-ruby-deps",
+        "bin/ruby-deps",
+        "0",
+    ]

@@ -2104,6 +2104,52 @@ class PybrewFormulaRef
     end
   end
 
+  def dependency_category(key)
+    Array(@info[key]).map do |dependency|
+      if dependency.is_a?(Hash)
+        PybrewDependencyRef.new(dependency["name"], dependency["tags"])
+      else
+        PybrewDependencyRef.new(dependency)
+      end
+    end
+  end
+
+  def build_dependencies
+    dependency_category("build_dependencies")
+  end
+
+  def test_dependencies
+    dependency_category("test_dependencies")
+  end
+
+  def recommended_dependencies
+    dependency_category("recommended_dependencies")
+  end
+
+  def optional_dependencies
+    dependency_category("optional_dependencies")
+  end
+
+  def head_dependencies
+    dependency_category("head_dependencies")
+  end
+
+  def uses_from_macos
+    dependency_category("uses_from_macos")
+  end
+
+  def requirements
+    []
+  end
+
+  def conflicts
+    Array(@info["conflicts_with"])
+  end
+
+  def link_overwrite
+    Array(@info["link_overwrite"])
+  end
+
   def runtime_dependencies(*_args)
     names = @info["runtime_dependencies"]
     return deps.select { |dependency| dependency.runtime? } if names.nil?
@@ -2934,6 +2980,20 @@ def _dependency_metadata(formula: Formula) -> list[dict[str, Any]]:
     return entries
 
 
+def _dependency_category_metadata(formula: Formula, attribute: str) -> list[dict[str, Any]]:
+    """Return name/tag metadata for one dependency category."""
+
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for dependency in getattr(formula, attribute, []) or []:
+        name = _dependency_name(dependency)
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        entries.append({"name": name, "tags": _dependency_tags(dependency)})
+    return entries
+
+
 def _runtime_dependency_names(formula: Formula) -> list[str]:
     """Return runtime dependency names in declaration order."""
 
@@ -2988,6 +3048,14 @@ def _formula_reference_map(
         "opt_prefix": str(config.opt_path(formula.name)),
         "dependencies": dependencies,
         "runtime_dependencies": _runtime_dependency_names(formula),
+        "build_dependencies": _dependency_category_metadata(formula, "build_dependencies"),
+        "test_dependencies": _dependency_category_metadata(formula, "test_dependencies"),
+        "recommended_dependencies": _dependency_category_metadata(formula, "recommended_dependencies"),
+        "optional_dependencies": _dependency_category_metadata(formula, "optional_dependencies"),
+        "head_dependencies": _dependency_category_metadata(formula, "head_dependencies"),
+        "uses_from_macos": _dependency_category_metadata(formula, "uses_from_macos"),
+        "conflicts_with": list(formula.conflicts_with),
+        "link_overwrite": list(formula.link_overwrite),
         "desc": formula.desc,
         "homepage": formula.homepage,
         "license": formula.license,
