@@ -1859,3 +1859,37 @@ def test_formula_block_presence_helpers(
 
     keg = _build(tmp_path, formula)
     assert (keg / "blocks").read_text().splitlines() == ["true", "true", "true"]
+
+
+def test_formula_path_and_cleanup_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-paths",
+        "1.0",
+        (
+            '  ref = Formula["ruby-paths"]\n'
+            '  (prefix/"paths").write [\n'
+            '    ref.doc.to_s, ref.man1.to_s, ref.etc.to_s, ref.pkgetc.to_s,\n'
+            '    ref.var.to_s, ref.opt_share.to_s, ref.bottle_prefix.to_s,\n'
+            '    ref.pour_bottle?.to_s, ref.post_install_defined?.to_s,\n'
+            '    ref.oldnames.join(","), ref.possible_names.join(","),\n'
+            '    ref.skip_clean?("bin/x").to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.oldname = "old-ruby-paths"
+    formula.skip_clean = ["bin"]
+    config = _config(tmp_path)
+    keg = _build(tmp_path, formula)
+    lines = (keg / "paths").read_text().splitlines()
+    assert lines[0] == str(keg / "share" / "doc" / "ruby-paths")
+    assert lines[1] == str(keg / "share" / "man" / "man1")
+    assert lines[2] == str(config.prefix / "etc")
+    assert lines[3] == str(config.prefix / "etc" / "ruby-paths")
+    assert lines[4] == str(config.prefix / "var")
+    assert lines[5] == str(config.opt_path("ruby-paths") / "share")
+    assert lines[6] == str(keg / ".bottle")
+    assert lines[7:11] == ["true", "false", "old-ruby-paths", "ruby-paths,old-ruby-paths"]
+    assert lines[11] == "true"

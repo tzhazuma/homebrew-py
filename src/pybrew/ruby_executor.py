@@ -2520,6 +2520,142 @@ class PybrewFormulaRef
     share + name
   end
 
+  def doc
+    share + "doc" + name
+  end
+
+  def info
+    share + "info"
+  end
+
+  def man
+    share + "man"
+  end
+
+  (1..8).each do |number|
+    define_method("man#{number}") do
+      man + "man#{number}"
+    end
+  end
+
+  def elisp
+    share + "emacs/site-lisp" + name
+  end
+
+  def frameworks
+    prefix + "Frameworks"
+  end
+
+  def kext_prefix
+    prefix + "Library/Extensions"
+  end
+
+  def etc
+    Pathname.new(@info["homebrew_prefix"].to_s) + "etc"
+  end
+
+  def pkgetc
+    etc + name
+  end
+
+  def var
+    Pathname.new(@info["homebrew_prefix"].to_s) + "var"
+  end
+
+  def zsh_function
+    share + "zsh/site-functions"
+  end
+
+  def fish_function
+    share + "fish/vendor_functions.d"
+  end
+
+  def bash_completion
+    prefix + "etc/bash_completion.d"
+  end
+
+  def zsh_completion
+    share + "zsh/site-functions"
+  end
+
+  def fish_completion
+    share + "fish/vendor_completions.d"
+  end
+
+  def pwsh_completion
+    share + "pwsh/completions"
+  end
+
+  def bottle_prefix
+    prefix + ".bottle"
+  end
+
+  def logs
+    Pathname.new(@info["homebrew_prefix"].to_s) + "var/log" + name
+  end
+
+  def opt_elisp
+    opt_prefix + "share/emacs/site-lisp" + name
+  end
+
+  def opt_frameworks
+    opt_prefix + "Frameworks"
+  end
+
+  def pour_bottle?
+    true
+  end
+
+  def fetch_defined?
+    false
+  end
+
+  def post_install_defined?
+    !!@info["post_install?"]
+  end
+
+  def post_install_steps_defined?
+    post_install_defined?
+  end
+
+  def oldnames
+    oldname.nil? ? [] : [oldname]
+  end
+
+  def possible_names
+    ([name] + oldnames).uniq
+  end
+
+  def linked?
+    !linked_keg.nil?
+  end
+
+  def linked_version
+    keg = linked_keg
+    keg.nil? ? nil : PybrewVersion.new(keg.basename.to_s)
+  end
+
+  def skip_clean?(*paths)
+    patterns = Array(@info["skip_clean"])
+    return true if patterns.empty?
+    paths.flatten.any? do |candidate|
+      text = candidate.to_s
+      patterns.any? { |pattern| text == pattern.to_s || text.start_with?(pattern.to_s) }
+    end
+  end
+
+  def link_overwrite?(*paths)
+    patterns = Array(@info["link_overwrite"])
+    paths.flatten.any? do |candidate|
+      text = candidate.to_s
+      patterns.any? { |pattern| text == pattern.to_s || text.start_with?(pattern.to_s) }
+    end
+  end
+
+  def outdated?(*_args)
+    false
+  end
+
   def libexec
     prefix + "libexec"
   end
@@ -3411,6 +3547,8 @@ def _formula_reference_map(
         "disable_reason": formula.disable_reason,
         "aliases": list(formula.aliases),
         "oldname": formula.oldname,
+        "homebrew_prefix": str(config.prefix),
+        "post_install?": bool(formula.post_install_source),
         "service?": bool(
             isinstance(formula.service, dict) and formula.service.get("source")
         ),
