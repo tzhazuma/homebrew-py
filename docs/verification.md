@@ -566,9 +566,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `f8c00eb` (cask manpages and ENV compiler flag helpers)
-- CI run for `f8c00eb`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40945326475>
+- Latest feature commit: `9ccd496` (cask rename support)
+- CI run for `9ccd496`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40946131458>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
