@@ -24,7 +24,7 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
 | Build helpers | `build.head?/stable?/with?/without?`, `args`, `on_macos`/`on_linux`/`on_arm`/`on_intel`, `std_configure_args`, `std_cmake_args`, `std_meson_args`, `std_cargo_args`, `std_go_args`, `std_pip_args`, `std_npm_args`, `std_shards_args`, `std_swift_args`, `std_zig_args`, `std_cabal_v2_args`, `std_cargo_fetch_args`, `std_go_args`, `python3`, `std_service_path_env` |
 | Test DSL | `shell_output` with expected-status second arg, `pipe_output` with `stderr:`/`env:`/`chdir:`, `assert_output`, path/directory/symlink assertions, `assert_equal`, `assert_match`, `assert_predicate`, `assert_empty`, `assert_includes`, `assert_nil`, `refute_*` |
 | Cask scripts | opt-in preflight/postflight/uninstall_preflight/uninstall_postflight; command/env/chdir forms; no sudo |
-| Cask DSL | opt-in arbitrary-Ruby evaluator (`PYBREW_ALLOW_CASK_RUBY=1` / `--ruby-cask`): fields, artifacts, platform/arch, language, uninstall/zap, depends_on (arch/formula/cask enforced), conflicts_with (formula/cask), deprecate!/disable!; scripts/unknown stanzas recorded |
+| Cask DSL | opt-in arbitrary-Ruby evaluator (`PYBREW_ALLOW_CASK_RUBY=1` / `--ruby-cask`): fields, artifacts, platform/arch, language, uninstall/zap, depends_on (arch/macos/formula/cask enforced), conflicts_with (formula/cask), deprecate!/disable!; scripts/unknown stanzas recorded |
 | Cask caveats | `caveats --cask`: captured block/literal, token/version/appdir/paths, platform blocks |
 | Caveats DSL | `pybrew caveats`: heredocs/strings, platform/arch blocks, paths, `ohai`/`opoo`/`puts`, ENV/Utils |
 | post_install | `post_install do ... end` after install, with paths/Formula/system/Utils/FileUtils |

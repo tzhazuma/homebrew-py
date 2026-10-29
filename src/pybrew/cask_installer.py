@@ -114,6 +114,18 @@ class CaskLoader:
 # the Homebrew cask script API that package scripts commonly use and evaluates
 # the captured block body in that context.  The body itself is written to a
 # separate file and never interpolated into this shim.
+# macOS version symbols used by cask ``depends_on macos:`` requirements.
+_MACOS_SYMBOL_VERSIONS = {
+    "catalina": "10.15",
+    "big_sur": "11",
+    "monterey": "12",
+    "ventura": "13",
+    "sonoma": "14",
+    "sequoia": "15",
+    "tahoe": "26",
+    "golden_gate": "27",
+}
+
 _CASK_SCRIPT_SHIM = r'''
 # frozen_string_literal: true
 
@@ -678,6 +690,7 @@ class CaskInstaller:
         self._system_pkg_before_ids = None
         self._script_results = {}
         self._check_arch_dependency(cask)
+        self._check_macos_dependency(cask)
         self._check_named_dependencies(cask)
         if cask.disabled:
             detail = f" ({cask.disable_reason})" if cask.disable_reason else ""
@@ -1014,6 +1027,48 @@ class CaskInstaller:
             return []
         values = value if isinstance(value, list) else [value]
         return [str(item) for item in values if str(item)]
+
+    def _check_macos_dependency(self, cask: Cask) -> None:
+        value = cask.depends_on.get("macos")
+        if value is None:
+            return
+        requirements = value if isinstance(value, list) else [value]
+        current = (os.environ.get("PYBREW_MACOS_VERSION") or platform.mac_ver()[0]).strip()
+        if current in ("", "0"):
+            raise CaskError(f"{cask.token} requires macOS but this host is not macOS")
+        current_parts = self._version_parts(current)
+        for requirement in requirements:
+            text = str(requirement).strip()
+            match = re.match(r"^(>=|<=|>|<|=)?\s*:?(\w+)$", text)
+            if not match:
+                continue
+            operator = match.group(1) or "="
+            target = match.group(2)
+            target_version = _MACOS_SYMBOL_VERSIONS.get(target, target)
+            target_parts = self._version_parts(target_version)
+            if not self._compare_version(current_parts, target_parts, operator):
+                raise CaskError(
+                    f"{cask.token} requires macOS {text} but this host is {current}"
+                )
+
+    @staticmethod
+    def _version_parts(value: str) -> list[int]:
+        return [int(part) if part.isdigit() else 0 for part in str(value).split(".")]
+
+    @staticmethod
+    def _compare_version(current: list[int], target: list[int], operator: str) -> bool:
+        width = max(len(current), len(target))
+        left = list(current) + [0] * (width - len(current))
+        right = list(target) + [0] * (width - len(target))
+        if operator == ">=":
+            return left >= right
+        if operator == "<=":
+            return left <= right
+        if operator == ">":
+            return left > right
+        if operator == "<":
+            return left < right
+        return left == right
 
     def _check_named_dependencies(self, cask: Cask) -> None:
         for formula_name in self._dependency_names(cask.depends_on.get("formula")):

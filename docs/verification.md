@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-511 passed, 5 skipped in 85.33s
+512 passed, 5 skipped in 72.89s
 ```
 
 Breakdown of the feature slices:
@@ -33,7 +33,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_ruby.py
-65 passed      # cask base + Ruby evaluator + artifacts + uninstall actions + deps
+66 passed      # cask base + Ruby evaluator + artifacts + uninstall actions + deps
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
@@ -597,6 +597,12 @@ local remote, commits a change, and confirms the CLI updates it.
   installed before installing.
 - `conflicts_with formula:` / `conflicts_with cask:` reject installation when
   the conflicting item is installed.
+
+## Cask macOS dependency
+
+- `depends_on macos:` now checks the host macOS version against `>=`/`<=`/`>`/
+  `<`/`=` requirements using version symbols (`:sonoma`, etc.).
+- `PYBREW_MACOS_VERSION` can override detection for tests/CI.
 
 ## Final parallel batch
 

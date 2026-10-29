@@ -754,3 +754,34 @@ end
     )
     with pytest.raises(CaskError, match="conflicts with installed cask"):
         installer.install(CaskLoader(discover_taps([tap])).load("conflicty"))
+
+
+def test_cask_macos_dependency_is_enforced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "m" / "macosy.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        '''cask "macosy" do
+  version "1.0"
+  stage_only true
+  depends_on macos: ">= :sonoma"
+end
+'''
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    monkeypatch.setenv("PYBREW_MACOS_VERSION", "13.0")
+    with pytest.raises(CaskError, match="requires macOS"):
+        installer.install(CaskLoader(discover_taps([tap])).load("macosy"))
+
+    monkeypatch.setenv("PYBREW_MACOS_VERSION", "14.0")
+    installer.install(CaskLoader(discover_taps([tap])).load("macosy"))
