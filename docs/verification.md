@@ -473,9 +473,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `8af280d` (resource auto-staging, expanded service DSL)
-- CI run for `8af280d`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40843298495>
+- Latest feature commit: `07a1105` (patch application, post_install, compiler ENV helpers)
+- CI run for `07a1105`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40929863684>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
