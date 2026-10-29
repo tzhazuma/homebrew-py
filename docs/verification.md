@@ -665,9 +665,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `fa83a98` (cask disable! metadata and install rejection)
-- CI run for `fa83a98`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40957426349>
+- Latest feature commit: `d96b4e5` (Formula block presence helpers)
+- CI run for `d96b4e5`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40957957337>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
