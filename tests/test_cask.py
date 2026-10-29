@@ -812,3 +812,15 @@ def test_cask_livecheck_source_is_captured() -> None:
     )
     assert cask.livecheck_source is not None
     assert "regex" in cask.livecheck_source
+
+
+def test_cask_no_autobump_metadata() -> None:
+    cask = parse_cask_source(
+        'cask "bumpy" do\n'
+        '  version "1.0"\n'
+        '  no_autobump! because: "version is manual"\n'
+        '  app "Bumpy.app"\n'
+        'end\n'
+    )
+    assert cask.no_autobump is True
+    assert cask.no_autobump_reason == "version is manual"

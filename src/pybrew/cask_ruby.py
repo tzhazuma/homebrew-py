@@ -382,6 +382,12 @@ def _cask_from_result(
     if deprecation_reason is not None and str(deprecation_reason).strip():
         cask.deprecation_reason = str(deprecation_reason)
 
+    no_autobump_reason = data.get("no_autobump_reason")
+    if no_autobump_reason is not None and str(no_autobump_reason).strip():
+        cask.no_autobump_reason = str(no_autobump_reason)
+    if data.get("no_autobump"):
+        cask.no_autobump = True
+
     disabled = data.get("disabled")
     if disabled:
         cask.disabled = True
@@ -567,6 +573,8 @@ class PybrewCaskDSL
       "deprecated" => false,
       "deprecation_reason" => nil,
       "disabled" => false,
+      "no_autobump" => false,
+      "no_autobump_reason" => nil,
       "disable_reason" => nil,
       "warnings" => [],
       "unsupported" => [],
@@ -897,7 +905,11 @@ class PybrewCaskDSL
     nil
   end
 
-  def no_autobump!(*_args)
+  def no_autobump!(*args)
+    _positional, kwargs = PybrewCaskJSON.split_args(args)
+    @data["no_autobump"] = true
+    reason = kwargs["because"] || kwargs[:because]
+    @data["no_autobump_reason"] = reason.to_s unless reason.nil?
     nil
   end
 

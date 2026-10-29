@@ -53,6 +53,8 @@ class Cask:
     caveats: Optional[str] = None
     caveats_source: Optional[str] = None
     livecheck_source: Optional[str] = None
+    no_autobump: bool = False
+    no_autobump_reason: Optional[str] = None
     deprecated: bool = False
     deprecation_reason: Optional[str] = None
     disabled: bool = False
@@ -605,6 +607,11 @@ class CaskParser:
                 cask.disable_reason = str(reason)
         elif name == "livecheck":
             pass
+        elif name == "no_autobump!":
+            cask.no_autobump = True
+            reason = kwargs.get("because") or (args[0] if args else None)
+            if reason is not None:
+                cask.no_autobump_reason = str(reason)
         else:
             cask.extra[name] = {"args": args, "kwargs": kwargs}
 
