@@ -24,8 +24,9 @@ import pytest
 import pybrew.download as download_module
 from pybrew.download import Downloader
 from pybrew.errors import BuildError, UnsupportedInstall
-from pybrew.models import BottleFile, Dependency, Formula, SourceSpec, is_linux, is_macos
+from pybrew.models import BottleFile, Dependency, Formula, PatchSpec, SourceSpec, is_linux, is_macos
 from pybrew.paths import Config
+from pybrew.ruby_executor import execute_install_body
 from pybrew.source_builder import build_source
 
 ALLOW_ENV = "PYBREW_ALLOW_ARBITRARY_RUBY"
@@ -1674,3 +1675,34 @@ def test_utils_submodules_and_superenv(
     lines = (keg / "utils").read_text().splitlines()
     assert lines[0] in ("true", "false")
     assert lines[1:] == ["true"] * 7
+
+
+def test_formula_patches_api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-patches",
+        "1.0",
+        (
+            '  ref = Formula["ruby-patches"]\n'
+            '  (prefix/"patches").write ref.patches.map { |patch|\n'
+            '    [patch.url.to_s, patch.file.to_s, patch.sha256.to_s, patch.strip, patch.data?].join("|")\n'
+            '  }.join("\\n")\n'
+        ),
+    )
+    formula.patches = [
+        PatchSpec(url="https://example.com/a.patch", sha256="a" * 64, strip=0),
+        PatchSpec(file="Patches/b.patch"),
+        PatchSpec(data="diff --git a/x b/x\n"),
+    ]
+
+    build_root = tmp_path / "patch-build"
+    build_root.mkdir()
+    keg = tmp_path / "patch-keg"
+    keg.mkdir()
+    execute_install_body(formula, _config(tmp_path), build_root, keg)
+    lines = (keg / "patches").read_text().splitlines()
+    assert lines[0] == f"https://example.com/a.patch||{'a' * 64}|0|false"
+    assert lines[1] == "|Patches/b.patch||1|false"
+    assert lines[2] == "|||1|true"

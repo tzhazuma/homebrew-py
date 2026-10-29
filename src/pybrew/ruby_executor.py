@@ -2151,6 +2151,26 @@ class PybrewBottleSpec
   end
 end
 
+class PybrewPatchRef
+  attr_reader :url, :file, :sha256, :strip
+
+  def initialize(info)
+    @info = info || {}
+    @url = @info["url"]
+    @file = @info["file"]
+    @sha256 = @info["sha256"]
+    @strip = (@info["strip"] || 1).to_i
+  end
+
+  def data?
+    @info["data"] == true
+  end
+
+  def to_s
+    (@url || @file || "inline patch").to_s
+  end
+end
+
 class PybrewFormulaRef
   attr_reader :name
 
@@ -2552,6 +2572,10 @@ class PybrewFormulaRef
 
   def aliases
     Array(@info["aliases"])
+  end
+
+  def patches
+    Array(@info["patches"]).map { |entry| PybrewPatchRef.new(entry) }
   end
 end
 
@@ -3251,6 +3275,16 @@ def _formula_reference_map(
         "deprecation_reason": formula.deprecation_reason,
         "disable_reason": formula.disable_reason,
         "aliases": [],
+        "patches": [
+            {
+                "url": patch.url,
+                "file": patch.file,
+                "sha256": patch.sha256,
+                "strip": patch.strip,
+                "data": patch.data is not None,
+            }
+            for patch in formula.patches
+        ],
         "resources": {},
     }
     entries: dict[str, dict[str, Any]] = {formula.name: current}
