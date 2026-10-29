@@ -724,9 +724,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `05ac0ad` (enforce cask macos dependency)
-- CI run for `05ac0ad`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40964881563>
+- Latest feature commit: `b66f95f` (FormulaRef identity methods)
+- CI run for `b66f95f`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40965546327>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
