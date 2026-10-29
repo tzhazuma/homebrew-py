@@ -544,9 +544,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `3d2a31e` (Formula dependency category API)
-- CI run for `3d2a31e`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40942705450>
+- Latest feature commit: `eb30f4f` (cask shell completion artifacts)
+- CI run for `eb30f4f`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40943673418>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
