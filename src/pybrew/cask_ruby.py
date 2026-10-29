@@ -378,6 +378,11 @@ def _cask_from_result(
                 )
             )
 
+    disabled = data.get("disabled")
+    if disabled:
+        cask.disabled = True
+        cask.disable_reason = str(data.get("disable_reason") or "") or None
+
     container = data.get("container")
     if container is not None and str(container).strip():
         cask.container = str(container).strip()
@@ -556,6 +561,8 @@ class PybrewCaskDSL
       "arch" => nil,
       "arch_map" => {},
       "deprecated" => false,
+      "disabled" => false,
+      "disable_reason" => nil,
       "warnings" => [],
       "unsupported" => [],
     }
@@ -878,7 +885,10 @@ class PybrewCaskDSL
   end
 
   def disable!(*args)
-    deprecate!(*args)
+    _positional, kwargs = PybrewCaskJSON.split_args(args)
+    @data["disabled"] = true
+    @data["disable_reason"] = (kwargs["because"] || kwargs[:because]).to_s unless (kwargs["because"] || kwargs[:because]).nil?
+    nil
   end
 
   def no_autobump!(*_args)

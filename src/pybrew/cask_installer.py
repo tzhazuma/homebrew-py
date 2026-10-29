@@ -676,6 +676,9 @@ class CaskInstaller:
         self._system_pkg_attempted = False
         self._system_pkg_before_ids = None
         self._script_results = {}
+        if cask.disabled:
+            detail = f" ({cask.disable_reason})" if cask.disable_reason else ""
+            raise CaskError(f"{cask.token} is disabled{detail}")
         version = cask.resolved_version()
         if version in ("latest", "0"):
             raise CaskError(f"{cask.token}: version {version!r} cannot be installed reliably")

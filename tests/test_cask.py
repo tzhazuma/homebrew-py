@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from pybrew.cask import parse_cask_file, parse_cask_source
+from pybrew.cask import CaskError, parse_cask_file, parse_cask_source
 from pybrew.cask_installer import CaskInstaller, CaskLoader
 from pybrew.paths import Config
 from pybrew.taps import discover_taps
@@ -648,3 +648,37 @@ end
     installer.uninstall("loginly", cask=cask)
 
     assert 'delete login item "Loginly"' in log.read_text()
+
+
+def test_disabled_cask_is_rejected(tmp_path: Path) -> None:
+    cask = parse_cask_source(
+        'cask "gone" do\n'
+        '  version "1.0"\n'
+        '  disable! because: "no longer maintained"\n'
+        '  app "Gone.app"\n'
+        'end\n'
+    )
+    assert cask.disabled is True
+    assert cask.disable_reason == "no longer maintained"
+
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "g" / "gone.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        'cask "gone" do\n'
+        '  version "1.0"\n'
+        '  disable! because: "no longer maintained"\n'
+        '  app "Gone.app"\n'
+        'end\n'
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    with pytest.raises(CaskError, match="disabled"):
+        installer.install(CaskLoader(discover_taps([tap])).load("gone"))
