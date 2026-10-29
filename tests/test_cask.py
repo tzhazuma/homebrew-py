@@ -785,3 +785,15 @@ end
 
     monkeypatch.setenv("PYBREW_MACOS_VERSION", "14.0")
     installer.install(CaskLoader(discover_taps([tap])).load("macosy"))
+
+
+def test_cask_deprecation_reason() -> None:
+    cask = parse_cask_source(
+        'cask "oldy" do\n'
+        '  version "1.0"\n'
+        '  deprecate! because: "replaced by newy"\n'
+        '  app "Oldy.app"\n'
+        'end\n'
+    )
+    assert cask.deprecated is True
+    assert cask.deprecation_reason == "replaced by newy"

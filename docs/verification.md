@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-513 passed, 5 skipped in 74.61s
+514 passed, 5 skipped in 74.73s
 ```
 
 Breakdown of the feature slices:
@@ -33,7 +33,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_ruby.py
-66 passed      # cask base + Ruby evaluator + artifacts + uninstall actions + deps
+67 passed      # cask base + Ruby evaluator + artifacts + uninstall actions + metadata
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
@@ -607,6 +607,11 @@ local remote, commits a change, and confirms the CLI updates it.
 ## Formula ref identity
 
 - Added `to_s`, `inspect`, `==`/`eql?`, `hash` and `<=>` to `PybrewFormulaRef`.
+
+## Cask deprecation reason
+
+- Added `Cask.deprecation_reason` and literal/evaluator capture of
+  `deprecate! because: "..."`.
 
 ## Final parallel batch
 

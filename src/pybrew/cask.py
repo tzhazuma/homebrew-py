@@ -53,6 +53,7 @@ class Cask:
     caveats: Optional[str] = None
     caveats_source: Optional[str] = None
     deprecated: bool = False
+    deprecation_reason: Optional[str] = None
     disabled: bool = False
     disable_reason: Optional[str] = None
     # Raw Ruby block bodies captured from the cask.  They are inert data: no
@@ -591,6 +592,9 @@ class CaskParser:
                 cask.caveats = str(args[0])
         elif name in ("deprecate!", "deprecate_args"):
             cask.deprecated = True
+            reason = kwargs.get("because") or (args[0] if args else None)
+            if reason is not None:
+                cask.deprecation_reason = str(reason)
         elif name == "disable!":
             cask.disabled = True
             reason = kwargs.get("because") or (args[0] if args else None)

@@ -378,6 +378,10 @@ def _cask_from_result(
                 )
             )
 
+    deprecation_reason = data.get("deprecation_reason")
+    if deprecation_reason is not None and str(deprecation_reason).strip():
+        cask.deprecation_reason = str(deprecation_reason)
+
     disabled = data.get("disabled")
     if disabled:
         cask.disabled = True
@@ -561,6 +565,7 @@ class PybrewCaskDSL
       "arch" => nil,
       "arch_map" => {},
       "deprecated" => false,
+      "deprecation_reason" => nil,
       "disabled" => false,
       "disable_reason" => nil,
       "warnings" => [],
@@ -880,7 +885,8 @@ class PybrewCaskDSL
   def deprecate!(*args)
     _positional, kwargs = PybrewCaskJSON.split_args(args)
     @data["deprecated"] = true
-    @data["deprecation"] = kwargs unless kwargs.empty?
+    reason = kwargs["because"] || kwargs[:because]
+    @data["deprecation_reason"] = reason.to_s unless reason.nil?
     nil
   end
 
