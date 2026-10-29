@@ -525,9 +525,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `834335a` (merge captured cask scripts into Ruby-evaluated casks)
-- CI run for `834335a`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40939397711>
+- Latest feature commit: `7ac39bc` (opt-in arbitrary Ruby service DSL evaluator)
+- CI run for `7ac39bc`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40941091207>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
