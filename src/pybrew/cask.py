@@ -50,11 +50,27 @@ class Cask:
     appdir: Optional[str] = None
     caveats: Optional[str] = None
     deprecated: bool = False
+    # Raw Ruby block bodies captured from the cask.  They are inert data: no
+    # parser or installer path executes them unless a caller explicitly opts
+    # in (see ``CaskInstaller(run_scripts=True)``).
+    preflight: Optional[str] = None
+    postflight: Optional[str] = None
+    uninstall_preflight: Optional[str] = None
+    uninstall_postflight: Optional[str] = None
     extra: dict[str, Any] = field(default_factory=dict)
 
     @property
     def full_name(self) -> str:
         return f"{self.tap}/{self.token}" if self.tap else self.token
+
+    @property
+    def scripts(self) -> dict[str, str]:
+        """Return the captured script bodies keyed by stanza name."""
+        return {
+            name: body
+            for name in _SCRIPT_STANZAS
+            if (body := getattr(self, name, None))
+        }
 
     def resolved_version(self) -> str:
         return self.version or "latest"
@@ -169,6 +185,20 @@ _ARTIFACT_KINDS = frozenset(
     }
 )
 
+# Cask stanzas whose ``do ... end`` body is Ruby code.  The parser keeps the
+# raw source; only an explicit ``run_scripts`` install evaluates it.
+_SCRIPT_STANZAS = (
+    "preflight",
+    "postflight",
+    "uninstall_preflight",
+    "uninstall_postflight",
+)
+
+# Keywords that open a nested Ruby block inside a cask script body.
+_BLOCK_KEYWORDS = frozenset(
+    {"do", "if", "unless", "case", "begin", "while", "until", "for"}
+)
+
 _ARCH_NAMES = {
     "big_sur": 11,
     "monterey": 12,
@@ -249,26 +279,29 @@ class CaskParser:
             save = self.pos
             self.skip_newlines()
             block = False
+            opener: Optional[Token] = None
             if self.peek().kind == "kw" and self.peek().value == "do":
                 block = True
-                self.advance()
+                opener = self.advance()
             elif self.peek().kind == "punct" and self.peek().value == "{":
                 block = True
-                self.advance()
+                opener = self.advance()
             else:
                 self.pos = save
             if name == "language" and block:
-                self._parse_language(args, kwargs)
+                self._parse_language(args, kwargs, opener)
             elif name.startswith("on_") and block:
-                self._parse_conditional(name, args)
-            elif name in ("livecheck", "preflight", "postflight", "uninstall_preflight", "uninstall_postflight") and block:
-                self._skip_block_body()
+                self._parse_conditional(name, args, opener)
+            elif name in _SCRIPT_STANZAS and block:
+                self._capture_script(name, opener)
             elif block:
-                self._skip_block_body()
+                self._skip_block_body(opener)
             else:
                 self._apply(name, args, kwargs)
 
-    def _parse_language(self, args: list[Any], kwargs: dict[Any, Any]) -> None:
+    def _parse_language(
+        self, args: list[Any], kwargs: dict[Any, Any], opener: Optional[Token] = None
+    ) -> None:
         code = str(args[0]) if args else "en"
         is_default = bool(kwargs.get("default") or kwargs.get(":default"))
         if is_default and not self._default_language_seen:
@@ -276,14 +309,19 @@ class CaskParser:
             self.cask.language = code
             self._parse_block()
             return
-        self._skip_block_body()
+        self._skip_block_body(opener)
 
-    def _parse_conditional(self, name: str, args: list[Any]) -> None:
+    def _parse_conditional(self, name: str, args: list[Any], opener: Optional[Token] = None) -> None:
         active = self._conditional_active(name, args)
         if active:
             self._parse_block()
         else:
-            self._skip_block_body()
+            self._skip_block_body(opener)
+
+    def _capture_script(self, name: str, opener: Optional[Token]) -> None:
+        """Store a cask script body verbatim without evaluating it."""
+        body = self._consume_block_body(opener, capture=True) if opener is not None else ""
+        setattr(self.cask, name, body)
 
     def _conditional_active(self, name: str, args: list[Any]) -> bool:
         if name in ("on_arm", "on_arm64"):
@@ -402,21 +440,57 @@ class CaskParser:
         self.advance()
         return str(token.value)
 
-    def _skip_block_body(self) -> None:
-        depth = 1
-        prev: Optional[Token] = None
+    def _skip_block_body(self, opener: Optional[Token | str] = None) -> None:
+        self._consume_block_body(opener)
+
+    def _consume_block_body(
+        self, opener: Optional[Token | str] = None, capture: bool = False
+    ) -> str:
+        """Consume a block body, optionally returning its raw source text.
+
+        ``opener`` is the ``do``/``{`` token that introduced the block.  For
+        legacy callers that only pass a string (or nothing), a ``do`` block is
+        assumed.  The scan mirrors the original skip logic but tracks a stack
+        so brace-delimited blocks and hash literals are balanced correctly.
+        """
+
+        if isinstance(opener, Token):
+            closer = "end" if opener.kind == "kw" else "}"
+            body_start = opener.end
+        else:
+            closer = "end" if (opener or "do") == "do" else "}"
+            body_start = self.peek().start
+        stack = [closer]
         while self.peek().kind != "eof":
             token = self.peek()
-            if token.kind == "kw" and token.value == "end":
-                depth -= 1
-                self.advance()
-                if depth == 0:
-                    return
-                prev = token
-                continue
-            if token.kind == "kw" and token.value in ("do", "if", "unless", "case", "begin", "while", "until", "for"):
-                depth += 1
-            prev = self.advance()
+            expected = stack[-1]
+            if expected == "end":
+                if token.kind == "kw" and token.value == "end":
+                    stack.pop()
+                    if not stack:
+                        body_end = token.start
+                        self.advance()
+                        return self.source[body_start:body_end] if capture else ""
+                    self.advance()
+                    continue
+                if token.kind == "kw" and token.value in _BLOCK_KEYWORDS:
+                    stack.append("end")
+                elif token.kind == "punct" and token.value == "{":
+                    stack.append("}")
+            else:
+                if token.kind == "punct" and token.value == "}":
+                    stack.pop()
+                    if not stack:
+                        body_end = token.start
+                        self.advance()
+                        return self.source[body_start:body_end] if capture else ""
+                    self.advance()
+                    continue
+                if token.kind == "kw" and token.value in _BLOCK_KEYWORDS:
+                    stack.append("end")
+                elif token.kind == "punct" and token.value == "{":
+                    stack.append("}")
+            self.advance()
         raise FormulaParseError("unterminated cask block")
 
     def _apply(self, name: str, args: list[Any], kwargs: dict[Any, Any]) -> None:

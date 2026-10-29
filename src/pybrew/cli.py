@@ -11,6 +11,14 @@ from pathlib import Path
 from typing import Any, Optional
 
 from . import PYBREW_VERSION
+from .analytics import (
+    analytics_path,
+    clear as clear_analytics,
+    is_enabled as is_analytics_enabled,
+    read_events,
+    record_event,
+    set_enabled as set_analytics_enabled,
+)
 from .api import fetch_formula
 from .cask import CaskError
 from .bundle import bundle_check, bundle_dump, bundle_install, bundle_list, parse_brewfile
@@ -113,9 +121,19 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="install cask pkg artifacts system-wide (requires root)",
     )
+    install.add_argument(
+        "--run-scripts",
+        action="store_true",
+        help="run cask preflight/postflight scripts (explicit opt-in)",
+    )
     install.add_argument("--library-root", type=Path, help="root for cask Library artifacts")
     install.add_argument("--no-link", action="store_true", help="do not create symlinks")
     install.add_argument("--HEAD", dest="head", action="store_true", help="build the head revision")
+    install.add_argument(
+        "--allow-arbitrary-ruby",
+        action="store_true",
+        help="opt into executing formula install bodies with Ruby (unsafe)",
+    )
 
     cat_cmd = subparsers.add_parser("cat", parents=[common], help="print a formula/cask source file")
     cat_cmd.add_argument("formulae", nargs="+")
@@ -180,6 +198,11 @@ def build_parser() -> argparse.ArgumentParser:
             action="store_true",
             help="install pkg artifacts system-wide (requires root)",
         )
+        action_parser.add_argument(
+            "--run-scripts",
+            action="store_true",
+            help="run preflight/postflight scripts (explicit opt-in)",
+        )
         action_parser.add_argument("--library-root", type=Path)
         action_parser.add_argument("--api", action="store_true", help="fall back to formulae.brew.sh")
 
@@ -239,6 +262,26 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_cmd.add_argument("--json", action="store_true")
     config = subparsers.add_parser("config", parents=[common], help="show pybrew configuration")
     config.add_argument("--json", action="store_true")
+
+    analytics_cmd = subparsers.add_parser(
+        "analytics",
+        parents=[common],
+        help="manage local, opt-in analytics (stored on this machine only)",
+    )
+    analytics_cmd.add_argument(
+        "action",
+        nargs="?",
+        default="state",
+        choices=["state", "on", "enable", "off", "disable", "log", "clear"],
+        help="action to perform (default: state)",
+    )
+    analytics_cmd.add_argument("--json", action="store_true", help="emit JSON")
+    analytics_cmd.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="show only the most recent N events (log)",
+    )
 
     parse = subparsers.add_parser("parse", parents=[common], help="parse a formula file (debug)")
     parse.add_argument("file", type=Path)
@@ -584,6 +627,14 @@ def _installer(config: Config, loader: FormulaLoader) -> Installer:
     return Installer(config, loader, Downloader(config.downloads, config.bottle_dirs), config.verbose)
 
 
+def _record_analytics(config: Config, event: str, **properties: Any) -> None:
+    try:
+        record_event(config, event, properties)
+    except Exception:
+        # Analytics must never break package management.
+        pass
+
+
 def cmd_install(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     config.ensure()
@@ -595,6 +646,7 @@ def cmd_install(args: argparse.Namespace) -> int:
             pkg_root=getattr(args, "pkg_root", None),
             library_root=getattr(args, "library_root", None),
             system_pkg=bool(getattr(args, "system_pkg", False)),
+            run_scripts=bool(getattr(args, "run_scripts", False)),
         )
         exit_code = 0
         for token in args.formulae:
@@ -609,7 +661,10 @@ def cmd_install(args: argparse.Namespace) -> int:
                 print(f"Already installed: {result.token} {result.version}")
             else:
                 print(f"Installed cask: {result.token} {result.version} -> {result.room}")
+                _record_analytics(config, "install", cask=result.token, version=result.version)
         return exit_code
+    if getattr(args, "allow_arbitrary_ruby", False):
+        os.environ["PYBREW_ALLOW_ARBITRARY_RUBY"] = "1"
     loader = _loader(config)
     installer = _installer(config, loader)
     options = InstallOptions(
@@ -638,6 +693,14 @@ def cmd_install(args: argparse.Namespace) -> int:
             else:
                 action = "Installed" if not result.from_bottle else "Poured from bottle"
             print(f"{action}: {result.name} {result.version} ({result.keg})")
+            if not args.dry_run and not result.skipped:
+                _record_analytics(
+                    config,
+                    "install",
+                    formula=result.name,
+                    version=result.version,
+                    bottle=result.from_bottle,
+                )
     return exit_code
 
 
@@ -660,6 +723,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
                 exit_code = 1
                 continue
             print(f"Uninstalled cask: {token}")
+            _record_analytics(config, "uninstall", cask=token)
         return exit_code
     loader = _loader(config)
     installer = _installer(config, loader)
@@ -673,6 +737,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
             continue
         for keg in kegs:
             print(f"Uninstalled {name} ({keg})")
+        _record_analytics(config, "uninstall", formula=name)
     return exit_code
 
 
@@ -890,6 +955,7 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
                 exit_code = 1
                 continue
             print(f"Upgraded: {result.token} {result.version}")
+            _record_analytics(config, "upgrade", cask=result.token, version=result.version)
         return exit_code
     loader = _loader(config)
     if args.formulae:
@@ -919,6 +985,8 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
             continue
         for message in messages:
             print(("Would upgrade: " if args.dry_run else "Upgraded: ") + message)
+        if not args.dry_run:
+            _record_analytics(config, "upgrade", formula=formula.name, version=formula.pkg_version)
     return exit_code
 
 
@@ -993,6 +1061,7 @@ def cmd_cask(args: argparse.Namespace) -> int:
         pkg_root=pkg_root,
         library_root=library_root,
         system_pkg=bool(getattr(args, "system_pkg", False)),
+        run_scripts=bool(getattr(args, "run_scripts", False)),
     )
     if args.action == "list":
         rows = installer.list_installed()
@@ -1191,6 +1260,80 @@ def cmd_config(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_analytics(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    action = getattr(args, "action", None) or "state"
+    state_path = analytics_path(config)
+
+    if action in ("on", "enable"):
+        set_analytics_enabled(config, True)
+        if args.json:
+            print(json.dumps({"enabled": True, "path": str(state_path)}, indent=2))
+        else:
+            print("Analytics enabled (local only; no data is uploaded).")
+        return 0
+
+    if action in ("off", "disable"):
+        set_analytics_enabled(config, False)
+        if args.json:
+            print(json.dumps({"enabled": False, "path": str(state_path)}, indent=2))
+        else:
+            print(
+                "Analytics disabled (existing events were kept; run "
+                "'pybrew analytics clear' to delete them)."
+            )
+        return 0
+
+    if action == "log":
+        limit = getattr(args, "limit", None)
+        if limit is not None and limit < 0:
+            raise UsageError("--limit must be zero or greater")
+        events = read_events(config, limit=limit)
+        if args.json:
+            print(json.dumps({"events": events, "count": len(events)}, indent=2))
+            return 0
+        if not events:
+            print("No analytics events recorded.")
+            return 0
+        for event in events:
+            properties = event.get("properties") or {}
+            rendered = " ".join(
+                f"{key}={value}" for key, value in sorted(properties.items())
+            )
+            line = f"{event.get('timestamp') or '-'}  {event.get('name') or '-'}"
+            print(line + (f"  {rendered}" if rendered else ""))
+        return 0
+
+    if action == "clear":
+        removed = clear_analytics(config)
+        if args.json:
+            print(
+                json.dumps(
+                    {"cleared": removed, "enabled": is_analytics_enabled(config)},
+                    indent=2,
+                )
+            )
+        else:
+            print(f"Cleared {removed} analytics event(s).")
+        return 0
+
+    enabled = is_analytics_enabled(config)
+    event_count = len(read_events(config))
+    if args.json:
+        print(
+            json.dumps(
+                {"enabled": enabled, "event_count": event_count, "path": str(state_path)},
+                indent=2,
+            )
+        )
+        return 0
+    print(f"Analytics: {'enabled' if enabled else 'disabled'}")
+    print(f"Stored events: {event_count}")
+    print(f"State file: {state_path}")
+    print("Data is stored locally only; nothing is uploaded.")
+    return 0
+
+
 def cmd_parse(args: argparse.Namespace) -> int:
     path = Path(args.file).expanduser()
     if not path.is_file():
@@ -1238,6 +1381,7 @@ _COMMANDS = {
     "services": cmd_services,
     "doctor": cmd_doctor,
     "config": cmd_config,
+    "analytics": cmd_analytics,
     "parse": cmd_parse,
 }
 

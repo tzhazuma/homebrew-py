@@ -19,6 +19,10 @@ declarative/build statements used by source formulae:
 
 Anything else raises :class:`UnsupportedInstall` with a line number instead of
 silently producing an incomplete keg.
+
+When ``PYBREW_ALLOW_ARBITRARY_RUBY=1`` is set, the raw ``def install`` body is
+executed with the host Ruby interpreter instead; see
+:mod:`pybrew.ruby_executor`.  That bridge is strictly opt-in.
 """
 
 from __future__ import annotations
@@ -37,6 +41,7 @@ from typing import Any, Iterable, Optional
 from .errors import BuildError, UnsupportedInstall
 from .models import Formula, is_linux, is_macos
 from .paths import Config
+from .ruby_executor import arbitrary_ruby_enabled, execute_install_body
 from .ruby_parser import Lexer, Token
 
 # ---------------------------------------------------------------------------
@@ -1079,6 +1084,22 @@ class SourceBuilder:
         self._resource_stages: dict[str, Path] = {}
 
     def build(self, build_root: Path, keg: Path) -> None:
+        if arbitrary_ruby_enabled():
+            # Explicit opt-in (PYBREW_ALLOW_ARBITRARY_RUBY=1): hand the raw
+            # `def install` body to Ruby instead of the declarative parser.
+            execute_install_body(
+                self.formula,
+                self.config,
+                build_root,
+                keg,
+                env=self._build_env(keg),
+                verbose=self.verbose,
+            )
+            if not any(keg.iterdir()):
+                raise BuildError(
+                    f"{self.formula.name}: build completed but installed keg is empty"
+                )
+            return
         parser = InstallParser(self.formula)
         actions = parser.parse()
         if not actions:

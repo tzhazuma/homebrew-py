@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-139 passed in 37.48s
+200 passed, 3 skipped in 66.88s
 ```
 
 Breakdown of the feature slices:
@@ -32,10 +32,10 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 17 passed      # 15 parametrized real formulae + 2 aggregate checks
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
-$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_depth.py tests/test_cask_pkg_system.py
-34 passed      # 17 base + 10 depth + 7 opt-in system pkg
-$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py
-12 passed      # autotools, CMake, Cargo, meson, on_arm/on_intel, predicates, resources, HEAD
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_scripts.py
+56 passed      # base/depth/system install/uninstall/scripts
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py
+27 passed      # declarative + opt-in arbitrary Ruby bridge
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
 8 passed       # launchd + systemd unit generation, orphan cleanup
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_taps.py
@@ -47,7 +47,11 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bundle.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cli.py
 13 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_relocation.py
-5 passed       # Mach-O padding + ELF patchelf RPATH
+9 passed       # Mach-O padding + ELF patchelf RPATH/PT_INTERP
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_analytics.py
+20 passed      # local-only analytics
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_linux_real.py
+3 skipped      # opt-in OrbStack/Linux verification
 ```
 
 ## Real formula parity
@@ -267,7 +271,27 @@ editor.
 `update` updates every installed tap via `git pull --ff-only`; the test taps a
 local remote, commits a change, and confirms the CLI updates it.
 
-## Second parallel batch
+## Final parallel batch
+
+- Cask preflight/postflight scripts are parsed inertly and executed only with
+  `--run-scripts`; the Ruby shim covers system_command/system/Pathname/FileUtils
+  and records `scripts_requested`/`script_results`. No scripts run by default.
+- `--system-pkg` records installed pkg IDs via `pkgutil --pkgs`; uninstall
+  requires root, validates `pkgutil --files` paths under allowed roots, removes
+  files/empty dirs, and calls `pkgutil --forget`. No real system writes in tests.
+- Local analytics (`analytics on/off/state/log/clear`) stores events only under
+  `var/pybrew/analytics.json`; disabled by default, no network. Install,
+  uninstall and upgrade record events when enabled.
+- Opt-in arbitrary Ruby install bodies run under `/usr/bin/ruby` with a shim
+  (`PYBREW_ALLOW_ARBITRARY_RUBY=1` or `install --allow-arbitrary-ruby`);
+  default declarative path unchanged. Tests skip if Ruby is absent.
+- Real Linux verification via OrbStack Ubuntu arm64: patchelf 0.18.0 installed;
+  real `libslirp 4.9.6` and `tree 2.3.2` arm64_linux bottles downloaded from
+  ghcr.io, SHA-verified, installed, and inspected. This found and fixed a real
+  PT_INTERP relocation bug (`@@HOMEBREW_PREFIX@@/lib/ld.so`); after the fix
+  `tree --version` runs. See `scripts/linux_verify.py` and
+  `tests/test_linux_real.py` (opt-in).
+
 
 - `--system-pkg` performs an explicit root-only macOS `installer -pkg ... -target /`
   install; tests use a fake installer and never run as root. The default
@@ -331,10 +355,10 @@ install, `doctor`, `list`, `deps`, `search`, `config`, and `parse`.
 - Live download from ghcr.io is not part of the offline suite; the real bottle
   test intentionally uses a cached artefact. Live download is recorded manually
   above.
-- Cask package scripts, login items and system pkg uninstall/rollback.
-- `brew lgtm`, remaining advanced Brewfile options, analytics.
-- Real Linux/patchelf execution is exercised with a fake tool; no real Linux
-  bottle is installed in CI.
+- Cask login items and full script API coverage; system pkg rollback during
+  upgrade (uninstall is implemented).
+- `brew lgtm`, remaining advanced Brewfile options.
+- x86_64 Linux real verification (only arm64 OrbStack was exercised).
 
 These are tracked in the README roadmap and `docs/parity.md`.
 

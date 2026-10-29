@@ -139,8 +139,10 @@ cask's declared trash paths after checking they stay inside the user
 home/prefix/temp roots. Library artifact kinds (`font`, `qlplugin`, VST plugins,
 etc.) copy into `<prefix>/Library/...` by default or `--library-root`; `stage_only`
 writes a receipt without artifacts. `.pkg` payloads are expanded under
-`--pkg-root`; `--system-pkg` opts into a root-only macOS `installer` call, while
-package scripts and system pkg uninstall/rollback are not implemented.
+`--pkg-root`; `--system-pkg` opts into a root-only macOS `installer` call and
+tracks package IDs for root-only uninstall. `--run-scripts` opts into
+preflight/postflight Ruby scripts (inert by default). System pkg rollback during
+upgrade and exotic script APIs remain out of scope.
 
 ## Services
 
@@ -161,8 +163,8 @@ because loaders discover them from the prefix.
 
 ## Brewfiles
 
-`bundle.py` parses the common Homebrew Brewfile subset: `tap`, `brew` and `cask`
-lines. `bundle install` installs taps first, then formulae and casks, reusing the
+`bundle.py` parses the common Homebrew Brewfile subset: `tap`, `brew`, `cask`,
+`mas` and `vscode` lines. `bundle install` installs taps first, then formulae and casks, reusing the
 normal installers; `bundle check` reports missing entries; `bundle list` prints
 the parsed entries; `bundle dump` writes taps/formulae/casks back to a Brewfile.
 `tap ..., url: "..."`, `brew ..., link: false`, `brew ..., args: [...]`,
@@ -196,10 +198,18 @@ same for a local cask artifact.
 - `uninstall` refuses to remove paths outside the Cellar.
 - No Ruby, no formula-supplied shell commands in the current installer.
 
+## Analytics
+
+`analytics.py` stores an opt-in local event log under
+`var/pybrew/analytics.json` (default disabled, mode 0600, no network). The CLI
+exposes `analytics state/on/off/log/clear`; successful install/uninstall/upgrade
+commands append local events when enabled.
+
 ## Known limitations
 
 - Source builds support a common literal `def install` subset (on_arm/on_intel,
-  predicates, resources and HEAD included), not arbitrary Ruby.
+  predicates, resources and HEAD included); an opt-in Ruby bridge covers
+  arbitrary install bodies but not every Homebrew Ruby API.
 - ELF relocation needs `patchelf` for long RPATH replacements; Mach-O uses
   `install_name_tool`; further edge cases remain.
 - Cask `.pkg` payloads are expanded under `--pkg-root`; `--system-pkg` delegates
@@ -208,7 +218,8 @@ same for a local cask artifact.
   unless `--library-root` is supplied.
 - Services are best-effort: launchd/systemd are invoked, but log rotation,
   process supervision edge cases and root services are not implemented.
-- No analytics, some advanced Brewfile options or full cask options.
+- Analytics is local-only and opt-in; some advanced Brewfile options and full
+  cask options remain incomplete.
 - `brew`'s test DSL is captured but not executed.
 
 ## Testing strategy

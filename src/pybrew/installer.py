@@ -263,35 +263,43 @@ def _find_patchelf() -> Optional[str]:
     return shutil.which("patchelf")
 
 
-def _relocate_elf(path: Path, replacements: dict[bytes, bytes]) -> bool:
-    """Rewrite placeholder RPATH entries in an ELF binary using patchelf.
+def _patchelf_output(
+    patchelf: str, flag: str, path: Path, timeout: int = 30
+) -> Optional[str]:
+    """Return the stripped stdout of a read-only patchelf query, or None."""
 
-    ELF RPATHs live in the dynamic string table, so a longer replacement
-    cannot be written in place (the length-preserving byte fallback has to
-    skip it).  patchelf moves the string and updates the dynamic section
-    instead.
+    try:
+        result = subprocess.run(
+            [patchelf, flag, str(path)],
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def _relocate_elf(path: Path, replacements: dict[bytes, bytes]) -> bool:
+    """Rewrite placeholder RPATH and interpreter paths in an ELF binary.
+
+    ELF stores both the dynamic RPATH and the program interpreter (PT_INTERP)
+    as strings in the file.  Homebrew's Linux bottles point the interpreter at
+    ``@@HOMEBREW_PREFIX@@/lib/ld.so``; leaving that placeholder behind makes
+    every executable in the bottle unrunnable ("required file not found").
+    A longer replacement cannot be written in place, so the length-preserving
+    byte fallback has to skip it; patchelf moves the strings and updates the
+    dynamic/program headers instead.
 
     Returns True when patchelf rewrote the file.  A missing tool, a failed
-    invocation or an RPATH without placeholders returns False so the caller
+    invocation or an ELF without placeholders returns False so the caller
     keeps the safe byte-level fallback (which never grows a string in place).
     """
 
     patchelf = _find_patchelf()
     if patchelf is None:
-        return False
-    try:
-        listing = subprocess.run(
-            [patchelf, "--print-rpath", str(path)],
-            text=True,
-            capture_output=True,
-            timeout=30,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    if listing.returncode != 0:
-        return False
-    old_rpath = listing.stdout.strip()
-    if not old_rpath:
         return False
 
     substitutions = {
@@ -300,40 +308,59 @@ def _relocate_elf(path: Path, replacements: dict[bytes, bytes]) -> bool:
         )
         for placeholder, replacement in replacements.items()
     }
-    entries = old_rpath.split(":")
-    new_entries: list[str] = []
-    for entry in entries:
-        new_entry = entry
+
+    def substitute(value: str) -> str:
         for placeholder, replacement in substitutions.items():
-            new_entry = new_entry.replace(placeholder, replacement)
-        new_entries.append(new_entry)
-    if new_entries == entries:
+            value = value.replace(placeholder, replacement)
+        return value
+
+    old_rpath = _patchelf_output(patchelf, "--print-rpath", path)
+    new_rpath = substitute(old_rpath) if old_rpath else old_rpath
+    # Shared libraries have no PT_INTERP, so a failed query means "nothing to
+    # relocate" rather than an error.
+    old_interpreter = _patchelf_output(patchelf, "--print-interpreter", path)
+    new_interpreter = substitute(old_interpreter) if old_interpreter else old_interpreter
+
+    rpath_changed = old_rpath is not None and new_rpath != old_rpath
+    interpreter_changed = (
+        old_interpreter is not None and new_interpreter != old_interpreter
+    )
+    if not rpath_changed and not interpreter_changed:
         return False
-    new_rpath = ":".join(new_entries)
+
+    commands: list[list[str]] = []
+    if interpreter_changed:
+        assert new_interpreter is not None
+        commands.append(["--set-interpreter", new_interpreter, str(path)])
+    if rpath_changed:
+        assert new_rpath is not None
+        commands.append(["--set-rpath", new_rpath, str(path)])
 
     original = path.read_bytes()
     mode = path.stat().st_mode
     os.chmod(path, mode | 0o200)
     try:
-        try:
-            result = subprocess.run(
-                [patchelf, "--set-rpath", new_rpath, str(path)],
-                text=True,
-                capture_output=True,
-                timeout=60,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            result = None
-        if result is not None and result.returncode == 0:
-            return True
-        # patchelf may fail after partially touching the file: restore it so
-        # the caller's fallback still starts from pristine bytes.
-        try:
-            if path.read_bytes() != original:
-                path.write_bytes(original)
-        except OSError:
-            pass
-        return False
+        for command in commands:
+            try:
+                result = subprocess.run(
+                    [patchelf, *command],
+                    text=True,
+                    capture_output=True,
+                    timeout=60,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                result = None
+            if result is not None and result.returncode == 0:
+                continue
+            # patchelf may fail after partially touching the file: restore it
+            # so the caller's fallback still starts from pristine bytes.
+            try:
+                if path.read_bytes() != original:
+                    path.write_bytes(original)
+            except OSError:
+                pass
+            return False
+        return True
     finally:
         try:
             os.chmod(path, mode)

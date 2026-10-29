@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import glob
+import json
 import os
 import plistlib
 import re
@@ -22,6 +23,15 @@ from .errors import ChecksumMismatch, DownloadError, PybrewError
 from .installer import safe_extract_tar
 from .paths import Config
 from .taps import Tap
+
+# Files installed by a system-wide pkg may only be removed below one of these
+# roots.  ``PYBREW_SYSTEM_PKG_ROOTS`` (colon-separated) overrides the list so
+# tests can point at a throwaway directory and never touch a real system path.
+DEFAULT_SYSTEM_PKG_ROOTS = ("/usr/local", "/opt", "/Library", "/Applications")
+
+# ``pkgutil --pkgs`` can be slow on machines with many receipts; this is a
+# generous upper bound rather than a performance target.
+_PKGUTIL_TIMEOUT = 120
 
 
 class CaskNotFound(PybrewError):
@@ -88,6 +98,110 @@ class CaskLoader:
             if regex.search(f"{cask.token} {cask.name or ''} {cask.desc or ''}"):
                 results.append(cask)
         return results
+
+
+# The Ruby shim used for opt-in cask scripts.  It defines the small subset of
+# the Homebrew cask script API that package scripts commonly use and evaluates
+# the captured block body in that context.  The body itself is written to a
+# separate file and never interpolated into this shim.
+_CASK_SCRIPT_SHIM = r'''
+# frozen_string_literal: true
+
+# pybrew cask script shim.  This file is generated at install time and is only
+# used when a caller explicitly opts in to cask script execution.
+
+require "fileutils"
+require "open3"
+require "pathname"
+require "shellwords"
+
+class PybrewCaskScriptResult
+  attr_reader :stdout, :stderr, :exit_status
+
+  def initialize(stdout:, stderr:, exit_status:)
+    @stdout = stdout
+    @stderr = stderr
+    @exit_status = exit_status
+  end
+
+  def success?
+    @exit_status.zero?
+  end
+
+  def to_s
+    @stdout
+  end
+end
+
+class PybrewCaskScriptContext
+  attr_reader :token, :version, :appdir, :staged_path, :bin, :prefix
+
+  def initialize(token:, version:, appdir:, staged_path:, bin:, prefix:)
+    @token = token
+    @version = version
+    @appdir = Pathname(appdir)
+    @staged_path = Pathname(staged_path)
+    @bin = Pathname(bin)
+    @prefix = Pathname(prefix)
+  end
+
+  def system_command(command, args: [], env: {}, print_stdout: false,
+                     print_stderr: true, sudo: false, **_options)
+    argv = [command.to_s, *Array(args).map(&:to_s)]
+    argv.unshift("sudo") if sudo && Process.uid != 0
+    stdout, stderr, status = Open3.capture3(env.transform_keys(&:to_s), *argv)
+    $stdout.print(stdout) if print_stdout && !stdout.empty?
+    $stderr.print(stderr) if print_stderr && !stderr.empty?
+    PybrewCaskScriptResult.new(stdout: stdout, stderr: stderr,
+                               exit_status: status.exitstatus || 1)
+  end
+
+  def system_command!(command, **options)
+    result = system_command(command, **options)
+    unless result.success?
+      raise "command failed (exit #{result.exit_status}): #{command}"
+    end
+    result
+  end
+
+  def system(*args, **options)
+    command = options.delete(:command)
+    args = [command, *Array(options.delete(:args))] if command
+    Kernel.system(*args.map(&:to_s))
+  end
+
+  def shell_command(command, **options)
+    system_command("/bin/sh", args: ["-c", command.to_s], **options)
+  end
+
+  def ohai(message)
+    puts "==> #{message}"
+  end
+
+  def opoo(message)
+    warn "Warning: #{message}"
+  end
+end
+
+script_name = ARGV.fetch(0)
+body_path = ARGV.fetch(7)
+context = PybrewCaskScriptContext.new(
+  token: ARGV.fetch(1),
+  version: ARGV.fetch(2),
+  appdir: ARGV.fetch(3),
+  staged_path: ARGV.fetch(4),
+  bin: ARGV.fetch(5),
+  prefix: ARGV.fetch(6)
+)
+
+begin
+  context.instance_eval(File.read(body_path), body_path, 1)
+rescue Exception => error # rubocop:disable Lint/RescueException
+  warn "pybrew: #{script_name} script failed: #{error.class}: #{error.message}"
+  Array(error.backtrace).first(10).each { |line| warn "  #{line}" }
+  exit 1
+end
+'''
 
 
 @dataclass
@@ -241,6 +355,7 @@ class CaskInstaller:
         pkg_root: Optional[Path] = None,
         library_root: Optional[Path] = None,
         system_pkg: bool = False,
+        run_scripts: bool = False,
     ):
         self.config = config
         self.downloader = downloader or Downloader(config.downloads, config.bottle_dirs)
@@ -252,7 +367,16 @@ class CaskInstaller:
         # Opt-in system-wide pkg installation.  The default remains the safe
         # path that expands the payload beneath ``pkg_root``.
         self.system_pkg = system_pkg
+        # Opt-in cask preflight/postflight scripts.  Captured script source is
+        # inert data unless this flag is enabled; when disabled nothing is
+        # executed and no Ruby process is started.
+        self.run_scripts = run_scripts
         self._system_pkg_used = False
+        # Package IDs installed by the current system-wide pkg invocation and
+        # whether ``pkgutil --pkgs`` tracking was available at all.
+        self._system_pkg_ids: list[str] = []
+        self._system_pkg_tracked = False
+        self._script_results: dict[str, dict[str, Any]] = {}
 
     # -- paths -----------------------------------------------------------
     def room(self, cask: Cask, version: Optional[str] = None) -> Path:
@@ -278,6 +402,9 @@ class CaskInstaller:
     # -- install ---------------------------------------------------------
     def install(self, cask: Cask, force: bool = False) -> CaskInstallResult:
         self._system_pkg_used = False
+        self._system_pkg_ids = []
+        self._system_pkg_tracked = False
+        self._script_results = {}
         version = cask.resolved_version()
         if version in ("latest", "0"):
             raise CaskError(f"{cask.token}: version {version!r} cannot be installed reliably")
@@ -318,20 +445,32 @@ class CaskInstaller:
                     if not os.path.exists("/usr/bin/hdiutil"):
                         raise CaskError("dmg casks require hdiutil (macOS)")
                     with _MountedImage(archive, temp_root / "mount") as source_root:
-                        installed = self._install_artifacts(cask, source_root, room, force)
+                        installed = self._install_artifacts_with_scripts(
+                            cask, source_root, room, version, force, cwd=source_root
+                        )
                 elif kind == "zip":
                     _safe_extract_zip(archive, temp_root)
-                    installed = self._install_artifacts(cask, temp_root, room, force)
+                    installed = self._install_artifacts_with_scripts(
+                        cask, temp_root, room, version, force, cwd=temp_root
+                    )
                 elif kind == "tar":
                     safe_extract_tar(archive, temp_root)
-                    installed = self._install_artifacts(cask, temp_root, room, force)
+                    installed = self._install_artifacts_with_scripts(
+                        cask, temp_root, room, version, force, cwd=temp_root
+                    )
                 elif kind == "pkg":
-                    installed = self._install_artifacts(
-                        cask, archive.parent, room, force, archive=archive
+                    installed = self._install_artifacts_with_scripts(
+                        cask, archive.parent, room, version, force,
+                        archive=archive, cwd=self.pkg_root,
                     )
                 else:
                     shutil.rmtree(room, ignore_errors=True)
                     raise CaskError(f"{cask.token}: unsupported cask archive type for {url}")
+        else:
+            # A bare stage_only cask still runs its scripts (there are no
+            # artifacts, so preflight and postflight are back to back).
+            self._run_preflight(cask, room, version, room)
+            self._run_cask_script(cask, "postflight", room, version, room)
 
         receipt = {
             "token": cask.token,
@@ -345,15 +484,119 @@ class CaskInstaller:
             ],
             "installed": installed,
             "tap": cask.tap,
+            # Script opt-in and per-script outcome.  ``scripts_requested`` is
+            # False for every default install, even when the cask defines
+            # preflight/postflight blocks.
+            "scripts_requested": self.run_scripts,
+            "script_results": dict(self._script_results),
         }
         if self._system_pkg_used:
             # No payload paths are recorded for system-wide pkg installs: the
-            # macOS installer owns the receipt and the files on disk.
+            # macOS installer owns the files on disk.  The package IDs
+            # installed by this invocation are diffed from ``pkgutil --pkgs``
+            # so uninstall can later remove exactly those files and forget the
+            # corresponding receipts.
             receipt["system_pkg"] = True
+            receipt["system_pkg_ids"] = sorted(self._system_pkg_ids)
+            receipt["system_pkg_tracked"] = self._system_pkg_tracked
         (metadata / "receipt.json").write_text(
-            __import__("json").dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         return CaskInstallResult(cask.token, version, room, installed)
+
+    # -- opt-in cask scripts --------------------------------------------
+    def _install_artifacts_with_scripts(
+        self,
+        cask: Cask,
+        source_root: Path,
+        room: Path,
+        version: str,
+        force: bool,
+        archive: Optional[Path] = None,
+        cwd: Optional[Path] = None,
+    ) -> list[str]:
+        self._run_preflight(cask, room, version, cwd)
+        installed = self._install_artifacts(cask, source_root, room, force, archive=archive)
+        self._run_cask_script(cask, "postflight", room, version, cwd)
+        return installed
+
+    def _run_preflight(
+        self, cask: Cask, room: Path, version: str, cwd: Optional[Path] = None
+    ) -> None:
+        try:
+            self._run_cask_script(cask, "preflight", room, version, cwd)
+        except CaskError:
+            # No artifacts have been installed yet: drop the empty room so a
+            # retry is not mistaken for an already-installed cask.
+            self._remove_path(room)
+            raise
+
+    def _run_cask_script(
+        self,
+        cask: Cask,
+        name: str,
+        room: Path,
+        version: str,
+        cwd: Optional[Path] = None,
+    ) -> None:
+        """Execute one captured cask script block with the Ruby shim.
+
+        This only runs when ``run_scripts`` was explicitly enabled.  The block
+        body is passed to Ruby as a file; it is never evaluated in Python.
+        Scripts run with the extracted source root as their working directory
+        (``pkg_root`` for pkg casks) when one is available.
+        """
+
+        body = getattr(cask, name, None)
+        if not self.run_scripts or not body or not str(body).strip():
+            return
+        ruby = os.path.expanduser(os.environ.get("PYBREW_RUBY") or "/usr/bin/ruby")
+        executable = shutil.which(ruby)
+        if executable is None:
+            raise CaskError(
+                f"{cask.token}: {name} script requires a Ruby interpreter at "
+                f"{ruby!r}; install Ruby or set PYBREW_RUBY"
+            )
+        if cwd is not None:
+            # pkg_root may not exist until the package is installed; create it
+            # only when a script actually needs a working directory there.
+            Path(cwd).mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="pybrew-cask-script-") as temporary:
+            temp_root = Path(temporary)
+            shim = temp_root / "cask_script_shim.rb"
+            shim.write_text(_CASK_SCRIPT_SHIM, encoding="utf-8")
+            body_path = temp_root / f"{name}.rb"
+            body_path.write_text(str(body) + "\n", encoding="utf-8")
+            command = [
+                executable,
+                str(shim),
+                name,
+                cask.token,
+                version,
+                str(self.appdir),
+                str(room),
+                str(self.config.bin),
+                str(self.config.prefix),
+                str(body_path),
+            ]
+            try:
+                result = subprocess.run(
+                    command,
+                    text=True,
+                    capture_output=True,
+                    cwd=str(cwd) if cwd is not None else None,
+                )
+            except OSError as error:
+                raise CaskError(
+                    f"{cask.token}: could not run {name} script with {executable}: {error}"
+                ) from error
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            raise CaskError(
+                f"{cask.token}: {name} script failed (exit {result.returncode}): "
+                f"{detail[-1000:] or 'no output'}"
+            )
+        self._script_results[name] = {"status": "ok", "exit_code": 0}
 
     def _install_artifacts(
         self,
@@ -526,6 +769,10 @@ class CaskInstaller:
         This is an explicit opt-in escape hatch.  It requires macOS, an
         installer executable and effective root; pybrew never expands or
         copies the payload in this mode.
+
+        The package IDs installed by this invocation are captured by diffing
+        ``pkgutil --pkgs`` before and after the installer run.  They are stored
+        in the cask receipt so ``uninstall`` can remove exactly those files.
         """
 
         if sys.platform != "darwin":
@@ -544,6 +791,14 @@ class CaskInstaller:
                 f"{cask.token}: system-wide pkg installation requires root; "
                 "rerun with sudo or use --pkg-root for a payload-only install"
             )
+        # Tracking is best effort when the host has no pkgutil at all (the
+        # synthetic test path pretends to be macOS).  An explicitly configured
+        # pkgutil that is missing is an error: silently losing uninstall
+        # tracking is worse than refusing the install.
+        pkgutil = self._pkgutil_executable(required=False)
+        before: Optional[set[str]] = None
+        if pkgutil is not None:
+            before = self._pkgutil_list_ids(cask.token, pkgutil)
         command = [executable, "-pkg", str(package), "-target", "/"]
         try:
             result = subprocess.run(command, text=True, capture_output=True)
@@ -557,7 +812,262 @@ class CaskInstaller:
                 f"{cask.token}: system-wide package installation failed "
                 f"(exit {result.returncode}): {detail or package}"
             )
+        if pkgutil is not None and before is not None:
+            try:
+                after = self._pkgutil_list_ids(cask.token, pkgutil)
+            except CaskError as error:
+                # Never guess at files that may not belong to us: the package
+                # is installed, but without a before/after diff pybrew cannot
+                # safely roll it back.  Nothing is deleted here.
+                raise CaskError(
+                    f"{cask.token}: package installation completed but pybrew could "
+                    f"not record the installed package IDs; no files were removed "
+                    f"and the receipt was not written. {error}"
+                ) from error
+            for pkg_id in sorted(after - before):
+                if pkg_id not in self._system_pkg_ids:
+                    self._system_pkg_ids.append(pkg_id)
+            self._system_pkg_tracked = True
         self._system_pkg_used = True
+
+    # -- system-wide pkg tracking / uninstall helpers --------------------
+    @staticmethod
+    def _pkgutil_executable(*, required: bool = True) -> Optional[str]:
+        configured = os.environ.get("PYBREW_PKGUTIL")
+        candidate = os.path.expanduser(configured) if configured else "/usr/sbin/pkgutil"
+        executable = shutil.which(candidate)
+        if executable is not None:
+            return executable
+        if configured or required:
+            raise CaskError(
+                f"pkgutil executable not found or not executable: {candidate}; "
+                "set PYBREW_PKGUTIL to the macOS pkgutil tool"
+            )
+        return None
+
+    @staticmethod
+    def _run_pkgutil(
+        token: str,
+        executable: str,
+        args: list[str],
+        action: str,
+        *,
+        timeout: int = _PKGUTIL_TIMEOUT,
+        allow_missing_receipt: bool = False,
+    ) -> subprocess.CompletedProcess[str]:
+        try:
+            result = subprocess.run(
+                [executable, *args], text=True, capture_output=True, timeout=timeout
+            )
+        except subprocess.TimeoutExpired as error:
+            raise CaskError(f"cask {token}: pkgutil {action} timed out") from error
+        except OSError as error:
+            raise CaskError(
+                f"cask {token}: could not run pkgutil {executable}: {error}"
+            ) from error
+        if result.returncode != 0:
+            detail = (result.stderr or result.stdout).strip()
+            if allow_missing_receipt and "no receipt" in detail.lower():
+                return result
+            raise CaskError(
+                f"cask {token}: pkgutil {action} failed "
+                f"(exit {result.returncode}): {detail or 'no output'}"
+            )
+        return result
+
+    def _pkgutil_list_ids(self, token: str, executable: str) -> set[str]:
+        result = self._run_pkgutil(
+            token, executable, ["--pkgs"], "list installed package receipts"
+        )
+        return {line.strip() for line in result.stdout.splitlines() if line.strip()}
+
+    def _pkgutil_install_location(
+        self, token: str, executable: str, pkg_id: str
+    ) -> Path:
+        """Return the directory ``pkgutil --files`` paths are relative to."""
+
+        result = self._run_pkgutil(
+            token,
+            executable,
+            ["--pkg-info", pkg_id],
+            f"read package info for {pkg_id}",
+        )
+        volume = "/"
+        location = ""
+        for line in result.stdout.splitlines():
+            key, _, value = line.partition(":")
+            key = key.strip().lower()
+            value = value.strip()
+            if key == "volume" and value:
+                volume = value
+            elif key == "location":
+                location = value
+        return Path(volume) / location.lstrip("/")
+
+    @staticmethod
+    def _system_pkg_roots() -> list[Path]:
+        configured = os.environ.get("PYBREW_SYSTEM_PKG_ROOTS")
+        values = (
+            configured.split(":")
+            if configured is not None
+            else list(DEFAULT_SYSTEM_PKG_ROOTS)
+        )
+        roots: list[Path] = []
+        for value in values:
+            value = value.strip()
+            if not value:
+                continue
+            path = Path(os.path.expanduser(value))
+            if not path.is_absolute():
+                raise CaskError(f"system pkg root must be an absolute path: {value!r}")
+            resolved = path.resolve()
+            if resolved == Path("/"):
+                raise CaskError("refusing to use / as an allowed system pkg root")
+            if resolved not in roots:
+                roots.append(resolved)
+        if not roots:
+            raise CaskError("no allowed system pkg roots configured")
+        return roots
+
+    @staticmethod
+    def _validate_system_pkg_path(path: Path, roots: list[Path]) -> Path:
+        normalized = Path(os.path.normpath(str(path)))
+        if not normalized.is_absolute():
+            raise CaskError(f"refusing to remove non-absolute pkg path: {path}")
+        try:
+            if normalized.is_symlink():
+                # Removing a symlink does not touch its target, so validate the
+                # directory that contains it rather than the link target.
+                probe = normalized.parent.resolve() / normalized.name
+            else:
+                probe = normalized.resolve()
+        except (OSError, RuntimeError) as error:
+            raise CaskError(
+                f"refusing to remove unresolvable pkg path {normalized}: {error}"
+            ) from error
+        if probe == Path("/"):
+            raise CaskError(f"refusing to remove unsafe pkg path: {normalized}")
+        for root in roots:
+            if probe == root:
+                raise CaskError(
+                    f"refusing to remove allowed system pkg root itself: {normalized}"
+                )
+            if root in probe.parents:
+                return normalized
+        allowed = ", ".join(str(root) for root in roots)
+        raise CaskError(
+            f"refusing to remove pkg path outside allowed roots: {normalized} "
+            f"(allowed roots: {allowed})"
+        )
+
+    @staticmethod
+    def _system_pkg_ids_from_receipt(token: str, receipt: dict[str, Any]) -> list[str]:
+        if "system_pkg_ids" not in receipt:
+            raise CaskError(
+                f"cask {token}: system pkg receipt has no recorded package IDs; "
+                "cannot safely remove system files; remove them manually"
+            )
+        raw = receipt.get("system_pkg_ids")
+        if raw is None:
+            return []
+        if not isinstance(raw, list):
+            raise CaskError(f"cask {token}: invalid system_pkg_ids in receipt")
+        ids: list[str] = []
+        for value in raw:
+            if not isinstance(value, str) or not value.strip():
+                raise CaskError(
+                    f"cask {token}: invalid system pkg id in receipt: {value!r}"
+                )
+            pkg_id = value.strip()
+            if pkg_id.startswith("-") or any(
+                character.isspace() or ord(character) < 32 for character in pkg_id
+            ):
+                raise CaskError(
+                    f"cask {token}: refusing unsafe system pkg id: {value!r}"
+                )
+            if pkg_id not in ids:
+                ids.append(pkg_id)
+        return ids
+
+    def _plan_system_pkg_uninstall(
+        self, token: str, receipt: dict[str, Any]
+    ) -> list[tuple[str, list[Path]]]:
+        """List and validate every path to remove before deleting anything."""
+
+        ids = self._system_pkg_ids_from_receipt(token, receipt)
+        if not ids:
+            if receipt.get("system_pkg_tracked") is False:
+                raise CaskError(
+                    f"cask {token}: system pkg receipt was written without pkgutil "
+                    "tracking; cannot safely remove system files; remove them manually"
+                )
+            return []
+        executable = self._pkgutil_executable(required=True)
+        roots = self._system_pkg_roots()
+        plan: list[tuple[str, list[Path]]] = []
+        for pkg_id in ids:
+            base = self._pkgutil_install_location(token, executable, pkg_id)
+            result = self._run_pkgutil(
+                token,
+                executable,
+                ["--files", pkg_id],
+                f"list files for package {pkg_id}",
+            )
+            paths: list[Path] = []
+            seen: set[str] = set()
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                raw = Path(line)
+                candidate = raw if raw.is_absolute() else base / raw
+                validated = self._validate_system_pkg_path(candidate, roots)
+                key = str(validated)
+                if key not in seen:
+                    seen.add(key)
+                    paths.append(validated)
+            plan.append((pkg_id, paths))
+        return plan
+
+    def _execute_system_pkg_uninstall(
+        self, token: str, plan: list[tuple[str, list[Path]]]
+    ) -> None:
+        if not plan:
+            return
+        for _pkg_id, paths in plan:
+            # Deepest paths first so package-owned directories can be removed
+            # with rmdir once they are empty.  Shared directories are left in
+            # place rather than recursively deleted.
+            for path in sorted(paths, key=lambda item: len(item.parts), reverse=True):
+                self._remove_system_pkg_path(token, path)
+        executable = self._pkgutil_executable(required=True)
+        for pkg_id, _paths in plan:
+            self._run_pkgutil(
+                token,
+                executable,
+                ["--forget", pkg_id],
+                f"forget package {pkg_id}",
+                allow_missing_receipt=True,
+            )
+
+    @staticmethod
+    def _remove_system_pkg_path(token: str, path: Path) -> None:
+        try:
+            if path.is_symlink() or path.is_file():
+                path.unlink()
+            elif path.is_dir():
+                try:
+                    path.rmdir()
+                except OSError:
+                    # A directory shared with other packages is not empty;
+                    # never recurse into it.
+                    pass
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            raise CaskError(
+                f"cask {token}: could not remove system pkg file {path}: {error}"
+            ) from error
 
     @staticmethod
     def _find(root: Path, name: str) -> Optional[Path]:
@@ -712,6 +1222,21 @@ class CaskInstaller:
             raise CaskError(f"refusing to delete path outside allowed roots: {path}")
         self._remove_path(path)
 
+    @staticmethod
+    def _read_receipt(room: Path) -> dict[str, Any]:
+        receipt = room / ".metadata" / "receipt.json"
+        if not receipt.is_file():
+            return {}
+        try:
+            data = json.loads(receipt.read_text())
+        except Exception:
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    @staticmethod
+    def _is_system_pkg_receipt(receipt: dict[str, Any]) -> bool:
+        return bool(receipt.get("system_pkg")) or "system_pkg_ids" in receipt
+
     def uninstall(
         self,
         token: str,
@@ -719,28 +1244,46 @@ class CaskInstaller:
         zap: bool = False,
         cask: Optional[Cask] = None,
     ) -> list[Path]:
+        rack = self.config.caskroom / token
+        rooms: list[tuple[Path, dict[str, Any]]] = []
+        if rack.is_dir():
+            versions = (
+                [version]
+                if version
+                else sorted(path.name for path in rack.iterdir() if path.is_dir())
+            )
+            for item in versions:
+                room = rack / item
+                if room.is_dir():
+                    rooms.append((room, self._read_receipt(room)))
+        # Plan system-wide pkg removal up front: root is required and every
+        # path is validated before *anything* is deleted (including cask
+        # uninstall actions).  A non-root caller therefore fails before any
+        # removal, as does an unsafe path.
+        plans: dict[Path, list[tuple[str, list[Path]]]] = {}
+        for room, receipt in rooms:
+            if not self._is_system_pkg_receipt(receipt):
+                continue
+            if os.geteuid() != 0:
+                raise CaskError(
+                    f"cask {token}: uninstalling a system pkg cask requires root; "
+                    "rerun with sudo"
+                )
+            plans[room] = self._plan_system_pkg_uninstall(token, receipt)
         if cask is not None:
             self._run_uninstall_actions(cask)
-        rack = self.config.caskroom / token
         if not rack.is_dir():
             raise CaskError(f"cask {token} is not installed")
-        versions = [version] if version else sorted(path.name for path in rack.iterdir() if path.is_dir())
         removed: list[Path] = []
-        for item in versions:
-            room = rack / item
-            if not room.is_dir():
-                continue
-            receipt = room / ".metadata" / "receipt.json"
-            installed: list[str] = []
-            if receipt.is_file():
-                try:
-                    installed = __import__("json").loads(receipt.read_text()).get("installed", [])
-                except Exception:
-                    installed = []
-            for path_str in installed:
-                path = Path(path_str)
-                if path.exists() or path.is_symlink():
-                    self._remove_path(path)
+        for room, receipt in rooms:
+            if room in plans:
+                self._execute_system_pkg_uninstall(token, plans[room])
+            installed = receipt.get("installed") or []
+            if isinstance(installed, list):
+                for path_str in installed:
+                    path = Path(str(path_str))
+                    if path.exists() or path.is_symlink():
+                        self._remove_path(path)
             self._remove_path(room)
             removed.append(room)
         try:
