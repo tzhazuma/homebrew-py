@@ -1935,6 +1935,63 @@ class PybrewResourceList < Array
   end
 end
 
+class PybrewSourceSpec
+  attr_reader :url, :sha256, :version, :spec
+
+  def initialize(info, spec)
+    @info = info || {}
+    @spec = spec
+    @url = @info["url"]
+    @sha256 = @info["sha256"]
+    @version = PybrewVersion.new((@info["version"] || "HEAD").to_s)
+  end
+
+  def spec
+    @spec
+  end
+
+  def mirrors
+    Array(@info["mirrors"])
+  end
+
+  def downloaded?
+    false
+  end
+
+  def to_s
+    @url.to_s
+  end
+end
+
+class PybrewBottleSpec
+  attr_reader :root_url, :files, :current_tag
+
+  def initialize(info)
+    @info = info || {}
+    @root_url = @info["root_url"]
+    @files = @info["files"] || {}
+    @current_tag = @info["current_tag"]
+  end
+
+  def tag
+    @current_tag
+  end
+
+  def sha256
+    entry = @files[@current_tag] || {}
+    entry["sha256"]
+  end
+
+  def cellar
+    entry = @files[@current_tag] || {}
+    entry["cellar"]
+  end
+
+  def bottle?
+    !@files.empty?
+  end
+end
+
 class PybrewFormulaRef
   attr_reader :name
 
@@ -2251,16 +2308,45 @@ class PybrewFormulaRef
     :stable
   end
 
+  def active_spec
+    spec
+  end
+
   def stable
-    @info["stable"] || {}
+    PybrewSourceSpec.new(@info["stable"] || {}, :stable)
   end
 
   def head
-    @info["head"] || {}
+    PybrewSourceSpec.new(@info["head"] || {}, :head)
   end
 
   def bottle
-    @info["bottle"]
+    raw = @info["bottle"]
+    raw.nil? ? nil : PybrewBottleSpec.new(raw)
+  end
+
+  def deprecated?
+    !!@info["deprecated"]
+  end
+
+  def disabled?
+    !!@info["disabled"]
+  end
+
+  def deprecation_reason
+    @info["deprecation_reason"]
+  end
+
+  def disable_reason
+    @info["disable_reason"]
+  end
+
+  def oldname
+    @info["oldname"]
+  end
+
+  def aliases
+    Array(@info["aliases"])
   end
 end
 
@@ -2909,9 +2995,35 @@ def _formula_reference_map(
         "path": str(formula.path) if formula.path is not None else None,
         "keg_only": bool(formula.keg_only),
         "keg_only_reason": formula.keg_only_reason,
-        "stable": {"url": formula.stable.url, "sha256": formula.stable.sha256},
-        "head": {"url": formula.head.url},
-        "bottle": None,
+        "stable": {
+            "url": formula.stable.url,
+            "sha256": formula.stable.sha256,
+            "version": formula.version or "HEAD",
+            "mirrors": list(formula.stable.mirrors),
+        },
+        "head": {
+            "url": formula.head.url,
+            "sha256": formula.head.sha256,
+            "version": "HEAD",
+            "mirrors": list(formula.head.mirrors),
+        },
+        "bottle": {
+            "root_url": formula.bottle.root_url,
+            "files": {
+                tag: {"sha256": item.sha256, "cellar": item.cellar}
+                for tag, item in formula.bottle.files.items()
+            },
+            "current_tag": (
+                formula.bottle_for_tag()[0]
+                if formula.bottle_for_tag() is not None
+                else None
+            ),
+        },
+        "deprecated": bool(formula.deprecated),
+        "disabled": bool(formula.disabled),
+        "deprecation_reason": formula.deprecation_reason,
+        "disable_reason": formula.disable_reason,
+        "aliases": [],
         "resources": {},
     }
     entries: dict[str, dict[str, Any]] = {formula.name: current}

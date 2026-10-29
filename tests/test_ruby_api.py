@@ -24,7 +24,7 @@ import pytest
 import pybrew.download as download_module
 from pybrew.download import Downloader
 from pybrew.errors import BuildError, UnsupportedInstall
-from pybrew.models import Dependency, Formula, SourceSpec, is_linux, is_macos
+from pybrew.models import BottleFile, Dependency, Formula, SourceSpec, is_linux, is_macos
 from pybrew.paths import Config
 from pybrew.source_builder import build_source
 
@@ -1475,3 +1475,47 @@ def test_formula_metadata_and_keg_only_api(
     assert lines[6] == "stable"
     assert lines[7] == ""
     assert lines[8] == "false"
+
+
+def test_formula_spec_bottle_and_status_api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-spec",
+        "1.2.3",
+        (
+            '  ref = Formula["ruby-spec"]\n'
+            '  (prefix/"spec").write [\n'
+            '    ref.stable.url, ref.stable.sha256, ref.stable.version.to_s,\n'
+            '    ref.head.url, ref.head.version.to_s,\n'
+            '    ref.bottle.tag, ref.bottle.sha256, ref.bottle.files.length,\n'
+            '    ref.deprecated?, ref.disabled?,\n'
+            '    ref.deprecation_reason.to_s, ref.disable_reason.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.stable = SourceSpec(url="https://example.com/stable.tar.gz", sha256="a" * 64)
+    formula.head = SourceSpec(url="https://example.com/head.tar.gz")
+    formula.bottle.root_url = "https://ghcr.io/v2/homebrew/core"
+    formula.bottle.files["sonoma"] = BottleFile(tag="sonoma", sha256="b" * 64)
+    formula.bottle.files["arm64_sonoma"] = BottleFile(tag="arm64_sonoma", sha256="c" * 64)
+    formula.deprecated = True
+    formula.disabled = True
+    formula.deprecation_reason = "use other"
+    formula.disable_reason = "broken"
+
+    keg = _build(tmp_path, formula)
+    lines = (keg / "spec").read_text().splitlines()
+    assert lines[0] == "https://example.com/stable.tar.gz"
+    assert lines[1] == "a" * 64
+    assert lines[2] == "1.2.3"
+    assert lines[3] == "https://example.com/head.tar.gz"
+    assert lines[4] == "HEAD"
+    assert lines[5] in {"sonoma", "arm64_sonoma"}
+    assert lines[6] in {"b" * 64, "c" * 64}
+    assert lines[7] == "2"
+    assert lines[8] == "true"
+    assert lines[9] == "true"
+    assert lines[10] == "use other"
+    assert lines[11] == "broken"

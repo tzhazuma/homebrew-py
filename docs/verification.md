@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-427 passed, 5 skipped in 81.17s
+428 passed, 5 skipped in 69.02s
 ```
 
 Breakdown of the feature slices:
@@ -511,7 +511,7 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `41a9c6f` (`--ruby-cask`, expected-status `shell_output`)
+- Latest feature commit: `SPEC_COMMIT` (Formula spec/bottle/status API)
 - CI run for `41a9c6f`:
   <https://github.com/tzhazuma/homebrew-py/actions/runs/40937721603>
   - `test (ubuntu-latest, py3.9)` — success
