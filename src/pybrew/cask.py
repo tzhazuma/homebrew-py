@@ -407,6 +407,16 @@ class CaskParser:
 
     def _parse_value(self) -> Any:
         token = self.peek()
+        if token.kind == "punct" and token.value == ":":
+            self.advance()
+            first = self.advance()
+            text = str(first.value)
+            last = first
+            while self.peek().kind in ("id", "num", "const") and self.peek().start == last.end:
+                part = self.advance()
+                text += str(part.value)
+                last = part
+            return ":" + text
         if token.kind == "str":
             self.advance()
             return str(token.value)

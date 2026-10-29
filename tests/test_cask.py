@@ -513,3 +513,53 @@ end
     image = tmp_path / "Applications" / "Appy.AppImage"
     assert image.is_file()
     assert image.stat().st_mode & 0o111
+
+
+def test_install_7z_container_with_fake_extractor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    archive = tmp_path / "Seven.zip"
+    archive.write_bytes(b"fake-7z-archive")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    extractor = tmp_path / "fake-7z"
+    extractor.write_text(
+        """#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in
+    -o*) dest="${arg#-o}" ;;
+  esac
+done
+mkdir -p "$dest/Tool.app/Contents"
+printf 'seven' > "$dest/Tool.app/Contents/Info.plist"
+""",
+        encoding="utf-8",
+    )
+    extractor.chmod(0o755)
+    monkeypatch.setenv("PYBREW_7Z", str(extractor))
+
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "s" / "seven.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        f'''cask "seven" do
+  version "1.0"
+  sha256 "{digest}"
+  url "{archive.as_uri()}"
+  container type: :7z
+  app "Tool.app"
+end
+'''
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    installer.install(CaskLoader(discover_taps([tap])).load("seven"))
+
+    assert (tmp_path / "Applications" / "Tool.app" / "Contents" / "Info.plist").is_file()

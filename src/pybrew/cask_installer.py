@@ -436,6 +436,40 @@ class CaskInstallResult:
     skipped: bool = False
 
 
+def _extract_7z(archive: Path, destination: Path) -> None:
+    executable = os.environ.get("PYBREW_7Z") or shutil.which("7z") or shutil.which("7za")
+    if executable is None:
+        raise CaskError("7z casks require the 7z/7za executable (set PYBREW_7Z)")
+    destination.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        [executable, "x", "-y", f"-o{destination}", str(archive)],
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise CaskError(
+            f"could not extract 7z archive {archive}: "
+            f"{(result.stderr or result.stdout).strip()}"
+        )
+
+
+def _extract_rar(archive: Path, destination: Path) -> None:
+    executable = os.environ.get("PYBREW_UNRAR") or shutil.which("unrar")
+    if executable is None:
+        raise CaskError("rar casks require unrar (set PYBREW_UNRAR)")
+    destination.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(
+        [executable, "x", "-o+", str(archive), str(destination)],
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        raise CaskError(
+            f"could not extract rar archive {archive}: "
+            f"{(result.stderr or result.stdout).strip()}"
+        )
+
+
 def _safe_extract_zip(archive: Path, destination: Path) -> None:
     destination.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(archive) as bundle:
@@ -665,6 +699,10 @@ class CaskInstaller:
             hint = f"{cask.token}-{version}.{Path(url.split('?', 1)[0]).suffix or 'download'}"
             archive = self.downloader.fetch(url, digest, hint=hint)
             kind = _archive_kind(archive)
+            if cask.container in ("nupkg", "zip"):
+                kind = "zip"
+            elif cask.container in ("7z", "rar"):
+                kind = cask.container
         else:
             url = None
             digest = None
@@ -692,6 +730,16 @@ class CaskInstaller:
                     )
                 elif kind == "tar":
                     safe_extract_tar(archive, temp_root)
+                    installed = self._install_artifacts_with_scripts(
+                        cask, temp_root, room, version, force, cwd=temp_root
+                    )
+                elif kind == "7z":
+                    _extract_7z(archive, temp_root)
+                    installed = self._install_artifacts_with_scripts(
+                        cask, temp_root, room, version, force, cwd=temp_root
+                    )
+                elif kind == "rar":
+                    _extract_rar(archive, temp_root)
                     installed = self._install_artifacts_with_scripts(
                         cask, temp_root, room, version, force, cwd=temp_root
                     )

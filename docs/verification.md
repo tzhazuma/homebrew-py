@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-493 passed, 5 skipped in 72.16s
+494 passed, 5 skipped in 70.42s
 ```
 
 Breakdown of the feature slices:
@@ -33,7 +33,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_ruby.py
-59 passed      # cask base + Ruby evaluator + completion/manpage/rename/container/appimage
+60 passed      # cask base + Ruby evaluator + completion/manpage/rename/container/appimage/7z
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
@@ -488,6 +488,14 @@ local remote, commits a change, and confirms the CLI updates it.
 - Copies the image, preserves contents and adds executable bits; supports
   `target` and `force` overwrite.
 - Literal parser and arbitrary-Ruby evaluator both support it.
+
+## Cask 7z/rar extraction
+
+- `container type: :7z` uses `7z`/`7za` (or `PYBREW_7Z`) to extract.
+- `container type: :rar` uses `unrar` (or `PYBREW_UNRAR`).
+- Missing external tool or failed extraction raises a clear `CaskError`.
+- Fixed cask symbol parsing for `:7z`-style symbols whose first character is a
+  digit.
 
 ## Final parallel batch
 
