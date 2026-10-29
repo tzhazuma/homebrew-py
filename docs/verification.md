@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-518 passed, 5 skipped in 73.73s
+518 passed, 5 skipped in 78.02s
 ```
 
 Breakdown of the feature slices:
@@ -637,10 +637,12 @@ local remote, commits a change, and confirms the CLI updates it.
 
 - Added `Formula#python3` returning the discovered `python3` Pathname or nil.
 
-## Service nice directive
+## Service extended fields
 
-- Added `nice` to the literal and arbitrary-Ruby service DSLs.
-- Rendered as launchd `Nice` and systemd `Nice=`.
+- Added `nice`, `restart_delay`, `stop_timeout`, `root_dir` and `input_path`
+  to the literal and arbitrary-Ruby service DSLs.
+- Rendered to launchd `Nice`/`ThrottleInterval`/`ExitTimeOut`/
+  `WorkingDirectory`/`StandardInPath` and the corresponding systemd keys.
 
 ## Final parallel batch
 

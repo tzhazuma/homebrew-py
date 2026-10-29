@@ -92,6 +92,10 @@ _SERVICE_FIELDS = (
     "launch_only_once",
     "macos_legacy_timers",
     "nice",
+    "restart_delay",
+    "stop_timeout",
+    "root_dir",
+    "input_path",
     "sockets",
 )
 
@@ -478,6 +482,7 @@ class PybrewServiceDSL
   SCALAR_FIELDS = %w[
     working_dir log_path error_log_path interval process_type run_at_load
     require_root throttle_interval launch_only_once macos_legacy_timers nice
+    restart_delay stop_timeout root_dir input_path
   ].freeze
 
   def initialize
@@ -499,6 +504,10 @@ class PybrewServiceDSL
       "launch_only_once" => false,
       "macos_legacy_timers" => false,
       "nice" => nil,
+      "restart_delay" => nil,
+      "stop_timeout" => nil,
+      "root_dir" => nil,
+      "input_path" => nil,
       "sockets" => {},
       "warnings" => []
     }

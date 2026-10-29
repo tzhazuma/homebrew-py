@@ -65,6 +65,10 @@ class ServiceSpec:
     launch_only_once: bool = False
     macos_legacy_timers: bool = False
     nice: Optional[int] = None
+    restart_delay: Optional[int] = None
+    stop_timeout: Optional[int] = None
+    root_dir: Optional[str] = None
+    input_path: Optional[str] = None
     sockets: dict[str, dict[str, str]] = field(default_factory=dict)
 
 
@@ -441,6 +445,14 @@ def _apply_service_directive(spec: ServiceSpec, name: str, args: list[Any]) -> N
         spec.macos_legacy_timers = _service_bool(args[0], "macos_legacy_timers")
     elif name == "nice" and args:
         spec.nice = _service_int(args[0], "nice")
+    elif name == "restart_delay" and args:
+        spec.restart_delay = _service_int(args[0], "restart_delay", minimum=0)
+    elif name == "stop_timeout" and args:
+        spec.stop_timeout = _service_int(args[0], "stop_timeout", minimum=0)
+    elif name == "root_dir" and args:
+        spec.root_dir = str(args[0])
+    elif name == "input_path" and args:
+        spec.input_path = str(args[0])
     elif name == "sockets":
         spec.sockets = _parse_sockets(args)
     # Unknown directives (nice, run_type, cron, ...) are intentionally ignored
@@ -639,15 +651,21 @@ class ServiceManager:
             f"ExecStart={shlex.join(spec.run)}",
             f"Restart={_systemd_restart(spec)}",
         ]
-        throttle = _throttle_interval(spec)
-        if throttle is not None:
-            lines.append(f"RestartSec={throttle}")
+        restart_delay = spec.restart_delay if spec.restart_delay is not None else _throttle_interval(spec)
+        if restart_delay is not None:
+            lines.append(f"RestartSec={restart_delay}")
+        if spec.stop_timeout is not None:
+            lines.append(f"TimeoutStopSec={spec.stop_timeout}")
+        if spec.root_dir:
+            lines.append(f"RootDirectory={spec.root_dir}")
+        if spec.input_path:
+            lines.append(f"StandardInput=file:{spec.input_path}")
         lines += [
             f"StandardOutput=append:{stdout_path}",
             f"StandardError=append:{stderr_path}",
         ]
-        if spec.working_dir:
-            lines.append(f"WorkingDirectory={spec.working_dir}")
+        if spec.working_dir or spec.root_dir:
+            lines.append(f"WorkingDirectory={spec.working_dir or spec.root_dir}")
         if spec.nice is not None:
             lines.append(f"Nice={spec.nice}")
         for key, value in spec.environment_variables.items():
@@ -677,8 +695,12 @@ class ServiceManager:
             "StandardOutPath": stdout_path,
             "StandardErrorPath": stderr_path,
         }
-        if spec.working_dir:
-            payload["WorkingDirectory"] = spec.working_dir
+        if spec.working_dir or spec.root_dir:
+            payload["WorkingDirectory"] = spec.working_dir or spec.root_dir
+        if spec.input_path:
+            payload["StandardInPath"] = spec.input_path
+        if spec.stop_timeout is not None:
+            payload["ExitTimeOut"] = spec.stop_timeout
         if spec.nice is not None:
             payload["Nice"] = spec.nice
         keep_alive = _launchd_keep_alive(spec)
@@ -686,7 +708,7 @@ class ServiceManager:
             payload["KeepAlive"] = keep_alive
         if spec.interval is not None:
             payload["StartInterval"] = spec.interval
-        throttle = _throttle_interval(spec)
+        throttle = spec.restart_delay if spec.restart_delay is not None else _throttle_interval(spec)
         if throttle is not None:
             payload["ThrottleInterval"] = throttle
         if spec.process_type:
