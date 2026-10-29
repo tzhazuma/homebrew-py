@@ -729,9 +729,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `b66f95f` (FormulaRef identity methods)
-- CI run for `b66f95f`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40965546327>
+- Latest feature commit: `d4fdac4` (cask deprecation reason)
+- CI run for `d4fdac4`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40966210520>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
