@@ -815,9 +815,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `f3a17b6` (Formula compatibility metadata batch)
-- CI run for `f3a17b6`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40975613185>
+- Latest feature commit: `57bc111` (cask evaluator os mapping fix)
+- CI run for `57bc111`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40976442300>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
