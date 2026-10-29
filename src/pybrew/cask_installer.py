@@ -1879,6 +1879,24 @@ class CaskInstaller:
                         )
                 except (OSError, subprocess.TimeoutExpired):
                     pass
+        login_item_value = cask.uninstall.get("login_item")
+        if login_item_value and sys.platform == "darwin":
+            items = login_item_value if isinstance(login_item_value, list) else [login_item_value]
+            executable = os.environ.get("PYBREW_OSASCRIPT", "/usr/bin/osascript")
+            for item in items:
+                try:
+                    subprocess.run(
+                        [
+                            executable,
+                            "-e",
+                            f'tell application "System Events" to delete login item "{item}"',
+                        ],
+                        text=True,
+                        capture_output=True,
+                        timeout=30,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
         signal_value = cask.uninstall.get("signal")
         if signal_value:
             values = signal_value if isinstance(signal_value, list) else [signal_value]

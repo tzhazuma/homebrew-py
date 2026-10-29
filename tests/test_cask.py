@@ -609,3 +609,42 @@ end
     assert "launchctl bootout gui/" in actions
     assert "com.example.helper" in actions
     assert "pkill -TERM -f Uninstally" in actions
+
+
+def test_uninstall_login_item_action(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "l" / "loginly.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        '''cask "loginly" do
+  version "1.0"
+  stage_only true
+  uninstall login_item: "Loginly"
+end
+'''
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    cask = CaskLoader(discover_taps([tap])).load("loginly")
+    installer.install(cask)
+
+    log = tmp_path / "osascript.log"
+    osascript = tmp_path / "fake-osascript"
+    osascript.write_text('#!/bin/sh\necho "$*" >> "$OSA_LOG"\n', encoding="utf-8")
+    osascript.chmod(0o755)
+    monkeypatch.setenv("PYBREW_OSASCRIPT", str(osascript))
+    monkeypatch.setenv("OSA_LOG", str(log))
+    monkeypatch.setattr("pybrew.cask_installer.sys.platform", "darwin")
+
+    installer.uninstall("loginly", cask=cask)
+
+    assert 'delete login item "Loginly"' in log.read_text()
