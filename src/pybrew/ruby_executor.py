@@ -2122,6 +2122,16 @@ class PybrewSourceSpec
   end
 end
 
+class PybrewBottleFile
+  attr_reader :tag, :sha256, :cellar
+
+  def initialize(tag, info)
+    @tag = tag.to_s
+    @sha256 = (info || {})["sha256"]
+    @cellar = (info || {})["cellar"]
+  end
+end
+
 class PybrewBottleSpec
   attr_reader :root_url, :files, :current_tag
 
@@ -2148,6 +2158,35 @@ class PybrewBottleSpec
 
   def bottle?
     !@files.empty?
+  end
+
+  def bottle_tags
+    @files.keys
+  end
+
+  def bottle_for_tag(tag)
+    key = tag.to_s
+    info = @files[key]
+    info.nil? ? nil : PybrewBottleFile.new(key, info)
+  end
+
+  def bottle_url(tag)
+    key = tag.to_s
+    info = @files[key]
+    return nil if info.nil?
+
+    root = (@root_url || "https://ghcr.io/v2/homebrew/core").to_s.sub(%r{/+\z}, "")
+    if root.include?("ghcr.io")
+      "#{root}/#{name_for_url}/blobs/sha256:#{info["sha256"]}"
+    else
+      "#{root}/#{name_for_url}-#{tag}.bottle.tar.gz"
+    end
+  end
+
+  private
+
+  def name_for_url
+    @name_for_url ||= (@info["name"] || "formula").to_s
   end
 end
 
@@ -3324,6 +3363,7 @@ def _formula_reference_map(
             "mirrors": list(formula.head.mirrors),
         },
         "bottle": {
+            "name": formula.name,
             "root_url": formula.bottle.root_url,
             "files": {
                 tag: {"sha256": item.sha256, "cellar": item.cellar}

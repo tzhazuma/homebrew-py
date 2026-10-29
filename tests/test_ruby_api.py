@@ -1785,3 +1785,29 @@ def test_formula_stable_head_and_option_helpers(
     lines = (keg / "state").read_text().splitlines()
     assert lines[:6] == ["true", "true", "false", "true", "true", "ruby-state"]
     assert lines[6] == "ruby-state"
+
+
+def test_formula_bottle_tags_api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-bottle-tags",
+        "1.0",
+        (
+            '  ref = Formula["ruby-bottle-tags"]\n'
+            '  (prefix/"bottles").write [\n'
+            '    ref.bottle.bottle_tags.join(","),\n'
+            '    ref.bottle.bottle_for_tag("sonoma").sha256,\n'
+            '    ref.bottle.bottle_url("sonoma")\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.bottle.root_url = "https://ghcr.io/v2/homebrew/core"
+    formula.bottle.files["sonoma"] = BottleFile(tag="sonoma", sha256="a" * 64)
+
+    keg = _build(tmp_path, formula)
+    lines = (keg / "bottles").read_text().splitlines()
+    assert lines[0] == "sonoma"
+    assert lines[1] == "a" * 64
+    assert lines[2].endswith("/ruby-bottle-tags/blobs/sha256:" + "a" * 64)
