@@ -797,9 +797,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `e145652` (cask livecheck source)
-- CI run for `e145652`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40973706641>
+- Latest feature commit: `913dd16` (cask no_autobump metadata)
+- CI run for `913dd16`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40974359761>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
