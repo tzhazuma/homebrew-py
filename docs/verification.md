@@ -384,9 +384,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `5523bf4` (opt-in system pkg + Brewfile restart_service)
-- CI run for `5523bf4`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40817611123>
+- Latest feature commit: `56d3a8d` (cask scripts/system pkg uninstall, analytics, Ruby bridge, Linux verification)
+- CI run for `56d3a8d`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40824033241>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
