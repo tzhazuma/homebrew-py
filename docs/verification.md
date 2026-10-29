@@ -714,9 +714,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `473c918` (enforce cask arch dependency)
-- CI run for `473c918`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40963501212>
+- Latest feature commit: `f0ed0fc` (enforce cask named dependencies and conflicts)
+- CI run for `f0ed0fc`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40964200815>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
