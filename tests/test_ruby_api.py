@@ -1893,3 +1893,29 @@ def test_formula_path_and_cleanup_helpers(
     assert lines[6] == str(keg / ".bottle")
     assert lines[7:11] == ["true", "false", "old-ruby-paths", "ruby-paths,old-ruby-paths"]
     assert lines[11] == "true"
+
+
+def test_formula_std_build_args_and_python3(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-std-args",
+        "1.0",
+        (
+                        '  (prefix/"stdargs").write [\n'
+            '    std_npm_args.join(","),\n'
+            '    std_npm_args(ignore_scripts: false).join(","),\n'
+            '    std_shards_args.join(","),\n'
+            '    std_cabal_v2_args.join(","),\n'
+            '    python3.nil?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    lines = (keg / "stdargs").read_text().splitlines()
+    assert lines[0] == f"--prefix={keg}/libexec,--ignore-scripts"
+    assert lines[1] == f"--prefix={keg}/libexec"
+    assert lines[2] == "--production,--verbose,--no-color"
+    assert lines[3] == f"--installdir={keg}/bin,--overwrite-policy=always"
+    assert lines[4] in ("true", "false")

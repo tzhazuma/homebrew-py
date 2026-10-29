@@ -3228,6 +3228,25 @@ class PybrewInstallContext
     ["--prefix", prefix.to_s]
   end
 
+  def std_npm_args(prefix: libexec, ignore_scripts: true)
+    args = ["--prefix=#{prefix}"]
+    args << "--ignore-scripts" if ignore_scripts
+    args
+  end
+
+  def std_shards_args
+    ["--production", "--verbose", "--no-color"]
+  end
+
+  def std_cabal_v2_args(installdir: bin)
+    ["--installdir=#{installdir}", "--overwrite-policy=always"]
+  end
+
+  def python3
+    found = Utils.which("python3")
+    found.nil? ? nil : Pathname.new(found)
+  end
+
   def std_service_path_env
     File.join(ENV.fetch("HOMEBREW_PREFIX", prefix.to_s), "bin")
   end
