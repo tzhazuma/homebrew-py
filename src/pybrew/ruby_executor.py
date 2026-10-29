@@ -2550,6 +2550,10 @@ class PybrewFormulaRef
     Array(@info["conflicts_with"])
   end
 
+  def conflicts_with
+    conflicts
+  end
+
   def link_overwrite
     Array(@info["link_overwrite"])
   end
@@ -3088,6 +3092,134 @@ class PybrewFormulaRef
 
   def deprecated_options
     @info["deprecated_options"] || {}
+  end
+
+  def deprecated_option(name)
+    deprecated_options[name.to_s]
+  end
+
+  def version_scheme
+    @info["version_scheme"].to_i
+  end
+
+  def preserve_rpath
+    !!@info["preserve_rpath"]
+  end
+
+  def tap?
+    !tap.to_s.empty?
+  end
+
+  def core_formula?
+    tap.to_s == "homebrew/core"
+  end
+
+  def loaded_from_api?
+    false
+  end
+
+  def loaded_from_internal_api?
+    false
+  end
+
+  def supports_macos?
+    true
+  end
+
+  def supports_linux?
+    true
+  end
+
+  def valid_platform?
+    true
+  end
+
+  def network_access_allowed?
+    !@info["deny_network_access"]
+  end
+
+  def autobump?
+    true
+  end
+
+  def test_defined?
+    test?
+  end
+
+  def livecheck_defined?
+    livecheck?
+  end
+
+  def missing_dependencies
+    []
+  end
+
+  def missing_library_linkage
+    []
+  end
+
+  def eligible_kegs_for_cleanup
+    []
+  end
+
+  def any_installed_keg
+    latest_installed_keg
+  end
+
+  def any_installed_version
+    installed_version
+  end
+
+  def latest_installed_prefix
+    installed_prefix
+  end
+
+  def versioned_prefix
+    prefix
+  end
+
+  def build_flags
+    []
+  end
+
+  def declared_runtime_dependencies
+    runtime_dependencies
+  end
+
+  def runtime_formula_dependencies
+    runtime_dependencies
+  end
+
+  def recursive_requirements
+    []
+  end
+
+  def serialized_requirements
+    []
+  end
+
+  def serialized_patches
+    []
+  end
+
+  def dependencies_hash
+    {}
+  end
+
+  def urls_hash
+    {}
+  end
+
+  def bottle_hash
+    {}
+  end
+
+  def to_hash
+    {}
+  end
+
+  def freeze
+    self
   end
 
   def fails_with
@@ -3845,6 +3977,8 @@ def _formula_reference_map(
         "full_name": formula.full_name,
         "version": formula.version or "HEAD",
         "revision": int(formula.revision or 0),
+        "version_scheme": int(formula.version_scheme or 0),
+        "deny_network_access": bool(formula.deny_network_access),
         "pkg_version": formula.pkg_version,
         "prefix": str(keg),
         "opt_prefix": str(config.opt_path(formula.name)),
@@ -4223,6 +4357,8 @@ def execute_install_body(
             "version": version,
             "full_name": formula.full_name,
             "revision": int(formula.revision or 0),
+        "version_scheme": int(formula.version_scheme or 0),
+        "deny_network_access": bool(formula.deny_network_access),
             "pkg_version": formula.pkg_version,
         },
         "paths": _install_paths(formula, config, keg, build_root),

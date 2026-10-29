@@ -2175,3 +2175,39 @@ def test_formula_service_ref_extended_fields(
         "/tmp",
         "/tmp/in",
     ]
+
+
+def test_formula_compatibility_batch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-compat",
+        "1.0",
+        (
+            '  ref = Formula["ruby-compat"]\n'
+            '  (prefix/"compat").write [\n'
+            '    ref.version_scheme.to_s,\n'
+            '    ref.preserve_rpath.to_s,\n'
+            '    ref.loaded_from_api?.to_s,\n'
+            '    ref.network_access_allowed?.to_s,\n'
+            '    ref.autobump?.to_s,\n'
+            '    ref.test_defined?.to_s,\n'
+            '    ref.missing_dependencies.length.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.version_scheme = 2
+    formula.preserve_rpath = True
+    formula.deny_network_access = True
+    formula.test_source = "test do\nend\n"
+    keg = _build(tmp_path, formula)
+    assert (keg / "compat").read_text().splitlines() == [
+        "2",
+        "true",
+        "false",
+        "false",
+        "true",
+        "true",
+        "0",
+    ]

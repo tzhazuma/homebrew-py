@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-526 passed, 5 skipped in 73.79s
+527 passed, 5 skipped in 75.59s
 ```
 
 Breakdown of the feature slices:
@@ -37,7 +37,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
-99 passed      # declarative + opt-in Ruby bridge/API + service timers
+100 passed     # declarative + opt-in Ruby bridge/API + compatibility batch
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_patches.py tests/test_post_install.py
 47 passed      # patch url/file/:DATA application + post_install
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py tests/test_service_ruby.py
@@ -685,6 +685,14 @@ local remote, commits a change, and confirms the CLI updates it.
 
 - Added `Cask.os` and literal support for `os macos:`/`os linux:`.
 - The installer rejects a cask whose declared OS does not match the host.
+
+## Formula compatibility batch
+
+- Added `conflicts_with`, `deprecated_option`, `version_scheme`,
+  `preserve_rpath`, `tap?`, `core_formula?`, `loaded_from_api?`,
+  `supports_macos?`, `supports_linux?`, `valid_platform?`,
+  `network_access_allowed?`, `autobump?`, `test_defined?`,
+  `livecheck_defined?`, dependency/linkage/cleanup helpers and metadata hashes.
 
 ## Final parallel batch
 
