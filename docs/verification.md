@@ -802,9 +802,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `913dd16` (cask no_autobump metadata)
-- CI run for `913dd16`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40974359761>
+- Latest feature commit: `ee6bae6` (cask os stanza enforcement)
+- CI run for `ee6bae6`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40975004494>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
