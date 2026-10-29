@@ -3261,6 +3261,22 @@ class PybrewInstallContext
     args
   end
 
+  def std_zig_args(prefix: self.prefix, release_mode: :fast, cpu: nil)
+    mode = release_mode.to_s.downcase
+    unless %w[safe fast small].include?(mode)
+      raise ArgumentError, "Invalid Zig release mode: #{release_mode}"
+    end
+
+    cpu ||= Hardware::CPU.arch.to_s
+    [
+      "--prefix", prefix.to_s,
+      "--release=#{mode}",
+      "-Doptimize=Release#{mode.capitalize}",
+      "--summary", "all",
+      "-Dcpu=#{cpu}",
+    ]
+  end
+
   def python3
     found = Utils.which("python3")
     found.nil? ? nil : Pathname.new(found)

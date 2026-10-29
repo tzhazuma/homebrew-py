@@ -1945,3 +1945,27 @@ def test_std_build_args_keywords(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert "-ldflags=-s" in lines[2]
     assert "--no-build-isolation" not in lines[3]
     assert "--features=a,b" in lines[4]
+
+
+def test_std_zig_args(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-zig",
+        "1.0",
+        (
+            '  (prefix/"zig").write [\n'
+            '    std_zig_args(release_mode: :small).join(","),\n'
+            '    (begin\n'
+            '      std_zig_args(release_mode: :bad)\n'
+            '      "no-error"\n'
+            '    rescue ArgumentError => error\n'
+            '      error.message\n'
+            '    end)\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    lines = (keg / "zig").read_text().splitlines()
+    assert "--release=small" in lines[0]
+    assert "-Doptimize=ReleaseSmall" in lines[0]
+    assert "Invalid Zig release mode" in lines[1]
