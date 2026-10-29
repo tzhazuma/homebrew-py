@@ -2588,6 +2588,41 @@ class PybrewFormulaRef
     Array(@info["options"]).map(&:to_s)
   end
 
+  def option?(name)
+    options.include?(name.to_s)
+  end
+
+  def stable?
+    value = @info["stable"]
+    value.is_a?(Hash) && !value["url"].to_s.empty?
+  end
+
+  def head?
+    value = @info["head"]
+    value.is_a?(Hash) && !value["url"].to_s.empty?
+  end
+
+  def head_only?
+    head? && !stable?
+  end
+
+  def bottle?
+    value = @info["bottle"]
+    value.is_a?(Hash) && !(value["files"] || {}).empty?
+  end
+
+  def specified_name
+    name
+  end
+
+  def full_specified_name
+    full_name
+  end
+
+  def specified_path
+    path
+  end
+
   def deprecated_options
     @info["deprecated_options"] || {}
   end

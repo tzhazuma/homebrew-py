@@ -1758,3 +1758,30 @@ def test_formula_option_metadata_api(
     assert lines[1] == "with-old=>with-extra"
     assert lines[2] == "true"
     assert lines[3] == "bin"
+
+
+def test_formula_stable_head_and_option_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-state",
+        "1.0",
+        (
+            '  ref = Formula["ruby-state"]\n'
+            '  (prefix/"state").write [\n'
+            '    ref.stable?.to_s, ref.head?.to_s, ref.head_only?.to_s,\n'
+            '    ref.bottle?.to_s, ref.option?("with-extra").to_s,\n'
+            '    ref.specified_name, ref.full_specified_name\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.stable = SourceSpec(url="https://example.com/stable.tar.gz")
+    formula.head = SourceSpec(url="https://example.com/head.tar.gz")
+    formula.bottle.files["sonoma"] = BottleFile(tag="sonoma", sha256="a" * 64)
+    formula.options = ["with-extra"]
+
+    keg = _build(tmp_path, formula)
+    lines = (keg / "state").read_text().splitlines()
+    assert lines[:6] == ["true", "true", "false", "true", "true", "ruby-state"]
+    assert lines[6] == "ruby-state"

@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-496 passed, 5 skipped in 85.59s
+497 passed, 5 skipped in 82.03s
 ```
 
 Breakdown of the feature slices:
@@ -37,7 +37,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
-79 passed      # declarative + opt-in Ruby bridge/API + options/requirements
+80 passed      # declarative + opt-in Ruby bridge/API + state helpers
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_patches.py tests/test_post_install.py
 47 passed      # patch url/file/:DATA application + post_install
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py tests/test_service_ruby.py
@@ -505,6 +505,11 @@ local remote, commits a change, and confirms the CLI updates it.
   and `skip_clean`.
 - `Formula["name"]` exposes `options`, `deprecated_options`, `fails_with`,
   `preserve_rpath?`, `skip_clean`.
+
+## Formula state helpers
+
+- Added `Formula#stable?`, `#head?`, `#head_only?`, `#bottle?`, `#option?`,
+  `#specified_name`, `#full_specified_name`, `#specified_path`.
 
 ## Final parallel batch
 
