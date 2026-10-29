@@ -108,6 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--cask", action="store_true", help="install a cask instead of a formula")
     install.add_argument("--appdir", type=Path, help="cask application directory")
     install.add_argument("--pkg-root", type=Path, help="root for cask pkg payloads")
+    install.add_argument("--library-root", type=Path, help="root for cask Library artifacts")
     install.add_argument("--no-link", action="store_true", help="do not create symlinks")
     install.add_argument("--HEAD", dest="head", action="store_true", help="build the head revision")
 
@@ -169,6 +170,7 @@ def build_parser() -> argparse.ArgumentParser:
         action_parser.add_argument("--json", action="store_true")
         action_parser.add_argument("--appdir", type=Path)
         action_parser.add_argument("--pkg-root", type=Path)
+        action_parser.add_argument("--library-root", type=Path)
         action_parser.add_argument("--api", action="store_true", help="fall back to formulae.brew.sh")
 
     outdated = subparsers.add_parser("outdated", parents=[common], help="list outdated formulae or casks")
@@ -581,6 +583,7 @@ def cmd_install(args: argparse.Namespace) -> int:
             config,
             appdir=getattr(args, "appdir", None),
             pkg_root=getattr(args, "pkg_root", None),
+            library_root=getattr(args, "library_root", None),
         )
         exit_code = 0
         for token in args.formulae:
@@ -972,7 +975,10 @@ def cmd_cask(args: argparse.Namespace) -> int:
         args.zap = False
     appdir = getattr(args, "appdir", None)
     pkg_root = getattr(args, "pkg_root", None)
-    installer = CaskInstaller(config, appdir=appdir, pkg_root=pkg_root)
+    library_root = getattr(args, "library_root", None)
+    installer = CaskInstaller(
+        config, appdir=appdir, pkg_root=pkg_root, library_root=library_root
+    )
     if args.action == "list":
         rows = installer.list_installed()
         if args.json:

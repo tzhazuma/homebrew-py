@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-104 passed in 25.70s
+128 passed in 33.72s
 ```
 
 Breakdown of the feature slices:
@@ -32,10 +32,10 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 17 passed      # 15 parametrized real formulae + 2 aggregate checks
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
-$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py
-17 passed      # real dmg/pkg payload, install --cask, API, outdated/upgrade, uninstall actions
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_depth.py
+27 passed      # 17 base + 10 depth: Library artifacts, stage_only, upgrade cleanup
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py
-8 passed       # autotools, CMake, Cargo, meson(fake), inreplace, conditionals, resources, HEAD
+12 passed      # autotools, CMake, Cargo, meson, on_arm/on_intel, predicates, resources, HEAD
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
 8 passed       # launchd + systemd unit generation, orphan cleanup
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_taps.py
@@ -43,9 +43,11 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_taps.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_maintenance.py
 9 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bundle.py
-5 passed
+12 passed      # install/check/list/dump, tap URL, args, mas/vscode
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cli.py
-8 passed
+13 passed
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_relocation.py
+5 passed       # Mach-O padding + ELF patchelf RPATH
 ```
 
 ## Real formula parity
@@ -265,6 +267,23 @@ editor.
 `update` updates every installed tap via `git pull --ff-only`; the test taps a
 local remote, commits a change, and confirms the CLI updates it.
 
+## Parallel feature batch
+
+- 13 Cask Library artifact kinds (`font`, `colorpicker`, `prefpane`, `qlplugin`,
+  `mdimporter`, `screen_saver`, `service`, `audio_unit_plugin`, `vst_plugin`,
+  `vst3_plugin`, `dictionary`, `input_method`, `keyboard_layout`) install under
+  `--library-root` (default `<prefix>/Library`), with target safety checks,
+  receipt tracking and uninstall support.
+- `stage_only` casks install a receipt without artifacts; upgrade diffs old and
+  new receipts and removes dropped artifacts while preserving shared paths.
+- Source DSL supports `on_arm`/`on_intel`, `Hardware::CPU` predicates,
+  `build.with?`/`without?`, `args.include?`, and `ENV[...]` reads.
+- Brewfile supports `brew ..., args: ["--HEAD", "--build-from-source"]`,
+  `mas ... id:` and `vscode ...` via fake/injectable executables.
+- ELF bottles can use `patchelf` to rewrite placeholder RPATHs when the target
+  path is longer than the placeholder; without patchelf the safe skip path is
+  preserved.
+
 ## Cask reinstall
 
 `cask reinstall testapp` and `reinstall --cask testapp` remove and reinstall the
@@ -303,7 +322,9 @@ install, `doctor`, `list`, `deps`, `search`, `config`, and `parse`.
   test intentionally uses a cached artefact. Live download is recorded manually
   above.
 - Cask package scripts and system-wide `.pkg` installation.
-- `brew lgtm`, advanced Brewfile options, analytics.
+- `brew lgtm`, remaining advanced Brewfile options, analytics.
+- Real Linux/patchelf execution is exercised with a fake tool; no real Linux
+  bottle is installed in CI.
 
 These are tracked in the README roadmap and `docs/parity.md`.
 

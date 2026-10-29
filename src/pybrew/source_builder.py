@@ -12,7 +12,10 @@ declarative/build statements used by source formulae:
 * ``bin.install`` / ``prefix.install`` / ``lib.install`` ... and
   ``bin.install_symlink``;
 * ``cd ... do ... end``, ``mkdir``, ``mv``, ``cp``, ``rm_rf``, ``chmod``;
-* simple ``if OS.mac?`` / ``on_macos do`` conditionals.
+* ``on_macos`` / ``on_linux`` / ``on_arm`` / ``on_intel`` blocks and simple
+  ``if`` conditions over ``OS``, ``Hardware::CPU``, ``build`` and literal
+  ``args.include?``-style predicates;
+* ``ENV["NAME"]`` reads in expression arguments and conditions.
 
 Anything else raises :class:`UnsupportedInstall` with a line number instead of
 silently producing an incomplete keg.
@@ -87,6 +90,11 @@ class MethodExpr(Expr):
     receiver: str
     method: str
     args: list[Expr] = field(default_factory=list)
+
+
+@dataclass
+class EnvRead(Expr):
+    name: str
 
 
 @dataclass
@@ -215,6 +223,43 @@ _HELPERS = {
 }
 
 _BLOCK_OPENERS = {"do", "case", "begin", "while", "until", "for", "def", "class", "module"}
+
+_PLATFORM_BLOCKS = (
+    "on_macos",
+    "on_linux",
+    "on_arm",
+    "on_arm64",
+    "on_intel",
+    "on_x86_64",
+)
+
+_ARM_MACHINES = frozenset({"arm64", "aarch64"})
+_INTEL_MACHINES = frozenset({"x86_64", "amd64", "i386", "i686"})
+
+# Marker for values that cannot be resolved while parsing (e.g. interpolated
+# strings); conditions that need them raise UnsupportedInstall instead of
+# guessing a branch.
+_UNKNOWN = object()
+
+
+def _host_machine() -> str:
+    return platform.machine().lower()
+
+
+def _host_is_arm() -> bool:
+    return _host_machine() in _ARM_MACHINES
+
+
+def _host_is_intel() -> bool:
+    return _host_machine() in _INTEL_MACHINES
+
+
+def _platform_block_name(token: Token) -> Optional[str]:
+    """Return the platform block name for ``token``, if it starts one."""
+
+    if token.kind in ("id", "const", "kw") and str(token.value) in _PLATFORM_BLOCKS:
+        return str(token.value)
+    return None
 
 
 def _opens_block(token: Token, prev: Optional[Token]) -> bool:
@@ -364,6 +409,8 @@ class _ExprParser:
         return Var(name)
 
     def _parse_const_chain(self, name: str) -> Expr:
+        if name == "ENV" and self.peek().kind == "punct" and self.peek().value == "[":
+            return self._parse_env_read()
         parts = [name]
         while self.peek().kind == "op" and self.peek().value == "::":
             self.advance()
@@ -378,6 +425,29 @@ class _ExprParser:
                 args = self._parse_call_args()
             return MethodExpr(receiver, method, args)
         return UnknownExpr("::".join(parts))
+
+    def _parse_env_read(self) -> Expr:
+        """Parse ``ENV["NAME"]`` as a readable expression.
+
+        Only literal variable names are understood; a dynamic lookup stays an
+        opaque expression so the executor reports it explicitly.
+        """
+
+        self.advance()  # [
+        token = self.peek()
+        if token.kind in ("str", "sym"):
+            name = str(self.advance().value)
+            if self.peek().kind == "punct" and self.peek().value == "]":
+                self.advance()
+            return EnvRead(name)
+        while not (
+            self.peek().kind == "eof"
+            or (self.peek().kind == "punct" and self.peek().value == "]")
+        ):
+            self.advance()
+        if self.peek().kind == "punct" and self.peek().value == "]":
+            self.advance()
+        return UnknownExpr("ENV[...]")
 
     def _parse_call_args(self) -> list[Expr]:
         self.advance()  # (
@@ -409,6 +479,11 @@ class InstallParser:
         self.tokens = _extract_body_tokens(formula)
         self.pos = 0
         self.variables: set[str] = set()
+        # Values known while parsing, used by conditions such as
+        # ``args.include?("--x")``.  They mirror, but do not replace, the
+        # runtime values stored in BuildContext.variables.
+        self.static_variables: dict[str, Any] = {}
+        self.static_env: dict[str, Any] = {}
 
     # -- token helpers ---------------------------------------------------
     def peek(self, offset: int = 0) -> Token:
@@ -456,8 +531,9 @@ class InstallParser:
             if token.kind == "kw" and token.value in ("if", "unless"):
                 actions.extend(self._parse_if(token.value == "unless"))
                 continue
-            if token.kind == "kw" and token.value in ("on_macos", "on_linux"):
-                actions.extend(self._parse_platform_block(str(token.value)))
+            platform_name = _platform_block_name(token)
+            if platform_name is not None:
+                actions.extend(self._parse_platform_block(platform_name))
                 continue
             if token.kind == "kw" and token.value in ("begin", "case", "while", "until", "for", "def", "class", "module"):
                 raise UnsupportedInstall(
@@ -553,11 +629,26 @@ class InstallParser:
                 self.advance()
                 value = _ExprParser(self).parse()
                 self.variables.add(name)
+                self.static_variables[name] = self._static_expr_value(value)
                 actions = [SetVar(name, value)]
             elif nxt.kind == "op" and nxt.value in ("<<", "+="):
                 self.advance()
-                operator = self.advance().value
+                self.advance()
                 value = _ExprParser(self).parse()
+                self._record_static_append(name, value)
+                actions = [AppendVar(name, value)]
+            elif (
+                nxt.kind == "punct"
+                and nxt.value == "<"
+                and self.peek(2).kind == "punct"
+                and self.peek(2).value == "<"
+            ):
+                # The shared formula lexer emits ``<<`` as two '<' tokens.
+                self.advance()
+                self.advance()
+                self.advance()
+                value = _ExprParser(self).parse()
+                self._record_static_append(name, value)
                 actions = [AppendVar(name, value)]
             else:
                 raise UnsupportedInstall(
@@ -591,7 +682,9 @@ class InstallParser:
                 self.advance()
             if self.peek().kind == "punct" and self.peek().value == "=":
                 self.advance()
-                return EnvSet(name, _ExprParser(self).parse())
+                value = _ExprParser(self).parse()
+                self.static_env[name] = self._static_expr_value(value)
+                return EnvSet(name, value)
             raise UnsupportedInstall(
                 f"{self.formula.name}: unsupported ENV access at line {token.line}"
             )
@@ -671,7 +764,18 @@ class InstallParser:
     # -- conditionals ----------------------------------------------------
     def _parse_condition(self) -> bool:
         self.advance()  # if/unless
+        return self._condition_expression()
+
+    def _condition_expression(self) -> bool:
         expression = _ExprParser(self).parse()
+        token = self.peek()
+        if token.kind not in ("nl", "eof") and not (
+            token.kind == "kw" and token.value == "then"
+        ):
+            raise UnsupportedInstall(
+                f"{self.formula.name}: unsupported install condition operator "
+                f"{token.value!r} near line {token.line}"
+            )
         self._skip_to_line_end()
         return self._evaluate_condition(expression)
 
@@ -684,6 +788,14 @@ class InstallParser:
     def _evaluate_condition(self, expression: Expr) -> bool:
         if isinstance(expression, Literal) and isinstance(expression.value, bool):
             return expression.value
+        if isinstance(expression, EnvRead):
+            value = self._static_env_value(expression.name)
+            if value is _UNKNOWN:
+                raise UnsupportedInstall(
+                    f"{self.formula.name}: cannot resolve ENV[{expression.name!r}] "
+                    "in an install condition"
+                )
+            return value is not None
         if isinstance(expression, MethodExpr):
             receiver = expression.receiver
             method = expression.method
@@ -692,27 +804,87 @@ class InstallParser:
             if receiver == "OS" and method == "linux?":
                 return is_linux()
             if receiver == "Hardware::CPU" and method in ("arm?", "arm64?"):
-                return platform.machine().lower() in ("arm64", "aarch64")
+                return _host_is_arm()
             if receiver == "Hardware::CPU" and method in ("intel?", "x86?"):
-                return platform.machine().lower() in ("x86_64", "amd64")
+                return _host_is_intel()
             if receiver == "build" and method == "head?":
                 return False
             if receiver == "build" and method == "stable?":
                 return True
+            # This port has no formula options, so optional features are off:
+            # build.with? is false and build.without? is true.
             if receiver == "build" and method == "with?":
-                raise UnsupportedInstall(
-                    f"{self.formula.name}: build.with? option conditions are not supported"
-                )
+                return False
+            if receiver == "build" and method == "without?":
+                return True
+            if receiver in self.static_variables and method in ("include?", "exclude?"):
+                found = self._static_list_contains(receiver, expression)
+                return found if method == "include?" else not found
         raise UnsupportedInstall(
             f"{self.formula.name}: unsupported install condition near line {self.peek().line}"
         )
 
+    def _static_list_contains(self, name: str, expression: MethodExpr) -> bool:
+        values = self.static_variables.get(name, _UNKNOWN)
+        needle = (
+            self._static_expr_value(expression.args[0])
+            if len(expression.args) == 1
+            else _UNKNOWN
+        )
+        if values is _UNKNOWN or needle is _UNKNOWN or not isinstance(values, list):
+            raise UnsupportedInstall(
+                f"{self.formula.name}: {name}.{expression.method} condition needs a "
+                "statically known list variable"
+            )
+        return any(str(item) == str(needle) for item in values)
+
+    def _static_expr_value(self, expression: Expr) -> Any:
+        """Best-effort value of an expression at parse time (or ``_UNKNOWN``)."""
+
+        if isinstance(expression, Literal):
+            return expression.value
+        if isinstance(expression, StringExpr):
+            if "#{" in expression.template:
+                return _UNKNOWN
+            return expression.template
+        if isinstance(expression, EnvRead):
+            return self._static_env_value(expression.name)
+        if isinstance(expression, ArrayExpr):
+            values: list[Any] = []
+            for item in expression.items:
+                value = self._static_expr_value(item)
+                if value is _UNKNOWN:
+                    return _UNKNOWN
+                if isinstance(value, list):
+                    values.extend(value)
+                else:
+                    values.append(value)
+            return values
+        if isinstance(expression, Spread):
+            return self._static_expr_value(expression.expr)
+        if isinstance(expression, Var):
+            return self.static_variables.get(expression.name, _UNKNOWN)
+        return _UNKNOWN
+
+    def _static_env_value(self, name: str) -> Any:
+        if name in self.static_env:
+            return self.static_env[name]
+        return os.environ.get(name)
+
+    def _record_static_append(self, name: str, expression: Expr) -> None:
+        current = self.static_variables.get(name, _UNKNOWN)
+        value = self._static_expr_value(expression)
+        if current is _UNKNOWN or value is _UNKNOWN:
+            self.static_variables[name] = _UNKNOWN
+            return
+        values = current if isinstance(current, list) else [current]
+        added = value if isinstance(value, list) else [value]
+        self.static_variables[name] = values + added
+
     def _parse_if(self, unless: bool) -> list[Action]:
-        self.advance()  # if/unless
-        condition = self._evaluate_condition(_ExprParser(self).parse())
+        condition = self._parse_condition()
         if unless:
             condition = not condition
-        self._skip_to_line_end()
         return self._parse_if_chain(condition)
 
     def _parse_if_chain(self, condition: bool) -> list[Action]:
@@ -728,8 +900,7 @@ class InstallParser:
             token = self.peek()
             if token.kind == "kw" and token.value == "elsif":
                 self.advance()
-                current_condition = self._evaluate_condition(_ExprParser(self).parse())
-                self._skip_to_line_end()
+                current_condition = self._condition_expression()
                 continue
             if token.kind == "kw" and token.value == "else":
                 self.advance()
@@ -753,8 +924,9 @@ class InstallParser:
             if token.kind == "kw" and token.value in ("if", "unless"):
                 actions.extend(self._parse_if(token.value == "unless"))
                 continue
-            if token.kind == "kw" and token.value in ("on_macos", "on_linux"):
-                actions.extend(self._parse_platform_block(str(token.value)))
+            platform_name = _platform_block_name(token)
+            if platform_name is not None:
+                actions.extend(self._parse_platform_block(platform_name))
                 continue
             actions.extend(self._parse_statement())
 
@@ -791,14 +963,24 @@ class InstallParser:
             prev = self.advance()
         raise UnsupportedInstall(f"{self.formula.name}: unterminated conditional in install")
 
+    def _platform_active(self, name: str) -> bool:
+        if name == "on_macos":
+            return is_macos()
+        if name == "on_linux":
+            return is_linux()
+        if name in ("on_arm", "on_arm64"):
+            return _host_is_arm()
+        if name in ("on_intel", "on_x86_64"):
+            return _host_is_intel()
+        return False
+
     def _parse_platform_block(self, name: str) -> list[Action]:
-        self.advance()  # on_macos/on_linux
+        self.advance()  # on_* platform block
         self._parse_argument_list(stop_at_do=True)
         if not (self.peek().kind == "kw" and self.peek().value == "do"):
             raise UnsupportedInstall(f"{self.formula.name}: {name} without do block")
         self.advance()
-        active = is_macos() if name == "on_macos" else is_linux()
-        if active:
+        if self._platform_active(name):
             return self._parse_statements(stop_end=True)
         self._skip_branch()
         if self.peek().kind == "kw" and self.peek().value == "end":
@@ -1079,6 +1261,8 @@ class SourceBuilder:
             return expr.value
         if isinstance(expr, StringExpr):
             return ctx.interpolate(expr.template)
+        if isinstance(expr, EnvRead):
+            return ctx.env.get(expr.name, "")
         if isinstance(expr, Var):
             if expr.name in ctx.variables:
                 return ctx.variables[expr.name]

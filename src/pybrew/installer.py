@@ -34,6 +34,8 @@ PLACEHOLDERS = {
     b"@@HOMEBREW_LIBRARY_PREFIX@@": lambda config: str(config.prefix / "Library").encode(),
 }
 
+ELF_MAGIC = b"\x7fELF"
+
 
 @dataclass
 class InstallOptions:
@@ -247,6 +249,98 @@ def _relocate_macho(path: Path, replacements: dict[bytes, bytes]) -> bool:
     return changed
 
 
+def _find_patchelf() -> Optional[str]:
+    """Locate patchelf, honouring ``PYBREW_PATCHELF``.
+
+    The environment variable wins over ``PATH`` so tests (and users with a
+    private build) can pin an explicit executable.  An empty value disables
+    patchelf and keeps the byte-level fallback.
+    """
+
+    override = os.environ.get("PYBREW_PATCHELF")
+    if override is not None:
+        return override or None
+    return shutil.which("patchelf")
+
+
+def _relocate_elf(path: Path, replacements: dict[bytes, bytes]) -> bool:
+    """Rewrite placeholder RPATH entries in an ELF binary using patchelf.
+
+    ELF RPATHs live in the dynamic string table, so a longer replacement
+    cannot be written in place (the length-preserving byte fallback has to
+    skip it).  patchelf moves the string and updates the dynamic section
+    instead.
+
+    Returns True when patchelf rewrote the file.  A missing tool, a failed
+    invocation or an RPATH without placeholders returns False so the caller
+    keeps the safe byte-level fallback (which never grows a string in place).
+    """
+
+    patchelf = _find_patchelf()
+    if patchelf is None:
+        return False
+    try:
+        listing = subprocess.run(
+            [patchelf, "--print-rpath", str(path)],
+            text=True,
+            capture_output=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if listing.returncode != 0:
+        return False
+    old_rpath = listing.stdout.strip()
+    if not old_rpath:
+        return False
+
+    substitutions = {
+        placeholder.decode(errors="surrogateescape"): replacement.decode(
+            errors="surrogateescape"
+        )
+        for placeholder, replacement in replacements.items()
+    }
+    entries = old_rpath.split(":")
+    new_entries: list[str] = []
+    for entry in entries:
+        new_entry = entry
+        for placeholder, replacement in substitutions.items():
+            new_entry = new_entry.replace(placeholder, replacement)
+        new_entries.append(new_entry)
+    if new_entries == entries:
+        return False
+    new_rpath = ":".join(new_entries)
+
+    original = path.read_bytes()
+    mode = path.stat().st_mode
+    os.chmod(path, mode | 0o200)
+    try:
+        try:
+            result = subprocess.run(
+                [patchelf, "--set-rpath", new_rpath, str(path)],
+                text=True,
+                capture_output=True,
+                timeout=60,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            result = None
+        if result is not None and result.returncode == 0:
+            return True
+        # patchelf may fail after partially touching the file: restore it so
+        # the caller's fallback still starts from pristine bytes.
+        try:
+            if path.read_bytes() != original:
+                path.write_bytes(original)
+        except OSError:
+            pass
+        return False
+    finally:
+        try:
+            os.chmod(path, mode)
+        except OSError:
+            pass
+
+
 def relocate_tree(keg: Path, config: Config) -> RelocationReport:
     """Replace Homebrew's bottle placeholders in a freshly unpacked keg."""
 
@@ -270,6 +364,13 @@ def relocate_tree(keg: Path, config: Config) -> RelocationReport:
             if is_binary and sys.platform == "darwin":
                 try:
                     if _relocate_macho(path, replacements):
+                        report.binary_files += 1
+                        continue
+                except OSError:
+                    pass
+            if data.startswith(ELF_MAGIC):
+                try:
+                    if _relocate_elf(path, replacements):
                         report.binary_files += 1
                         continue
                 except OSError:

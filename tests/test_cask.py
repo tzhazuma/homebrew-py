@@ -241,6 +241,8 @@ def test_cask_from_api_and_loader_fallback(tmp_path: Path, monkeypatch) -> None:
             {"app": ["API Cask.app"], "target": "/Applications/API Cask.app"},
             {"binary": ["API Cask.app/Contents/MacOS/api"], "target": "$HOMEBREW_PREFIX/bin/api"},
             {"zap": [{"trash": ["~/Library/Caches/com.example.api"]}]},
+            {"font": ["Example.ttf"], "target": "/Users/example/Library/Fonts/Example.ttf"},
+            {"stage_only": True},
         ],
     }
     cask = cask_from_api(payload, tap="homebrew/cask")
@@ -253,6 +255,8 @@ def test_cask_from_api_and_loader_fallback(tmp_path: Path, monkeypatch) -> None:
     assert cask.artifacts[1].target == "api"
     assert cask.uninstall["quit"] == "com.example.api"
     assert cask.zap == ["~/Library/Caches/com.example.api"]
+    assert any(artifact.kind == "font" and artifact.target == "Example.ttf" for artifact in cask.artifacts)
+    assert cask.stage_only is True
 
     monkeypatch.setattr("pybrew.cask_installer.fetch_cask", lambda token: cask)
     loader = CaskLoader([], allow_api=True)

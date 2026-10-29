@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import os
 import re
+import shutil
+import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -18,8 +21,20 @@ from .taps import FormulaLoader, discover_taps
 
 _LINE_RE = re.compile(r'^\s*(?P<kind>tap|brew|cask|mas|vscode|whalebrew)\s+"(?P<name>[^"]+)"(?P<rest>.*)$')
 _OPTION_RE = re.compile(
-    r'([A-Za-z_][A-Za-z0-9_]*):\s*("([^"]*)"|\'([^\']*)\'|true|false|\[[^\]]*\])'
+    r'(?P<key>[A-Za-z_][A-Za-z0-9_]*):\s*'
+    r'(?P<value>'
+    r'"(?P<double>[^"]*)"'
+    r"|'(?P<single>[^']*)'"
+    r'|\[(?P<array>[^\]]*)\]'
+    r'|(?P<bare>[^,\s]+)'
+    r')'
 )
+# External package managers understood by the basic Brewfile support below.
+# Each entry maps the Brewfile kind to (environment override, default executable).
+_EXTERNAL_TOOLS = {
+    "mas": ("PYBREW_MAS", "mas"),
+    "vscode": ("PYBREW_CODE", "code"),
+}
 
 
 @dataclass
@@ -43,11 +58,7 @@ def parse_brewfile(path: Path) -> list[BundleEntry]:
         rest = match.group("rest")
         options: dict[str, str] = {}
         for option in _OPTION_RE.finditer(rest):
-            key = option.group(1)
-            value = option.group(3) if option.group(3) is not None else (
-                option.group(4) if option.group(4) is not None else option.group(2)
-            )
-            options[key] = value
+            options[option.group("key")] = _option_value(option)
         if not options:
             positional = re.search(r',\s*"([^"]+)"', rest)
             if positional:
@@ -56,12 +67,112 @@ def parse_brewfile(path: Path) -> list[BundleEntry]:
     return entries
 
 
+def _option_value(match: re.Match[str]) -> str:
+    """Return the raw value of a parsed Brewfile option.
+
+    Quoted strings are unwrapped, while booleans, numbers and ``args:`` arrays
+    keep their textual form so callers can interpret them.
+    """
+
+    if match.group("double") is not None:
+        return match.group("double")
+    if match.group("single") is not None:
+        return match.group("single")
+    return match.group("value")
+
+
+def _option_arguments(raw: str) -> list[str]:
+    """Extract the quoted strings from an ``args: [...]`` option."""
+
+    matches = re.findall(r'"([^"]*)"|\'([^\']*)\'', raw)
+    return [double if double != "" else single for double, single in matches]
+
+
+def _install_options(entry: BundleEntry, dry_run: bool) -> InstallOptions:
+    arguments = {
+        argument.casefold() for argument in _option_arguments(entry.options.get("args", ""))
+    }
+    return InstallOptions(
+        dry_run=dry_run,
+        link=entry.options.get("link", "true").lower() != "false",
+        head="--head" in arguments,
+        build_from_source="--build-from-source" in arguments,
+    )
+
+
+def _tap_paths(config: Config) -> list[Path]:
+    """Configured tap paths plus taps already installed under the prefix.
+
+    Re-reading ``TapManager.list()`` is what makes the loaders below pick up a
+    tap that ``bundle install`` just cloned.
+    """
+
+    paths = [Path(path) for path in config.taps]
+    paths.extend(tap.path for tap in TapManager(config).list())
+    return list(dict.fromkeys(paths))
+
+
 def _formula_loader(config: Config) -> FormulaLoader:
-    return FormulaLoader(discover_taps(config.taps))
+    return FormulaLoader(discover_taps(_tap_paths(config)))
 
 
 def _cask_loader(config: Config, allow_api: bool) -> CaskLoader:
-    return CaskLoader(discover_taps(config.taps), allow_api=allow_api)
+    return CaskLoader(discover_taps(_tap_paths(config)), allow_api=allow_api)
+
+
+def _resolve_external_tool(kind: str) -> str:
+    env_var, default = _EXTERNAL_TOOLS[kind]
+    configured = os.environ.get(env_var) or default
+    resolved = shutil.which(configured)
+    if resolved is None:
+        raise PybrewError(
+            f"{default} executable not found ({configured!r}); "
+            f"install {default} or set {env_var}"
+        )
+    return resolved
+
+
+def _run_external(kind: str, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+    executable = _resolve_external_tool(kind)
+    try:
+        return subprocess.run(
+            [executable, *arguments], check=True, capture_output=True, text=True
+        )
+    except OSError as error:
+        raise PybrewError(f"cannot run {executable}: {error}") from error
+    except subprocess.CalledProcessError as error:
+        detail = (error.stderr or error.stdout or "").strip()
+        message = f"{executable} {' '.join(arguments)} failed"
+        if detail:
+            message += f": {detail}"
+        raise PybrewError(message) from error
+
+
+def _mas_installed(entry: BundleEntry, output: str) -> bool:
+    app_id = str(entry.options.get("id", "")).strip()
+    if app_id:
+        for line in output.splitlines():
+            fields = line.split()
+            if fields and fields[0] == app_id:
+                return True
+        return False
+    name = entry.name.casefold()
+    return any(name in line.casefold() for line in output.splitlines())
+
+
+def _vscode_installed(entry: BundleEntry, output: str) -> bool:
+    installed = {
+        line.strip().casefold() for line in output.splitlines() if line.strip()
+    }
+    return entry.name.casefold() in installed
+
+
+def _external_installed(kind: str, entry: BundleEntry) -> bool:
+    if kind == "mas":
+        output = _run_external(kind, ["list"]).stdout
+        return _mas_installed(entry, output)
+    output = _run_external(kind, ["--list-extensions"]).stdout
+    return _vscode_installed(entry, output)
 
 
 def bundle_list(entries: list[BundleEntry]) -> list[str]:
@@ -84,6 +195,9 @@ def bundle_check(config: Config, entries: list[BundleEntry], allow_api: bool = F
         elif entry.kind == "tap":
             if entry.name not in [tap.name for tap in TapManager(config).list()]:
                 missing.append(f"tap:{entry.name}")
+        elif entry.kind in _EXTERNAL_TOOLS:
+            if not _external_installed(entry.kind, entry):
+                missing.append(f"{entry.kind} {entry.name}")
     return missing
 
 
@@ -115,11 +229,7 @@ def bundle_install(
             try:
                 formula = formula_loader.load(entry.name)
                 Installer(config, formula_loader).install(
-                    formula,
-                    InstallOptions(
-                        dry_run=dry_run,
-                        link=entry.options.get("link", "true").lower() != "false",
-                    ),
+                    formula, _install_options(entry, dry_run)
                 )
                 installed.append(f"brew {entry.name}")
             except PybrewError as error:
@@ -132,6 +242,23 @@ def bundle_install(
                 else:
                     CaskInstaller(config).install(cask)
                     installed.append(f"cask {entry.name}")
+            except PybrewError as error:
+                errors.append(f"{entry.name}: {error}")
+        elif entry.kind in _EXTERNAL_TOOLS:
+            try:
+                arguments: list[str]
+                if entry.kind == "mas":
+                    app_id = str(entry.options.get("id", "")).strip()
+                    if not app_id:
+                        raise PybrewError(
+                            f'mas entry "{entry.name}" requires id: <number>'
+                        )
+                    arguments = ["install", app_id]
+                else:
+                    arguments = ["--install-extension", entry.name]
+                if not dry_run:
+                    _run_external(entry.kind, arguments)
+                installed.append(f"{entry.kind} {entry.name}")
             except PybrewError as error:
                 errors.append(f"{entry.name}: {error}")
     return installed, errors

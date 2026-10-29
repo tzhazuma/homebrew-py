@@ -89,8 +89,10 @@ Bottles contain text and binary placeholders such as `@@HOMEBREW_PREFIX@@` and
 `@@HOMEBREW_CELLAR@@`. Text files are rewritten with the configured prefix. On
 macOS, Mach-O load commands and LC_ID_DYLIB entries are rewritten with
 `install_name_tool` (which can grow load commands) and ad-hoc signed with
-`codesign -s -`; on ELF, byte rewriting is used when the replacement fits, else
-the binary is reported as skipped rather than corrupted.
+`codesign -s -`. On ELF, `patchelf --print-rpath/--set-rpath` rewrites placeholder
+RPATH entries when the tool is available (restoring pristine bytes on failure);
+otherwise byte rewriting is used only when the replacement fits, else the binary
+is reported as skipped rather than corrupted.
 
 ### Linking
 
@@ -134,7 +136,10 @@ receipt-tracked paths and executes the safe subset of cask uninstall actions
 (`quit` via osascript, `pkgutil --forget`, `delete` for leftovers); `launchctl`,
 login items and scripts are deliberately not executed. `--zap` removes the
 cask's declared trash paths after checking they stay inside the user
-home/prefix/temp roots. `.pkg` payloads are expanded under `--pkg-root`.
+home/prefix/temp roots. Library artifact kinds (`font`, `qlplugin`, VST plugins,
+etc.) copy into `<prefix>/Library/...` by default or `--library-root`; `stage_only`
+writes a receipt without artifacts. `.pkg` payloads are expanded under
+`--pkg-root`; package scripts and system-wide installs are not implemented.
 
 ## Services
 
@@ -159,8 +164,8 @@ because loaders discover them from the prefix.
 lines. `bundle install` installs taps first, then formulae and casks, reusing the
 normal installers; `bundle check` reports missing entries; `bundle list` prints
 the parsed entries; `bundle dump` writes taps/formulae/casks back to a Brewfile.
-`tap ..., url: "..."` and `brew ..., link: false` are supported; other advanced
-options are ignored. `cleanup --prune-cache` removes
+`tap ..., url: "..."`, `brew ..., link: false`, `brew ..., args: [...]`,
+`mas ... id:` and `vscode ...` are supported; other advanced options are ignored. `cleanup --prune-cache` removes
 downloads older than `--cache-age-days` (default 120) in addition to stale kegs.
 
 ## Pinning
@@ -191,13 +196,16 @@ same for a local cask artifact.
 
 ## Known limitations
 
-- Source builds support a common literal `def install` subset (including simple resource stages), not arbitrary Ruby.
-- ELF binary relocation is best-effort; Mach-O uses `install_name_tool`.
+- Source builds support a common literal `def install` subset (on_arm/on_intel,
+  predicates, resources and HEAD included), not arbitrary Ruby.
+- ELF relocation needs `patchelf` for long RPATH replacements; Mach-O uses
+  `install_name_tool`; further edge cases remain.
 - Cask `.pkg` payloads are expanded under `--pkg-root`; package scripts and
-  system-wide installs are not implemented.
+  system-wide installs are not implemented. Library artifacts are prefix-scoped
+  unless `--library-root` is supplied.
 - Services are best-effort: launchd/systemd are invoked, but log rotation,
   process supervision edge cases and root services are not implemented.
-- No analytics, advanced Brewfile options or full cask options.
+- No analytics, some advanced Brewfile options or full cask options.
 - `brew`'s test DSL is captured but not executed.
 
 ## Testing strategy

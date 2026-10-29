@@ -111,6 +111,7 @@ def cask_from_api(data: dict[str, Any], tap: Optional[str] = None) -> Cask:
     cask.desc = data.get("desc")
     cask.homepage = data.get("homepage")
     cask.auto_updates = bool(data.get("auto_updates"))
+    cask.stage_only = bool(data.get("stage_only", False))
     cask.caveats = data.get("caveats")
     depends = data.get("depends_on") or {}
     if isinstance(depends, dict):
@@ -135,7 +136,28 @@ def cask_from_api(data: dict[str, Any], tap: Optional[str] = None) -> Cask:
                             cask.zap.extend(str(path) for path in trash)
                         elif trash:
                             cask.zap.append(str(trash))
-            elif key in ("app", "binary", "pkg", "suite", "artifact", "installer", "appimage"):
+            elif key in (
+                "app",
+                "binary",
+                "pkg",
+                "suite",
+                "artifact",
+                "installer",
+                "appimage",
+                "font",
+                "colorpicker",
+                "prefpane",
+                "qlplugin",
+                "mdimporter",
+                "screen_saver",
+                "service",
+                "audio_unit_plugin",
+                "vst_plugin",
+                "vst3_plugin",
+                "dictionary",
+                "input_method",
+                "keyboard_layout",
+            ):
                 if isinstance(value, list):
                     sources = [str(item) for item in value if isinstance(item, str)]
                 else:
@@ -147,14 +169,33 @@ def cask_from_api(data: dict[str, Any], tap: Optional[str] = None) -> Cask:
                 if target_string:
                     # API cask targets are absolute system paths; keep only the
                     # basename so pybrew installs inside its own prefix.
-                    if key == "app":
-                        target_string = Path(target_string).name
-                    else:
-                        target_string = Path(target_string.replace("$HOMEBREW_PREFIX", "")).name
+                    target_string = Path(
+                        target_string.replace("$HOMEBREW_PREFIX", "")
+                    ).name
                 for source in sources:
                     cask.artifacts.append(
-                        Artifact(key, source, target_string if key in ("app", "binary") else None)
+                        Artifact(
+                            key,
+                            source,
+                            target_string if key in ("app", "binary") or key in (
+                                "font",
+                                "colorpicker",
+                                "prefpane",
+                                "qlplugin",
+                                "mdimporter",
+                                "screen_saver",
+                                "service",
+                                "audio_unit_plugin",
+                                "vst_plugin",
+                                "vst3_plugin",
+                                "dictionary",
+                                "input_method",
+                                "keyboard_layout",
+                            ) else None,
+                        )
                     )
+            elif key == "stage_only":
+                cask.stage_only = bool(value)
     return cask
 
 

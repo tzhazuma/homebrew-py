@@ -342,3 +342,141 @@ esac
     binary = result.keg / "bin" / "meson-hello"
     assert binary.is_file()
     assert "meson hello" in binary.read_text()
+
+
+def test_on_arm_and_on_intel_blocks_follow_platform_machine(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import pybrew.source_builder as source_builder
+
+    project = tmp_path / "arch-src"
+    project.mkdir()
+    (project / "arm-marker").write_text("arm\n")
+    (project / "intel-marker").write_text("intel\n")
+    tap, _ = _make_tap(
+        tmp_path,
+        "arch-fixture",
+        "1.0",
+        project,
+        "\n".join(
+            [
+                "    on_arm do",
+                '      bin.install "arm-marker"',
+                "    end",
+                "    on_intel do",
+                '      bin.install "intel-marker"',
+                "    end",
+            ]
+        ),
+    )
+
+    monkeypatch.setattr(source_builder.platform, "machine", lambda: "aarch64")
+    config, _ = _install(tmp_path / "arm-host", tap, "arch-fixture")
+    bin_dir = config.keg_path("arch-fixture", "1.0") / "bin"
+    assert (bin_dir / "arm-marker").is_file()
+    assert not (bin_dir / "intel-marker").exists()
+
+    monkeypatch.setattr(source_builder.platform, "machine", lambda: "x86_64")
+    config, _ = _install(tmp_path / "intel-host", tap, "arch-fixture")
+    bin_dir = config.keg_path("arch-fixture", "1.0") / "bin"
+    assert (bin_dir / "intel-marker").is_file()
+    assert not (bin_dir / "arm-marker").exists()
+
+
+def test_install_conditions_choose_expected_branches(tmp_path: Path, monkeypatch) -> None:
+    import pybrew.source_builder as source_builder
+
+    project = tmp_path / "pred-src"
+    project.mkdir()
+    for marker in ("included", "missing", "with", "without", "appended", "intel", "not-intel"):
+        (project / f"{marker}.txt").write_text(f"{marker}\n")
+    install_block = "\n".join(
+        [
+            "    args = %w[--with-feature --without-ssl]",
+            '    if args.include?("--with-feature")',
+            '      bin.install "included.txt"',
+            "    end",
+            '    if args.include?("--not-there")',
+            '      bin.install "missing.txt"',
+            "    end",
+            '    args << "--extra-flag"',
+            '    if args.include?("--extra-flag")',
+            '      bin.install "appended.txt"',
+            "    end",
+            '    if build.with?("ssl")',
+            '      bin.install "with.txt"',
+            "    end",
+            '    if build.without?("ssl")',
+            '      bin.install "without.txt"',
+            "    end",
+            "    if Hardware::CPU.intel?",
+            '      bin.install "intel.txt"',
+            "    else",
+            '      bin.install "not-intel.txt"',
+            "    end",
+        ]
+    )
+    tap, _ = _make_tap(tmp_path, "pred-fixture", "1.0", project, install_block)
+
+    monkeypatch.setattr(source_builder.platform, "machine", lambda: "x86_64")
+    config, _ = _install(tmp_path / "intel-host", tap, "pred-fixture")
+    bin_dir = config.keg_path("pred-fixture", "1.0") / "bin"
+    assert (bin_dir / "included.txt").is_file()
+    assert (bin_dir / "appended.txt").is_file()
+    assert (bin_dir / "without.txt").is_file()
+    assert (bin_dir / "intel.txt").is_file()
+    for skipped in ("missing.txt", "with.txt", "not-intel.txt"):
+        assert not (bin_dir / skipped).exists()
+
+    monkeypatch.setattr(source_builder.platform, "machine", lambda: "aarch64")
+    config, _ = _install(tmp_path / "arm-host", tap, "pred-fixture")
+    bin_dir = config.keg_path("pred-fixture", "1.0") / "bin"
+    assert (bin_dir / "not-intel.txt").is_file()
+    assert not (bin_dir / "intel.txt").exists()
+
+
+def test_env_reads_in_conditions_and_system_args(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("PYBREW_TEST_ENV_FLAG", "enabled")
+    monkeypatch.delenv("PYBREW_TEST_UNSET_FLAG", raising=False)
+    project = tmp_path / "env-src"
+    project.mkdir()
+    for marker in ("host-flag", "local-flag", "unset-flag"):
+        (project / f"{marker}.txt").write_text(f"{marker}\n")
+    install_block = (
+        '    ENV["PYBREW_LOCAL_FLAG"] = "local-value"\n'
+        '    if ENV["PYBREW_TEST_ENV_FLAG"]\n'
+        '      bin.install "host-flag.txt"\n'
+        "    end\n"
+        '    if ENV["PYBREW_LOCAL_FLAG"]\n'
+        '      bin.install "local-flag.txt"\n'
+        "    end\n"
+        '    if ENV["PYBREW_TEST_UNSET_FLAG"]\n'
+        '      bin.install "unset-flag.txt"\n'
+        "    end\n"
+        '    system "sh", "-c", "printf \'%s\' \\"$0\\" > env.txt", ENV["PYBREW_LOCAL_FLAG"]\n'
+        '    bin.install "env.txt"'
+    )
+    tap, _ = _make_tap(tmp_path, "env-fixture", "1.0", project, install_block)
+    config, _ = _install(tmp_path, tap, "env-fixture")
+    bin_dir = config.keg_path("env-fixture", "1.0") / "bin"
+    assert (bin_dir / "host-flag.txt").is_file()
+    assert (bin_dir / "local-flag.txt").is_file()
+    assert not (bin_dir / "unset-flag.txt").exists()
+    assert (bin_dir / "env.txt").read_text() == "local-value"
+
+
+def test_unknown_install_condition_is_explicit() -> None:
+    from pybrew.errors import UnsupportedInstall
+    from pybrew.models import Formula
+    from pybrew.source_builder import InstallParser
+
+    formula = Formula(name="unknown-predicate", version="1.0")
+    formula.install_source = (
+        "def install\n"
+        "  if build.weird?\n"
+        '    bin.install "x"\n'
+        "  end\n"
+        "end\n"
+    )
+    with pytest.raises(UnsupportedInstall, match="unsupported install condition"):
+        InstallParser(formula).parse()

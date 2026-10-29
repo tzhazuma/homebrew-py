@@ -8,7 +8,7 @@ Formula 解析、依赖解析、Cellar、bottle 安装、链接/卸载和 receip
 
 > **状态：v0.1 原型（可运行、可测试）**
 >
-> - 104 个测试全部通过（`pytest -q`）
+> - 128 个测试全部通过（`pytest -q`）
 > - 15 个真实 homebrew-core 公式（bash、git、curl、openssl@3、python@3.12 等）与
 >   `brew info --json=v2` 的元数据逐项对比通过
 > - 使用真实 `hello 2.12.3` Formula 完成 autotools 源码构建并运行成功
@@ -92,20 +92,20 @@ Installer(config, loader).install(formula, InstallOptions())
 
 | 模块 | 状态 | 说明 |
 | --- | --- | --- |
-| Formula DSL 解析 | ✅ | 只解析字面量 DSL，不执行 Ruby；支持 `url/sha256/version`、`license any_of/all_of/with`、`bottle` 块、`depends_on` 标签、`head`/`stable`/`resource`、`on_macos`/`on_linux`/`on_intel`、`def install/test/caveats` 原文捕获 |
+| Formula DSL 解析 | ✅ | 只解析字面量 DSL，不执行 Ruby；支持 `url/sha256/version`、`license any_of/all_of/with`、`bottle` 块、`depends_on` 标签、`head`/`stable`/`resource`、`on_macos`/`on_linux`/`on_arm`/`on_intel`、`def install/test/caveats` 原文捕获 |
 | Tap 发现 | ✅ | `Formula/**/*.rb`、多个 tap、tap-qualified 名称 |
 | 依赖解析 | ✅ | 递归依赖、拓扑排序、环检测、build/test/optional/recommended 分类、`uses_from_macos`（Linux 安装）|
-| Bottle 安装 | ✅ | 标签选择与降级、ghcr.io OCI 匿名拉取、本地缓存/SHA 校验、安全解包、`@@HOMEBREW_*@@` 重定位（Mach-O `install_name_tool`）、receipt |
+| Bottle 安装 | ✅ | 标签选择与降级、ghcr.io OCI 匿名拉取、本地缓存/SHA 校验、安全解包、`@@HOMEBREW_*@@` 重定位（Mach-O `install_name_tool`、ELF `patchelf` RPATH）、receipt |
 | Cellar / 链接 | ✅ | `Cellar/<name>/<version>`、`opt` 链接、bin/lib/share/... 相对符号链接、冲突检测、`--overwrite`、卸载清理 |
-| Source 安装 | ✅ 常用子集 | `system`（含 `std_configure_args`/`std_cmake_args`/`std_meson_args`/`std_cargo_args`）、`inreplace`、`ENV`、`bin.install`/`prefix.install`、`resource(...).stage`、`--HEAD` 源码安装、`if OS.mac?`/`on_macos`；autotools/cmake/cargo 有真实构建测试，meson 也已完成真实项目手工构建验证；不支持的 Ruby 会明确报错 |
+| Source 安装 | ✅ 常用子集 | `system`（含 `std_configure_args`/`std_cmake_args`/`std_meson_args`/`std_cargo_args`）、`inreplace`、`ENV`、`bin.install`/`prefix.install`、`resource(...).stage`、`--HEAD` 源码安装、`on_macos`/`on_linux`/`on_arm`/`on_intel`、`Hardware::CPU`/`build.with?`/`args.include?` 条件、`ENV["X"]` 读取；autotools/cmake/cargo 有真实构建测试，meson 也已完成真实项目手工构建验证；不支持的 Ruby 会明确报错 |
 | Tap 管理 | ✅ | `tap`/`untap`/`tap --list`/`tap --update`/`update`，支持 GitHub 与本地 git URL，自动发现 Formula/Casks |
-| Cask | ✅ zip/dmg/pkg 子集 | app/binary/suite 安装、receipt、uninstall、`--zap`；`pkg` 可展开 payload 到 `--pkg-root`；支持 `--api`、`outdated`/`upgrade`/`reinstall`（含 `--cask` 别名）、`search --cask`、`uninstall quit/delete/pkgutil`；不执行安装脚本/不做系统级安装 |
+| Cask | ✅ zip/dmg/pkg 子集 | app/binary/suite 安装、receipt、uninstall、`--zap`；`pkg` 可展开 payload 到 `--pkg-root`；支持 `--api`、`outdated`/`upgrade`/`reinstall`（含 `--cask` 别名）、`search --cask`、`uninstall quit/delete/pkgutil`；新增 font/colorpicker/prefpane/qlplugin/mdimporter/screen_saver/service/audio_unit/vst/vst3/dictionary/input_method/keyboard_layout 等 Library artifact、`stage_only`、`--library-root`；升级会清理被移除的旧 artifact；不执行安装脚本/不做系统级安装 |
 | Services | ✅ launchd + systemd | macOS 生成 launchd plist；Linux 生成 systemd user unit；start/stop/restart/list/info |
 | Cask/Services/Tap 命令 | ✅ | 集成到 `pybrew` CLI |
 | 下载/源码查看 | ✅ | `fetch` formula bottle/source 或 `fetch --cask` artifact、`cat`/`home`/`edit` formula 与 cask |
 | 维护命令 | ✅ | `leaves`、`uses`、`autoremove`、`outdated`、`upgrade`（安装新版本并清理旧 keg，含 `--dry-run`）、`cleanup`（含 `--prune-cache`）、`reinstall`、`doctor --json`、`pin`/`unpin`、`services cleanup`、`tap --update`、`shellenv`；install `--no-link` |
-| Brewfile | ✅ 基础 | `bundle install/check/list/dump`，支持 `tap`/`brew`/`cask` 行，tap `url:`、brew `link: false` |
-| 完整 pkg cask 脚本/系统安装 / analytics / 高级 bundle 选项 | ❌ | 路线图 |
+| Brewfile | ✅ 基础 | `bundle install/check/list/dump`，支持 `tap`/`brew`/`cask`/`mas`/`vscode` 行，tap `url:`、brew `link:false`/`args:` |
+| 完整 pkg cask 脚本/系统安装 / analytics / 部分高级 bundle 选项 | ❌ | 路线图 |
 
 ## 架构
 
@@ -146,7 +146,7 @@ Installer(config, loader).install(formula, InstallOptions())
 
 ```bash
 pytest -q
-# 104 passed
+# 128 passed
 ```
 
 测试覆盖：
@@ -158,12 +158,14 @@ pytest -q
   staged source 安装、恶意 tar 拒绝
 - `test_cli.py`：info/search/list/deps/doctor/doctor --json/config/parse/shellenv、cask flags、fetch、cat/home/edit
 - `test_real_bottle.py`：真实 `libslirp 4.9.6` bottle 离线安装（有缓存时运行）
-- `test_source_build.py`：真实 autotools/CMake/Cargo 构建、inreplace、条件分支
+- `test_source_build.py`：真实 autotools/CMake/Cargo 构建、inreplace、on_arm/on_intel、条件谓词、ENV、resource、HEAD
 - `test_cask.py`：真实 cask（rectangle/iterm2/VSCode）解析、zip/dmg 安装/卸载/zap、pkg payload、`install --cask`、API 映射、outdated/upgrade/reinstall、uninstall quit/delete
+- `test_cask_depth.py`：13 种 Library artifact、stage_only、target 安全校验、升级 artifact 清理
+- `test_relocation.py`：Mach-O padding 与 ELF patchelf RPATH
 - `test_services.py`：launchd plist + systemd unit、伪造 launchctl/systemctl 的 start/stop/list、orphan cleanup
 - `test_taps.py`：本地 git tap 的 clone/update/untap/update-all、`update` 命令
 - `test_maintenance.py`：outdated、upgrade dry-run/real upgrade + old keg cleanup、leaves/uses、autoremove、cleanup（含 cache）、reinstall、pin/unpin
-- `test_bundle.py`：Brewfile install/check/list/dump、tap URL、link:false
+- `test_bundle.py`：Brewfile install/check/list/dump、tap URL、link:false、args、mas/vscode
 
 详细结果见 [docs/verification.md](docs/verification.md)，与 Ruby Homebrew 的差异见
 [docs/parity.md](docs/parity.md)，设计细节见 [docs/architecture.md](docs/architecture.md)。
@@ -217,10 +219,10 @@ docs/                 架构、兼容性、验证、RFC
 
 ## 路线图
 
-1. 补全 source build：复杂条件与更多构建系统。
-2. Cask 深度：package scripts、系统级 pkg 安装、更多 artifact 类型。
-3. Brewfile 更多高级选项、Cask upgrade 边界。
-4. Linux RPATH/ELF 重定位与更多 Mach-O 边界情况。
+1. 补全 source build：任意 Ruby 条件、更多构建系统。
+2. Cask 深度：package scripts、系统级 pkg 安装。
+3. Brewfile 其余高级选项、Cask upgrade 更多边界。
+4. 更多 Mach-O 边界与真实 Linux bottle 验证。
 5. 与 `brew` 的测试套件对齐，逐步扩大真实公式覆盖。
 6. 跟进上游 RFC PR 的 maintainer review（已提交）。
 

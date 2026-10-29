@@ -128,6 +128,50 @@ def _safe_extract_zip(archive: Path, destination: Path) -> None:
                 os.chmod(target, permissions)
 
 
+# Homebrew-style artifact kinds that install into the user's Library tree.
+# Values are paths relative to CaskInstaller.library_root.
+LIBRARY_ARTIFACT_DIRS: dict[str, str] = {
+    "font": "Fonts",
+    "colorpicker": "ColorPickers",
+    "prefpane": "PreferencePanes",
+    "qlplugin": "QuickLook",
+    "mdimporter": "Spotlight",
+    "screen_saver": "Screen Savers",
+    "service": "Services",
+    "audio_unit_plugin": "Audio/Plug-Ins/Components",
+    "vst_plugin": "Audio/Plug-Ins/VST",
+    "vst3_plugin": "Audio/Plug-Ins/VST3",
+    "dictionary": "Dictionaries",
+    "input_method": "Input Methods",
+    "keyboard_layout": "Keyboard Layouts",
+}
+
+
+def _safe_artifact_target(target: Optional[str], fallback: str, token: str) -> Path:
+    """Turn an optional artifact target into a safe relative path.
+
+    Cask targets are normally basenames (or a small relative path) inside the
+    artifact's Library directory.  Refuse absolute paths, home-relative paths
+    and ``..`` traversal so a malformed cask cannot escape ``library_root``.
+    """
+
+    if target is None or not str(target).strip():
+        candidate = Path(fallback)
+    else:
+        text = str(target)
+        if text.startswith("~"):
+            raise CaskError(f"{token}: unsafe artifact target {target!r}")
+        candidate = Path(text)
+    if (
+        candidate.is_absolute()
+        or candidate.drive
+        or not candidate.parts
+        or any(part in ("", "..") for part in candidate.parts)
+    ):
+        raise CaskError(f"{token}: unsafe artifact target {target!r}")
+    return candidate
+
+
 def _archive_kind(path: Path) -> str:
     suffix = path.name.lower()
     if suffix.endswith(".pkg"):
@@ -195,11 +239,15 @@ class CaskInstaller:
         downloader: Optional[Downloader] = None,
         appdir: Optional[Path] = None,
         pkg_root: Optional[Path] = None,
+        library_root: Optional[Path] = None,
     ):
         self.config = config
         self.downloader = downloader or Downloader(config.downloads, config.bottle_dirs)
         self.appdir = Path(appdir).expanduser() if appdir else config.applications
         self.pkg_root = Path(pkg_root).expanduser() if pkg_root else (config.prefix / "pkgroot")
+        self.library_root = (
+            Path(library_root).expanduser() if library_root else (config.prefix / "Library")
+        )
 
     # -- paths -----------------------------------------------------------
     def room(self, cask: Cask, version: Optional[str] = None) -> Path:
@@ -234,44 +282,57 @@ class CaskInstaller:
             self._remove_room(room)
 
         cask.appdir = str(self.appdir)
-        url = cask.resolved_url()
-        digest = cask.resolved_sha256()
-        if not digest:
-            raise CaskError(f"{cask.token}: no sha256 for {cask.resolved_arch()}")
-        hint = f"{cask.token}-{version}.{Path(url.split('?', 1)[0]).suffix or 'download'}"
-        archive = self.downloader.fetch(url, digest, hint=hint)
+        installed: list[str] = []
+        # A bare ``stage_only`` cask has nothing to download.  When download
+        # metadata is present it is still fetched and verified, matching normal
+        # cask staging; only artifact installation is skipped.
+        bookkeeping_only = cask.stage_only and not cask.url and not cask.resolved_sha256()
+        if not bookkeeping_only:
+            url = cask.resolved_url()
+            digest = cask.resolved_sha256()
+            if not digest:
+                raise CaskError(f"{cask.token}: no sha256 for {cask.resolved_arch()}")
+            hint = f"{cask.token}-{version}.{Path(url.split('?', 1)[0]).suffix or 'download'}"
+            archive = self.downloader.fetch(url, digest, hint=hint)
+            kind = _archive_kind(archive)
+        else:
+            url = None
+            digest = None
+            kind = None
 
-        kind = _archive_kind(archive)
         room.parent.mkdir(parents=True, exist_ok=True)
         room.mkdir(parents=True, exist_ok=True)
         metadata = room / ".metadata"
         metadata.mkdir(exist_ok=True)
-        installed: list[str] = []
 
-        with tempfile.TemporaryDirectory(prefix="pybrew-cask-") as temporary:
-            temp_root = Path(temporary)
-            if kind == "dmg":
-                if not os.path.exists("/usr/bin/hdiutil"):
-                    raise CaskError("dmg casks require hdiutil (macOS)")
-                with _MountedImage(archive, temp_root / "mount") as source_root:
-                    installed = self._install_artifacts(cask, source_root, room, force)
-            elif kind == "zip":
-                _safe_extract_zip(archive, temp_root)
-                installed = self._install_artifacts(cask, temp_root, room, force)
-            elif kind == "tar":
-                safe_extract_tar(archive, temp_root)
-                installed = self._install_artifacts(cask, temp_root, room, force)
-            elif kind == "pkg":
-                installed = self._install_artifacts(cask, archive.parent, room, force, archive=archive)
-            else:
-                shutil.rmtree(room, ignore_errors=True)
-                raise CaskError(f"{cask.token}: unsupported cask archive type for {url}")
+        if not bookkeeping_only:
+            with tempfile.TemporaryDirectory(prefix="pybrew-cask-") as temporary:
+                temp_root = Path(temporary)
+                if kind == "dmg":
+                    if not os.path.exists("/usr/bin/hdiutil"):
+                        raise CaskError("dmg casks require hdiutil (macOS)")
+                    with _MountedImage(archive, temp_root / "mount") as source_root:
+                        installed = self._install_artifacts(cask, source_root, room, force)
+                elif kind == "zip":
+                    _safe_extract_zip(archive, temp_root)
+                    installed = self._install_artifacts(cask, temp_root, room, force)
+                elif kind == "tar":
+                    safe_extract_tar(archive, temp_root)
+                    installed = self._install_artifacts(cask, temp_root, room, force)
+                elif kind == "pkg":
+                    installed = self._install_artifacts(
+                        cask, archive.parent, room, force, archive=archive
+                    )
+                else:
+                    shutil.rmtree(room, ignore_errors=True)
+                    raise CaskError(f"{cask.token}: unsupported cask archive type for {url}")
 
         receipt = {
             "token": cask.token,
             "version": version,
             "url": url,
             "sha256": digest,
+            "stage_only": cask.stage_only,
             "artifacts": [
                 {"kind": artifact.kind, "source": artifact.source, "target": artifact.target}
                 for artifact in cask.resolved_artifacts()
@@ -293,6 +354,8 @@ class CaskInstaller:
         archive: Optional[Path] = None,
     ) -> list[str]:
         installed: list[str] = []
+        if cask.stage_only:
+            return installed
         artifacts = cask.resolved_artifacts()
         appdir = self.appdir
         appdir.mkdir(parents=True, exist_ok=True)
@@ -353,9 +416,42 @@ class CaskInstaller:
                     if not destination.exists():
                         shutil.copytree(app_source, destination, symlinks=True)
                         installed.append(str(destination))
+            elif artifact.kind in LIBRARY_ARTIFACT_DIRS:
+                self._install_library_artifact(
+                    cask, artifact, source_root, force, installed
+                )
+            elif artifact.kind == "stage_only":
+                # A stage_only artifact entry installs nothing.
+                continue
             else:
                 raise CaskError(f"{cask.token}: unsupported artifact {artifact.kind}")
         return installed
+
+    def _install_library_artifact(
+        self,
+        cask: Cask,
+        artifact: Artifact,
+        source_root: Path,
+        force: bool,
+        installed: list[str],
+    ) -> None:
+        source = self._find(source_root, artifact.source)
+        if source is None:
+            raise CaskError(
+                f"{cask.token}: {artifact.kind} {artifact.source!r} not found in archive"
+            )
+        relative = _safe_artifact_target(artifact.target, source.name, cask.token)
+        destination = self.library_root / LIBRARY_ARTIFACT_DIRS[artifact.kind] / relative
+        if destination.exists() or destination.is_symlink():
+            if not force:
+                raise CaskError(f"{cask.token}: {destination} already exists")
+            self._remove_path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if source.is_dir():
+            shutil.copytree(source, destination, symlinks=True)
+        else:
+            shutil.copy2(source, destination)
+        installed.append(str(destination))
 
     def _install_pkg(
         self,
@@ -455,38 +551,48 @@ class CaskInstaller:
         return rows
 
     def upgrade(self, cask: Cask) -> CaskInstallResult:
-        """Install the current cask version and remove superseded room metadata."""
+        """Install the current cask version and clean up superseded artifacts.
+
+        Receipts are the source of truth for installed paths.  Paths recorded
+        by old versions are removed unless the new receipt also owns the same
+        path (or an overlapping parent/child path, which can happen when a
+        bundle payload moves); those belong to the new installation.
+        """
 
         old_versions = self.installed_versions(cask.token)
         result = self.install(cask, force=True)
         if result.skipped:
             return result
-        new_receipt = result.room / ".metadata" / "receipt.json"
-        new_paths: set[str] = set()
-        if new_receipt.is_file():
-            try:
-                data = __import__("json").loads(new_receipt.read_text())
-                new_paths = {str(path) for path in data.get("installed", [])}
-            except Exception:
-                new_paths = set()
+        new_paths = self._installed_paths(result.room)
         for version in old_versions:
             if version == result.version:
                 continue
             old_room = self.config.caskroom / cask.token / version
-            old_receipt = old_room / ".metadata" / "receipt.json"
-            if old_receipt.is_file():
-                try:
-                    data = __import__("json").loads(old_receipt.read_text())
-                    for path_str in data.get("installed", []):
-                        if str(path_str) in new_paths:
-                            continue
-                        path = Path(path_str)
-                        if path.exists() or path.is_symlink():
-                            self._remove_path(path)
-                except Exception:
-                    pass
+            for path in self._installed_paths(old_room):
+                if self._path_shared_with_receipt(path, new_paths):
+                    continue
+                if path.exists() or path.is_symlink():
+                    self._remove_path(path)
             self._remove_path(old_room)
         return result
+
+    @staticmethod
+    def _installed_paths(room: Path) -> list[Path]:
+        receipt = room / ".metadata" / "receipt.json"
+        if not receipt.is_file():
+            return []
+        try:
+            data = __import__("json").loads(receipt.read_text())
+        except Exception:
+            return []
+        return [Path(str(path)) for path in data.get("installed", [])]
+
+    @staticmethod
+    def _path_shared_with_receipt(path: Path, receipt_paths: Iterable[Path]) -> bool:
+        for other in receipt_paths:
+            if path == other or path in other.parents or other in path.parents:
+                return True
+        return False
 
     # -- uninstall -------------------------------------------------------
     def _run_uninstall_actions(self, cask: Cask) -> None:

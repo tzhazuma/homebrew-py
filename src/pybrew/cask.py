@@ -43,6 +43,7 @@ class Cask:
     depends_on: dict[str, Any] = field(default_factory=dict)
     conflicts_with: dict[str, Any] = field(default_factory=dict)
     auto_updates: bool = False
+    stage_only: bool = False
     language: Optional[str] = None
     arch: Optional[str] = None
     arch_map: dict[str, str] = field(default_factory=dict)
@@ -140,6 +141,33 @@ class Cask:
             "caveats": self.caveats,
         }
 
+
+# Artifact stanzas that name a file or bundle to install.  ``stage_only`` is
+# deliberately not included: it is a cask-level flag rather than an artifact.
+_ARTIFACT_KINDS = frozenset(
+    {
+        "app",
+        "appimage",
+        "artifact",
+        "audio_unit_plugin",
+        "binary",
+        "colorpicker",
+        "dictionary",
+        "font",
+        "input_method",
+        "installer",
+        "keyboard_layout",
+        "mdimporter",
+        "pkg",
+        "prefpane",
+        "qlplugin",
+        "screen_saver",
+        "service",
+        "suite",
+        "vst3_plugin",
+        "vst_plugin",
+    }
+)
 
 _ARCH_NAMES = {
     "big_sur": 11,
@@ -423,10 +451,18 @@ class CaskParser:
                     cask.arch_map[key] = str(value)
             if "arm" in kwargs and "intel" in kwargs:
                 cask.arch = "arm64" if platform.machine().lower() in ("arm64", "aarch64") else "intel"
-        elif name in ("app", "binary", "pkg", "suite", "artifact", "appimage", "installer"):
+        elif name in _ARTIFACT_KINDS:
             source = str(args[0]) if args else ""
             target = kwargs.get("target")
             cask.artifacts.append(Artifact(name, source, str(target) if target else None, kwargs))
+        elif name == "stage_only":
+            if args:
+                cask.stage_only = not (
+                    args[0] is False
+                    or str(args[0]).strip().lower() in ("false", "0", "no")
+                )
+            else:
+                cask.stage_only = True
         elif name == "uninstall":
             cask.uninstall.update({str(k): v for k, v in kwargs.items()})
             if args:
