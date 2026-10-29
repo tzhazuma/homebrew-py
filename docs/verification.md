@@ -758,9 +758,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `d649fde` (Formula#python3)
-- CI run for `d649fde`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40968891545>
+- Latest feature commit: `739b666` (service nice directive)
+- CI run for `739b666`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40969567091>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
