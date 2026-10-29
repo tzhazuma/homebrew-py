@@ -52,6 +52,7 @@ class Cask:
     appdir: Optional[str] = None
     caveats: Optional[str] = None
     caveats_source: Optional[str] = None
+    livecheck_source: Optional[str] = None
     deprecated: bool = False
     deprecation_reason: Optional[str] = None
     disabled: bool = False
@@ -306,6 +307,8 @@ class CaskParser:
                 self._capture_script(name, opener)
             elif name == "caveats" and block:
                 self.cask.caveats_source = self._consume_block_body(opener, capture=True)
+            elif name == "livecheck" and block:
+                self.cask.livecheck_source = self._consume_block_body(opener, capture=True)
             elif block:
                 self._skip_block_body(opener)
             else:

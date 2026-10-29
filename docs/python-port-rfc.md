@@ -61,7 +61,7 @@ A clean-room Python 3.9+ package (`pybrew`) with no runtime dependencies:
 
 ## Validation
 
-- 523 tests pass, 5 opt-in tests skipped (`pytest -q`).
+- 524 tests pass, 5 opt-in tests skipped (`pytest -q`).
 - 15 real homebrew-core formulae (bash, git, curl, openssl@3, python@3.12, ...)
   parse to exactly the desc/homepage/license/version/dependency values returned
   by `brew info --json=v2` (Homebrew 7.0.9).

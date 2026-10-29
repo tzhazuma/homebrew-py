@@ -797,3 +797,18 @@ def test_cask_deprecation_reason() -> None:
     )
     assert cask.deprecated is True
     assert cask.deprecation_reason == "replaced by newy"
+
+
+def test_cask_livecheck_source_is_captured() -> None:
+    cask = parse_cask_source(
+        'cask "livey" do\n'
+        '  version "1.0"\n'
+        '  livecheck do\n'
+        '    url :url\n'
+        '    regex(/v(\\d+)/i)\n'
+        '  end\n'
+        '  app "Livey.app"\n'
+        'end\n'
+    )
+    assert cask.livecheck_source is not None
+    assert "regex" in cask.livecheck_source
