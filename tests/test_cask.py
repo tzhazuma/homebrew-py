@@ -400,3 +400,37 @@ end
     assert (config.prefix / "share/bash-completion/completions/tool.bash").is_file()
     assert (config.prefix / "share/zsh/site-functions/_tool").is_file()
     assert (config.prefix / "share/fish/vendor_completions.d/tool.fish").is_file()
+
+
+def test_install_manpage_artifact(tmp_path: Path) -> None:
+    archive = tmp_path / "Manly.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("man/tool.1", ".TH TOOL 1\n")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "m" / "manly.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        f'''cask "manly" do
+  version "1.0"
+  sha256 "{digest}"
+  url "{archive.as_uri()}"
+  manpage "man/tool.1"
+end
+'''
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    installer.install(CaskLoader(discover_taps([tap])).load("manly"))
+
+    manpage = config.prefix / "share/man/man1/tool.1"
+    assert manpage.is_file()
+    assert ".TH TOOL 1" in manpage.read_text()

@@ -906,6 +906,10 @@ class CaskInstaller:
                     if not destination.exists():
                         shutil.copytree(app_source, destination, symlinks=True)
                         installed.append(str(destination))
+            elif artifact.kind == "manpage":
+                self._install_manpage_artifact(
+                    cask, artifact, source_root, force, installed
+                )
             elif artifact.kind in COMPLETION_ARTIFACT_DIRS:
                 self._install_completion_artifact(
                     cask, artifact, source_root, force, installed
@@ -920,6 +924,31 @@ class CaskInstaller:
             else:
                 raise CaskError(f"{cask.token}: unsupported artifact {artifact.kind}")
         return installed
+
+    def _install_manpage_artifact(
+        self,
+        cask: Cask,
+        artifact: Artifact,
+        source_root: Path,
+        force: bool,
+        installed: list[str],
+    ) -> None:
+        source = self._find(source_root, artifact.source)
+        if source is None:
+            raise CaskError(
+                f"{cask.token}: manpage {artifact.source!r} not found in archive"
+            )
+        suffix = source.suffix.lstrip(".")
+        section = suffix[0] if suffix and suffix[0].isdigit() else "1"
+        relative = _safe_artifact_target(artifact.target, source.name, cask.token)
+        destination = self.config.prefix / "share" / "man" / f"man{section}" / relative
+        if destination.exists() or destination.is_symlink():
+            if not force:
+                raise CaskError(f"{cask.token}: {destination} already exists")
+            self._remove_path(destination)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+        installed.append(str(destination))
 
     def _install_completion_artifact(
         self,

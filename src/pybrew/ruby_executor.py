@@ -1760,6 +1760,44 @@ class << ENV
     append("CXXFLAGS", "-std=c++11")
   end
 
+  def cxx14
+    append("CXXFLAGS", "-std=c++14")
+  end
+
+  def cxx17
+    append("CXXFLAGS", "-std=c++17")
+  end
+
+  def cxx20
+    append("CXXFLAGS", "-std=c++20")
+  end
+
+  def Os
+    set_optimization("-Os")
+  end
+
+  def Oz
+    set_optimization("-Oz")
+  end
+
+  def Og
+    set_optimization("-Og")
+  end
+
+  def remove_from_cflags(*flags)
+    remove("CFLAGS", flags.join(" "))
+    remove("CXXFLAGS", flags.join(" "))
+  end
+
+  def remove_from_ldflags(*flags)
+    remove("LDFLAGS", flags.join(" "))
+  end
+
+  def enable_warnings
+    append("CFLAGS", "-Wall")
+    append("CXXFLAGS", "-Wall")
+  end
+
   def libxml2
     xml2_config = find_tool("xml2-config")
     if xml2_config

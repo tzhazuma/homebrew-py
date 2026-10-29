@@ -176,6 +176,7 @@ _ARTIFACT_KINDS = frozenset(
         "input_method",
         "installer",
         "keyboard_layout",
+        "manpage",
         "mdimporter",
         "pkg",
         "prefpane",

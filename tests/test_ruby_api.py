@@ -1621,3 +1621,30 @@ def test_development_tools_clt_and_compiler_api(
     assert lines[2] in ("true", "false")
     assert lines[3] in ("true", "false")
     assert lines[4] in ("clang", "gcc")
+
+
+def test_env_cxx_optimization_and_removal_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-env-flags",
+        "1.0",
+        (
+            '  ENV["CFLAGS"] = "-Wall -DFOO"\n'
+            '  ENV["CXXFLAGS"] = "-Wall -DFOO"\n'
+            '  ENV.remove_from_cflags("-DFOO")\n'
+            '  ENV.cxx17\n'
+            '  ENV.Oz\n'
+            '  ENV.enable_warnings\n'
+            '  ENV["LDFLAGS"] = "-lfoo -lbar"\n'
+            '  ENV.remove_from_ldflags("-lbar")\n'
+            '  (prefix/"flags").write [ENV["CFLAGS"], ENV["CXXFLAGS"], ENV["LDFLAGS"]].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    lines = (keg / "flags").read_text().splitlines()
+    assert "-DFOO" not in lines[0]
+    assert "-Oz" in lines[0] and "-Wall" in lines[0]
+    assert "-std=c++17" in lines[1] and "-DFOO" not in lines[1]
+    assert "-lfoo" in lines[2] and "-lbar" not in lines[2]
