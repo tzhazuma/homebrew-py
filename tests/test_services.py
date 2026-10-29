@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import plistlib
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -9,7 +10,13 @@ from pybrew.errors import PybrewError
 from pybrew.models import Formula
 from pybrew.paths import Config
 from pybrew.ruby_parser import parse_formula_source
-from pybrew.services import LaunchctlRunner, ServiceManager, parse_service_block
+from pybrew.services import (
+    LaunchctlRunner,
+    ServiceError,
+    ServiceManager,
+    SystemctlRunner,
+    parse_service_block,
+)
 
 SERVICE_FORMULA = '''
 class Svc < Formula
@@ -65,6 +72,46 @@ def _install_fake_keg(config: Config, formula: Formula) -> None:
     executable.chmod(0o755)
     opt = config.opt_path(formula.name)
     opt.symlink_to(keg)
+
+
+def _formula_with_service(body: str) -> Formula:
+    source = f'''
+class Svc < Formula
+  desc "service fixture"
+  homepage "https://example.com/svc"
+  url "https://example.com/svc-1.0.tar.gz"
+  sha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  license "MIT"
+
+  service do
+{textwrap.indent(textwrap.dedent(body).strip(), "    ")}
+  end
+end
+'''
+    return parse_formula_source(source, name="svc")
+
+
+def _make_fake_systemctl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
+    script = tmp_path / "fake-systemctl"
+    log = tmp_path / "systemctl.log"
+    script.write_text(
+        "#!/bin/sh\n"
+        'echo "$@" >> "$FAKE_SYSTEMCTL_LOG"\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    script.chmod(0o755)
+    monkeypatch.setenv("FAKE_SYSTEMCTL_LOG", str(log))
+    return script, log
+
+
+def _systemd_manager(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config: Config
+) -> tuple[ServiceManager, Path]:
+    monkeypatch.setenv("PYBREW_SERVICE_BACKEND", "systemd")
+    monkeypatch.setenv("PYBREW_SERVICE_DIR", str(tmp_path / "units"))
+    script, log = _make_fake_systemctl(tmp_path, monkeypatch)
+    return ServiceManager(config, SystemctlRunner(str(script))), log
 
 
 def test_parse_service_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -213,3 +260,328 @@ def test_cleanup_removes_orphan_service_files(tmp_path: Path, monkeypatch: pytes
     assert orphan in removed
     assert not orphan.exists()
     assert installed_file.exists()
+
+
+FULL_SERVICE_BODY = """
+run [opt_bin/"svc", "--foreground"]
+working_dir var/"lib/svc"
+log_path var/"log/svc.log"
+error_log_path var/"log/svc.err.log"
+keep_alive network_state: true, successful_exit: false, path: var/"run/svc.pid", interval: 45
+process_type :background
+interval 300
+environment_variables PATH: std_service_path_env, FOO: "bar", NUM: 7
+require_root true
+run_at_load false
+"""
+
+
+def test_parse_extended_service_dsl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula_with_service(FULL_SERVICE_BODY)
+    spec = parse_service_block(formula, config)
+
+    assert spec.run == [str(config.opt_path("svc") / "bin" / "svc"), "--foreground"]
+    assert spec.working_dir == str(config.prefix / "var" / "lib" / "svc")
+    assert spec.log_path == str(config.prefix / "var" / "log" / "svc.log")
+    assert spec.error_log_path == str(config.prefix / "var" / "log" / "svc.err.log")
+    assert spec.keep_alive == {
+        "network_state": True,
+        "successful_exit": False,
+        "path": str(config.prefix / "var" / "run" / "svc.pid"),
+        "interval": 45,
+    }
+    assert spec.process_type == "background"
+    assert spec.interval == 300
+    assert spec.run_at_load is False
+    assert spec.require_root is True
+    assert spec.environment_variables == {
+        "PATH": str(config.prefix / "bin"),
+        "FOO": "bar",
+        "NUM": "7",
+    }
+
+
+def test_parse_keep_alive_hash_forms(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _config(tmp_path, monkeypatch)
+    cases = {
+        "keep_alive network_state: true": {"network_state": True},
+        "keep_alive successful_exit: false": {"successful_exit": False},
+        "keep_alive crashed: true": {"crashed": True},
+        "keep_alive always: true": {"always": True},
+        "keep_alive interval: 60": {"interval": 60},
+        "keep_alive network_state: true, successful_exit: true": {
+            "network_state": True,
+            "successful_exit": True,
+        },
+    }
+    for directive, expected in cases.items():
+        formula = _formula_with_service(f'run [opt_bin/"svc"]\n{directive}')
+        spec = parse_service_block(formula, config)
+        assert spec.keep_alive == expected, directive
+
+    formula = _formula_with_service(
+        'run [opt_bin/"svc"]\nkeep_alive path: var/"run/svc.pid"'
+    )
+    assert parse_service_block(formula, config).keep_alive == {
+        "path": str(config.prefix / "var" / "run" / "svc.pid")
+    }
+
+
+def test_parse_keep_alive_boolean_forms(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _config(tmp_path, monkeypatch)
+    for directive, expected in (("keep_alive true", True), ("keep_alive false", False)):
+        formula = _formula_with_service(f'run [opt_bin/"svc"]\n{directive}')
+        assert parse_service_block(formula, config).keep_alive is expected
+
+
+def test_parse_hash_literal_and_rocket_forms(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula_with_service(
+        """
+        run [opt_bin/"svc"]
+        keep_alive({ network_state: true })
+        environment_variables({ "FOO" => "bar", :BAZ => "qux" })
+        """
+    )
+    spec = parse_service_block(formula, config)
+    assert spec.keep_alive == {"network_state": True}
+    assert spec.environment_variables["FOO"] == "bar"
+    assert spec.environment_variables["BAZ"] == "qux"
+
+
+def test_plist_renders_extended_fields(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula_with_service(FULL_SERVICE_BODY)
+    manager = ServiceManager(config)
+    spec = manager.spec_for(formula)
+    payload = manager.plist_payload(formula, spec)
+
+    assert payload["Label"] == "homebrew.mxcl.svc"
+    assert payload["RunAtLoad"] is False
+    assert payload["KeepAlive"] == {
+        "NetworkState": True,
+        "SuccessfulExit": False,
+        "PathState": str(config.prefix / "var" / "run" / "svc.pid"),
+    }
+    assert payload["ThrottleInterval"] == 45
+    assert payload["StartInterval"] == 300
+    assert payload["ProcessType"] == "Background"
+    assert payload["WorkingDirectory"] == str(config.prefix / "var" / "lib" / "svc")
+    assert payload["StandardOutPath"] == str(config.prefix / "var" / "log" / "svc.log")
+    assert payload["StandardErrorPath"] == str(config.prefix / "var" / "log" / "svc.err.log")
+    assert payload["EnvironmentVariables"]["FOO"] == "bar"
+    assert payload["EnvironmentVariables"]["NUM"] == "7"
+    assert payload["EnvironmentVariables"]["PATH"] == str(config.prefix / "bin")
+    # require_root is stored on the spec but never changes the plist user.
+    assert "User" not in payload and "UserName" not in payload
+
+
+def test_plist_keep_alive_boolean_and_interval_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    manager = ServiceManager(config)
+
+    enabled = manager.plist_payload(
+        _formula_with_service('run [opt_bin/"svc"]\nkeep_alive true'),
+        manager.spec_for(_formula_with_service('run [opt_bin/"svc"]\nkeep_alive true')),
+    )
+    assert enabled["KeepAlive"] is True
+    assert "ThrottleInterval" not in enabled
+
+    disabled_formula = _formula_with_service('run [opt_bin/"svc"]\nkeep_alive false')
+    disabled = manager.plist_payload(disabled_formula, manager.spec_for(disabled_formula))
+    assert "KeepAlive" not in disabled
+
+    interval_formula = _formula_with_service(
+        'run [opt_bin/"svc"]\nkeep_alive interval: 30'
+    )
+    interval = manager.plist_payload(interval_formula, manager.spec_for(interval_formula))
+    assert interval["KeepAlive"] is True
+    assert interval["ThrottleInterval"] == 30
+
+
+def test_plist_sockets_legacy_timers_and_launch_only_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula_with_service(
+        """
+        run [opt_bin/"svc"]
+        sockets http: "tcp://127.0.0.1:8080", https: "udp://[::1]:5353"
+        macos_legacy_timers true
+        launch_only_once true
+        """
+    )
+    manager = ServiceManager(config)
+    spec = manager.spec_for(formula)
+    assert spec.sockets["http"] == {"host": "127.0.0.1", "port": "8080", "type": "tcp"}
+    assert spec.sockets["https"] == {"host": "::1", "port": "5353", "type": "udp"}
+    assert spec.macos_legacy_timers is True
+    assert spec.launch_only_once is True
+
+    payload = manager.plist_payload(formula, spec)
+    assert payload["Sockets"]["http"] == {
+        "SockNodeName": "127.0.0.1",
+        "SockServiceName": "8080",
+        "SockProtocol": "TCP",
+    }
+    assert payload["Sockets"]["https"] == {
+        "SockNodeName": "::1",
+        "SockServiceName": "5353",
+        "SockProtocol": "UDP",
+    }
+    assert payload["LegacyTimers"] is True
+    assert payload["LaunchOnlyOnce"] is True
+
+
+def test_plist_single_string_socket_uses_listeners(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula_with_service(
+        'run [opt_bin/"svc"]\nsockets "tcp://0.0.0.0:80"'
+    )
+    manager = ServiceManager(config)
+    payload = manager.plist_payload(formula, manager.spec_for(formula))
+    assert payload["Sockets"] == {
+        "listeners": {
+            "SockNodeName": "0.0.0.0",
+            "SockServiceName": "80",
+            "SockProtocol": "TCP",
+        }
+    }
+
+
+def test_systemd_unit_renders_extended_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula_with_service(
+        """
+        run [opt_bin/"svc", "--foreground"]
+        working_dir var/"lib/svc"
+        log_path var/"log/svc.log"
+        error_log_path var/"log/svc.err.log"
+        keep_alive successful_exit: false
+        throttle_interval 20
+        launch_only_once true
+        environment_variables FOO: "bar"
+        """
+    )
+    manager, _ = _systemd_manager(tmp_path, monkeypatch, config)
+    unit = manager.unit_text(formula, manager.spec_for(formula))
+
+    assert "[Unit]" in unit and "[Service]" in unit
+    assert "Type=oneshot" in unit
+    assert "Restart=on-failure" in unit
+    assert "RestartSec=20" in unit
+    assert "ExecStart=" in unit
+    assert f"WorkingDirectory={config.prefix / 'var' / 'lib' / 'svc'}" in unit
+    assert f"StandardOutput=append:{config.prefix / 'var' / 'log' / 'svc.log'}" in unit
+    assert (
+        f"StandardError=append:{config.prefix / 'var' / 'log' / 'svc.err.log'}" in unit
+    )
+    assert 'Environment="FOO=bar"' in unit
+
+
+@pytest.mark.parametrize(
+    "keep_alive,restart",
+    [
+        ("true", "always"),
+        ("false", "no"),
+        ("successful_exit: true", "on-success"),
+        ("successful_exit: false", "on-failure"),
+        ("network_state: true", "on-failure"),
+        ("crashed: true", "on-failure"),
+        ("interval: 30", "always"),
+    ],
+)
+def test_systemd_keep_alive_restart_modes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    keep_alive: str,
+    restart: str,
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula_with_service(f'run [opt_bin/"svc"]\nkeep_alive {keep_alive}')
+    manager, _ = _systemd_manager(tmp_path, monkeypatch, config)
+    unit = manager.unit_text(formula, manager.spec_for(formula))
+    assert f"Restart={restart}" in unit
+    if keep_alive == "interval: 30":
+        assert "RestartSec=30" in unit
+
+
+def test_systemd_start_stop_with_fake_runner_extended_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula_with_service(
+        """
+        run [opt_bin/"svc"]
+        keep_alive network_state: true
+        launch_only_once true
+        """
+    )
+    _install_fake_keg(config, formula)
+    manager, log = _systemd_manager(tmp_path, monkeypatch, config)
+
+    path = manager.start(formula)
+    unit = path.read_text()
+    assert path.name == "homebrew.mxcl.svc.service"
+    assert "Type=oneshot" in unit
+    assert "Restart=on-failure" in unit
+    assert "daemon-reload" in log.read_text()
+    assert "start homebrew.mxcl.svc.service" in log.read_text()
+    assert manager.status(formula) == "started"
+
+    manager.stop(formula)
+    assert "stop homebrew.mxcl.svc.service" in log.read_text()
+
+
+@pytest.mark.parametrize(
+    "body,match",
+    [
+        ("keep_alive bogus: true", "keep_alive"),
+        ('keep_alive successful_exit: "maybe"', "successful_exit"),
+        ('sockets "not-a-socket"', "sockets"),
+        ('sockets "tcp://example.com:80"', "IPv4"),
+        ('sockets "icmp://127.0.0.1:1"', "protocol"),
+        ("process_type :daemon", "process_type"),
+        ('interval "soon"', "interval"),
+        ('run_at_load "maybe"', "run_at_load"),
+    ],
+)
+def test_invalid_service_dsl_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    body: str,
+    match: str,
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula_with_service(f'run [opt_bin/"svc"]\n{body}')
+    with pytest.raises(ServiceError, match=match):
+        parse_service_block(formula, config)
+
+
+def test_parse_multiline_keyword_and_parenthesized_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula_with_service(
+        """
+        run [opt_bin/"svc"]
+        keep_alive network_state: true,
+                   successful_exit: false
+        environment_variables(
+          PATH: std_service_path_env,
+          FOO: "bar"
+        )
+        """
+    )
+    spec = parse_service_block(formula, config)
+    assert spec.keep_alive == {"network_state": True, "successful_exit": False}
+    assert spec.environment_variables["FOO"] == "bar"

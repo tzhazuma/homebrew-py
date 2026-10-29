@@ -1094,6 +1094,7 @@ class SourceBuilder:
                 keg,
                 env=self._build_env(keg),
                 verbose=self.verbose,
+                downloader=self.downloader,
             )
             if not any(keg.iterdir()):
                 raise BuildError(

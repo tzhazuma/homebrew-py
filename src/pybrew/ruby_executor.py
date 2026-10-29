@@ -42,6 +42,9 @@ from .version import compare_versions, detect_version
 #: Environment variable that opts a build into the arbitrary-Ruby bridge.
 ALLOW_ENV = "PYBREW_ALLOW_ARBITRARY_RUBY"
 
+#: Directory under the build root where the Ruby bridge stages resources.
+RESOURCE_STAGE_DIR = ".pybrew-resources"
+
 #: Environment variable overriding the Ruby interpreter used by the bridge.
 RUBY_ENV = "PYBREW_RUBY"
 
@@ -2122,7 +2125,11 @@ class PybrewResource
   def staged_path
     staged = @info["staged"]
     if staged.nil? || staged.to_s.empty?
-      raise "resource(#{name.inspect}) has not been staged: the pybrew opt-in Ruby bridge does not download formula resources"
+      reason = @info["staged_error"]
+      if reason.nil? || reason.to_s.empty?
+        reason = "the pybrew opt-in Ruby bridge could not stage it"
+      end
+      raise "resource(#{name.inspect}) has not been staged: #{reason}"
     end
     path = Pathname.new(staged.to_s)
     unless path.directory?
@@ -2131,12 +2138,23 @@ class PybrewResource
     path
   end
 
+  # Like Homebrew's ``Resource#stage``: without a block return the staged
+  # directory, with a block change into it and yield that directory.  For
+  # resources unpacked by the bridge, enter a single top-level directory
+  # produced by the archive, exactly like Homebrew's unpack helper.
   def stage(*_args, &block)
     path = staged_path
-    if block.nil?
-      path
-    else
-      Dir.chdir(path.to_s) { block.call(path) }
+    return path if block.nil?
+
+    Dir.chdir(path.to_s) do
+      entries = Dir["*"].reject { |entry| entry == "__MACOSX" }
+      if @info["staged_from_archive"] == "true" &&
+         entries.length == 1 &&
+         File.directory?(entries.first)
+        Dir.chdir(entries.first) { block.call(Pathname.pwd) }
+      else
+        block.call(Pathname.pwd)
+      end
     end
   end
 
@@ -2505,9 +2523,11 @@ class PybrewInstallContext
     end
   end
 
-  # ``resource("name")`` never downloads anything in the opt-in bridge.  The
-  # object can still be queried (name/url/sha256/version); touching its staged
-  # path raises a clear error unless a staged path was provided to the bridge.
+  # ``resource("name")`` returns the resource metadata; resources are staged by
+  # Python before the Ruby body runs when the build has a downloader and the
+  # resource declares a URL and sha256.  The object can still be queried
+  # (name/url/sha256/version); touching its staged path raises a clear error
+  # when it could not be staged.
   def resource(name)
     pybrew_formula_ref.resource(name)
   end
@@ -2754,10 +2774,10 @@ def _resource_metadata(
 ) -> dict[str, dict[str, Optional[str]]]:
     """Return resource name/url/sha256/version metadata for the Ruby shim.
 
-    Resources are deliberately never downloaded here: the shim only exposes
-    their metadata and raises a clear error when a staged path is requested.
-    An explicit ``staged_path``/``staged`` attribute on the resource is passed
-    through as the staged path.
+    This function only describes the declared resources; downloading and
+    extraction happen separately in :func:`_stage_resources` when the caller
+    supplies a downloader.  An explicit ``staged_path``/``staged`` attribute on
+    the resource is passed through as the staged path.
     """
 
     resources = getattr(formula, "resources", None) or {}
@@ -2791,13 +2811,141 @@ def _attach_staged_resource_paths(
     exists the Ruby bridge reuses it instead of downloading anything.
     """
 
-    staged_root = Path(build_root) / ".pybrew-resources"
+    staged_root = Path(build_root) / RESOURCE_STAGE_DIR
     for name, info in resources.items():
         if info.get("staged"):
             continue
         candidate = staged_root / str(name)
         if candidate.is_dir():
             info["staged"] = str(candidate)
+
+
+def _safe_resource_name(name: str) -> str:
+    """Return ``name`` when it can be used as a staging directory name."""
+
+    text = str(name)
+    if (
+        not text
+        or text in {".", ".."}
+        or "/" in text
+        or "\\" in text
+        or Path(text).is_absolute()
+    ):
+        raise BuildError(f"unsafe formula resource name for staging: {text!r}")
+    return text
+
+
+def _extract_resource_archive(archive: Path, destination: Path) -> None:
+    """Extract a zip or tar(.gz) resource archive into ``destination`` safely.
+
+    Absolute member names, ``..`` traversal and archive links are rejected;
+    only regular files and directories are written.  Extraction errors are
+    reported as :class:`BuildError` so the Ruby install fails clearly.
+    """
+
+    import tarfile
+    import zipfile
+
+    if zipfile.is_zipfile(archive):
+        try:
+            with zipfile.ZipFile(archive) as bundle:
+                for info in bundle.infolist():
+                    name = info.filename
+                    parts = Path(name).parts
+                    if not name or name.startswith(("/", "\\")) or ".." in parts:
+                        raise BuildError(f"unsafe resource zip member: {name!r}")
+                    if ((info.external_attr >> 16) & 0o170000) == 0o120000:
+                        raise BuildError(
+                            f"resource zip links are not supported: {name!r}"
+                        )
+                    target = destination / name
+                    if info.is_dir():
+                        target.mkdir(parents=True, exist_ok=True)
+                        continue
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    with bundle.open(info) as source, open(target, "wb") as output:
+                        shutil.copyfileobj(source, output)
+        except zipfile.BadZipFile as error:
+            raise BuildError(
+                f"cannot read resource archive {archive}: {error}"
+            ) from error
+        return
+
+    try:
+        with tarfile.open(archive) as tar:
+            for member in tar.getmembers():
+                name = member.name
+                parts = Path(name).parts
+                if not name or name.startswith("/") or ".." in parts:
+                    raise BuildError(f"unsafe resource tar member: {name!r}")
+                target = destination / name
+                if member.isdir():
+                    target.mkdir(parents=True, exist_ok=True)
+                elif member.issym() or member.islnk():
+                    raise BuildError(f"resource tar links are not supported: {name!r}")
+                elif member.isfile():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    source = tar.extractfile(member)
+                    if source is None:
+                        raise BuildError(f"cannot read resource tar member: {name!r}")
+                    with source, open(target, "wb") as output:
+                        shutil.copyfileobj(source, output)
+                else:
+                    raise BuildError(
+                        f"resource tar member is not a file or directory: {name!r}"
+                    )
+    except tarfile.TarError as error:
+        raise BuildError(f"cannot read resource archive {archive}: {error}") from error
+
+
+def _stage_resources(
+    formula: Formula,
+    resources: dict[str, dict[str, Optional[str]]],
+    build_root: Path,
+    downloader: Optional[Any],
+) -> None:
+    """Download and stage declared resources for the Ruby shim.
+
+    Resources that are already staged (an explicit ``staged_path``/``staged``
+    attribute or a directory left under ``build_root/.pybrew-resources``) are
+    reused.  With a downloader, every remaining resource that has both a URL
+    and a SHA-256 is fetched with ``downloader.fetch`` and safely extracted
+    under ``build_root/.pybrew-resources/<name>``; that directory becomes the
+    resource's staged path.  Resources without a downloader, URL or checksum
+    stay metadata-only and record a clear reason for the Ruby side: nothing is
+    ever fetched silently.
+    """
+
+    for name in resources:
+        _safe_resource_name(name)
+    _attach_staged_resource_paths(resources, build_root)
+    staged_root = Path(build_root) / RESOURCE_STAGE_DIR
+    for name, info in resources.items():
+        if info.get("staged"):
+            continue
+        url = info.get("url")
+        sha256 = info.get("sha256")
+        if downloader is None:
+            info["staged_error"] = (
+                "no downloader was provided to the opt-in Ruby bridge"
+            )
+            continue
+        if not url:
+            info["staged_error"] = "the resource has no url"
+            continue
+        if not sha256:
+            info["staged_error"] = (
+                "the resource has no sha256; refusing to download it without verification"
+            )
+            continue
+        destination = staged_root / name
+        archive = downloader.fetch(str(url), str(sha256), hint=f"{formula.name}-{name}")
+        if destination.exists():
+            shutil.rmtree(destination)
+        destination.mkdir(parents=True)
+        _extract_resource_archive(archive, destination)
+        info["staged"] = str(destination)
+        info["staged_from_archive"] = "true"
 
 
 def execute_install_body(
@@ -2808,13 +2956,17 @@ def execute_install_body(
     *,
     env: Optional[dict[str, str]] = None,
     verbose: bool = False,
+    downloader: Optional[Any] = None,
 ) -> None:
     """Execute ``formula``'s raw ``def install`` body with Ruby.
 
     The Ruby process runs with ``build_root`` as its working directory and the
     supplied environment (normally the source-builder's Homebrew-like build
-    environment).  Any failure raises :class:`BuildError` containing the Ruby
-    stderr output and, when Ruby reports it, the failing formula line.
+    environment).  When ``downloader`` is provided, declared resources with a
+    URL and SHA-256 are fetched and staged under ``build_root`` before Ruby
+    runs; without it they stay metadata-only.  Any failure raises
+    :class:`BuildError` containing the Ruby stderr output and, when Ruby
+    reports it, the failing formula line.
     """
 
     build_root = Path(build_root)
@@ -2829,7 +2981,7 @@ def execute_install_body(
     ruby = _ruby_binary(formula)
     version = formula.version or "HEAD"
     resources = _resource_metadata(formula)
-    _attach_staged_resource_paths(resources, build_root)
+    _stage_resources(formula, resources, build_root, downloader)
     formulae = _formula_reference_map(formula, config, keg)
     formulae[formula.name]["resources"] = resources
     payload = {

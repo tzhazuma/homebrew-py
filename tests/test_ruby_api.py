@@ -9,15 +9,20 @@ no network access and no writes outside ``tmp_path``.
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
 import platform
 import shutil
 import struct
+import tarfile
+import zipfile
 from pathlib import Path
 
 import pytest
 
+import pybrew.download as download_module
+from pybrew.download import Downloader
 from pybrew.errors import BuildError, UnsupportedInstall
 from pybrew.models import Dependency, Formula, SourceSpec, is_linux, is_macos
 from pybrew.paths import Config
@@ -58,13 +63,93 @@ def _build(
     build_root: Path | None = None,
     keg: Path | None = None,
     verbose: bool = False,
+    downloader: Downloader | None = None,
 ) -> Path:
     build_root = build_root or tmp_path / "build"
     build_root.mkdir(exist_ok=True)
     keg = keg or tmp_path / "keg"
     keg.mkdir(exist_ok=True)
-    build_source(formula, _config(tmp_path), build_root, keg, verbose=verbose)
+    build_source(
+        formula,
+        _config(tmp_path),
+        build_root,
+        keg,
+        verbose=verbose,
+        downloader=downloader,
+    )
     return keg
+
+
+def _downloader(tmp_path: Path) -> Downloader:
+    return Downloader(tmp_path / "cache" / "downloads")
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _tar_resource(
+    destination: Path, top: str, files: dict[str, str]
+) -> Path:
+    """Write a synthetic ``.tar.gz`` resource with a single top-level dir."""
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(destination, "w:gz") as tar:
+        for name, text in files.items():
+            data = text.encode("utf-8")
+            info = tarfile.TarInfo(f"{top}/{name}")
+            info.size = len(data)
+            info.mode = 0o755
+            tar.addfile(info, io.BytesIO(data))
+    return destination
+
+
+def _zip_resource(
+    destination: Path, top: str | None, files: dict[str, str]
+) -> Path:
+    """Write a synthetic ``.zip`` resource (optionally wrapped in a top dir)."""
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(destination, "w") as bundle:
+        for name, text in files.items():
+            bundle.writestr(f"{top}/{name}" if top else name, text)
+    return destination
+
+
+def _unsafe_tar_resource(destination: Path, kind: str) -> Path:
+    """Write a tar resource that must be rejected by safe extraction."""
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(destination, "w:gz") as tar:
+        if kind == "traversal":
+            payload = b"escape\n"
+            info = tarfile.TarInfo("../escape.txt")
+            info.size = len(payload)
+            tar.addfile(info, io.BytesIO(payload))
+        elif kind == "symlink":
+            info = tarfile.TarInfo("link")
+            info.type = tarfile.SYMTYPE
+            info.linkname = "/etc/passwd"
+            tar.addfile(info)
+        else:  # pragma: no cover - test authoring guard
+            raise AssertionError(kind)
+    return destination
+
+
+def _unsafe_zip_resource(destination: Path, kind: str) -> Path:
+    """Write a zip resource that must be rejected by safe extraction."""
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(destination, "w") as bundle:
+        if kind == "traversal":
+            bundle.writestr("../escape.txt", "escape\n")
+        elif kind == "symlink":
+            info = zipfile.ZipInfo("link")
+            info.external_attr = 0o120777 << 16
+            bundle.writestr(info, "/etc/passwd")
+        else:  # pragma: no cover - test authoring guard
+            raise AssertionError(kind)
+    return destination
 
 
 def _elf_header(elf_type: int) -> bytes:
@@ -950,6 +1035,284 @@ def test_resource_stage_and_fetch_without_staged_path_are_clear(
     assert "has not been staged" in (keg / "fetch-error").read_text()
     # A URL without a detectable version yields no resource version.
     assert (keg / "resource-version").read_text() == ""
+
+
+def test_resource_auto_stage_tar_and_zip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+
+    # Fail loudly if the resource staging path ever tries to use the network.
+    original_open_url = download_module.open_url
+
+    def local_only(url, headers=None):
+        assert str(url).startswith("file://"), f"unexpected network access: {url}"
+        return original_open_url(url, headers)
+
+    monkeypatch.setattr(download_module, "open_url", local_only)
+
+    tar_archive = _tar_resource(
+        tmp_path / "src" / "data-1.0.tar.gz",
+        "data-1.0",
+        {"tool": "#!/bin/sh\necho tar-tool\n"},
+    )
+    zip_archive = _zip_resource(
+        tmp_path / "src" / "zdata-2.0.zip",
+        "zdata-2.0",
+        {"ziptool": "#!/bin/sh\necho zip-tool\n"},
+    )
+    formula = _formula(
+        "ruby-resource-auto-stage",
+        "1.0",
+        r'''
+  resource("data").stage do |dir|
+    (prefix/"data-stage").write dir.to_s
+    bin.install "tool"
+  end
+  resource("zdata").stage do
+    bin.install "ziptool"
+  end
+  (prefix/"data-path").write resource("data").staged_path.to_s
+  (prefix/"data-fetch").write resource("data").fetch.to_s
+  (prefix/"data-stage-noblock").write resource("data").stage.to_s
+  (prefix/"data-staged").write resource("data").staged?.to_s
+  (prefix/"zdata-staged").write resource("zdata").staged?.to_s
+''',
+    )
+    formula.resources["data"] = SourceSpec(
+        url=tar_archive.as_uri(), sha256=_sha256(tar_archive)
+    )
+    formula.resources["zdata"] = SourceSpec(
+        url=zip_archive.as_uri(), sha256=_sha256(zip_archive)
+    )
+
+    downloader = _downloader(tmp_path)
+    keg = _build(tmp_path, formula, downloader=downloader)
+
+    build_root = tmp_path / "build"
+    tar_stage = build_root / ".pybrew-resources" / "data"
+    zip_stage = build_root / ".pybrew-resources" / "zdata"
+    assert tar_stage.is_dir()
+    assert zip_stage.is_dir()
+    assert (tar_stage / "data-1.0" / "tool").is_file()
+    assert (zip_stage / "zdata-2.0" / "ziptool").is_file()
+
+    assert (keg / "bin" / "tool").read_text() == "#!/bin/sh\necho tar-tool\n"
+    assert (keg / "bin" / "ziptool").read_text() == "#!/bin/sh\necho zip-tool\n"
+
+    assert (keg / "data-staged").read_text() == "true"
+    assert (keg / "zdata-staged").read_text() == "true"
+    assert Path((keg / "data-path").read_text()).resolve() == tar_stage.resolve()
+    assert Path((keg / "data-fetch").read_text()).resolve() == tar_stage.resolve()
+    # ``stage`` without a block returns the staged directory.
+    assert (
+        Path((keg / "data-stage-noblock").read_text()).resolve()
+        == tar_stage.resolve()
+    )
+    # ``stage`` enters the single top-level directory of the archive.
+    assert (
+        Path((keg / "data-stage").read_text()).resolve()
+        == (tar_stage / "data-1.0").resolve()
+    )
+
+    cached = sorted(path.name for path in downloader.cache_dir.iterdir())
+    assert len(cached) == 2
+    assert any(name.startswith(_sha256(tar_archive)) for name in cached)
+    assert any(name.startswith(_sha256(zip_archive)) for name in cached)
+
+
+def test_resource_pre_staged_directory_is_reused_without_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-resource-pre-staged",
+        "1.0",
+        r'''
+  resource("data").stage do |dir|
+    (prefix/"stage-path").write dir.to_s
+    bin.install "tool"
+  end
+''',
+    )
+    # The URL is unusable on purpose: the pre-staged directory must win.
+    formula.resources["data"] = SourceSpec(
+        url="file:///does/not/exist/data-1.0.tar.gz", sha256="d" * 64
+    )
+    build_root = tmp_path / "build"
+    staged = build_root / ".pybrew-resources" / "data"
+    staged.mkdir(parents=True)
+    (staged / "tool").write_text("#!/bin/sh\necho pre-staged\n")
+
+    downloader = _downloader(tmp_path)
+    keg = _build(tmp_path, formula, build_root=build_root, downloader=downloader)
+
+    assert (keg / "bin" / "tool").read_text() == "#!/bin/sh\necho pre-staged\n"
+    assert Path((keg / "stage-path").read_text()).resolve() == staged.resolve()
+    assert list(downloader.cache_dir.iterdir()) == []
+
+
+def test_resource_auto_stage_without_sha256_stays_metadata_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    archive = _tar_resource(
+        tmp_path / "src" / "data-1.0.tar.gz",
+        "data-1.0",
+        {"tool": "tool\n"},
+    )
+    formula = _formula(
+        "ruby-resource-no-sha",
+        "1.0",
+        r'''
+  declared = resource("data")
+  (prefix/"staged").write declared.staged?.to_s
+  begin
+    declared.stage { }
+  rescue => error
+    (prefix/"stage-error").write error.message
+  end
+''',
+    )
+    formula.resources["data"] = SourceSpec(url=archive.as_uri(), sha256=None)
+
+    downloader = _downloader(tmp_path)
+    keg = _build(tmp_path, formula, downloader=downloader)
+
+    assert (keg / "staged").read_text() == "false"
+    error = (keg / "stage-error").read_text()
+    assert "has not been staged" in error
+    assert "sha256" in error
+    assert not (tmp_path / "build" / ".pybrew-resources" / "data").exists()
+    # Nothing was fetched without a checksum.
+    assert list(downloader.cache_dir.iterdir()) == []
+
+
+def test_resource_auto_stage_without_downloader_stays_metadata_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    archive = _tar_resource(
+        tmp_path / "src" / "data-1.0.tar.gz",
+        "data-1.0",
+        {"tool": "tool\n"},
+    )
+    formula = _formula(
+        "ruby-resource-no-downloader",
+        "1.0",
+        r'''
+  declared = resource("data")
+  (prefix/"staged").write declared.staged?.to_s
+  begin
+    declared.fetch
+  rescue => error
+    (prefix/"fetch-error").write error.message
+  end
+''',
+    )
+    formula.resources["data"] = SourceSpec(
+        url=archive.as_uri(), sha256=_sha256(archive)
+    )
+
+    keg = _build(tmp_path, formula)
+
+    assert (keg / "staged").read_text() == "false"
+    error = (keg / "fetch-error").read_text()
+    assert "has not been staged" in error
+    assert "no downloader" in error
+    assert not (tmp_path / "build" / ".pybrew-resources" / "data").exists()
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected"),
+    [
+        ("traversal", "unsafe resource tar member"),
+        ("symlink", "resource tar links are not supported"),
+    ],
+)
+def test_resource_auto_stage_rejects_unsafe_tar_members(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    expected: str,
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    archive = _unsafe_tar_resource(tmp_path / "src" / "unsafe.tar.gz", kind)
+    formula = _formula(
+        "ruby-resource-unsafe-tar",
+        "1.0",
+        '  resource("data").stage { }\n',
+    )
+    formula.resources["data"] = SourceSpec(
+        url=archive.as_uri(), sha256=_sha256(archive)
+    )
+
+    with pytest.raises(BuildError, match=expected):
+        _build(tmp_path, formula, downloader=_downloader(tmp_path))
+
+    staged_root = tmp_path / "build" / ".pybrew-resources"
+    assert not (staged_root / "escape.txt").exists()
+    assert not (staged_root / "link").exists()
+
+
+@pytest.mark.parametrize(
+    ("kind", "expected"),
+    [
+        ("traversal", "unsafe resource zip member"),
+        ("symlink", "resource zip links are not supported"),
+    ],
+)
+def test_resource_auto_stage_rejects_unsafe_zip_members(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    kind: str,
+    expected: str,
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    archive = _unsafe_zip_resource(tmp_path / "src" / "unsafe.zip", kind)
+    formula = _formula(
+        "ruby-resource-unsafe-zip",
+        "1.0",
+        '  resource("data").stage { }\n',
+    )
+    formula.resources["data"] = SourceSpec(
+        url=archive.as_uri(), sha256=_sha256(archive)
+    )
+
+    with pytest.raises(BuildError, match=expected):
+        _build(tmp_path, formula, downloader=_downloader(tmp_path))
+
+    staged_root = tmp_path / "build" / ".pybrew-resources"
+    assert not (staged_root / "escape.txt").exists()
+    assert not (staged_root / "link").exists()
+
+
+def test_default_declarative_resource_staging_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(ALLOW_ENV, raising=False)
+    archive = _tar_resource(
+        tmp_path / "src" / "data-1.0.tar.gz",
+        "data-1.0",
+        {"tool": "#!/bin/sh\necho declarative\n"},
+    )
+    formula = Formula(name="declarative-resource", version="1.0")
+    formula.install_source = (
+        "def install\n"
+        '  resource("data").stage do\n'
+        '    bin.install "tool"\n'
+        "  end\n"
+        "end\n"
+    )
+    formula.resources["data"] = SourceSpec(
+        url=archive.as_uri(), sha256=_sha256(archive)
+    )
+
+    keg = _build(tmp_path, formula, downloader=_downloader(tmp_path))
+
+    assert (keg / "bin" / "tool").read_text() == "#!/bin/sh\necho declarative\n"
+    staged = tmp_path / "build" / ".pybrew-resources" / "data" / "data-1.0"
+    assert (staged / "tool").is_file()
 
 
 def test_patch_data_and_block_are_warned_noops(

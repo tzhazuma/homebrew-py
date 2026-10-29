@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-295 passed, 5 skipped in 272.40s
+330 passed, 5 skipped in 66.45s
 ```
 
 Breakdown of the feature slices:
@@ -37,7 +37,9 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
-55 passed      # declarative + expanded opt-in Ruby bridge/API
+64 passed      # declarative + expanded opt-in Ruby bridge/API + resource staging
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
+34 passed      # service DSL fields + launchd/systemd rendering
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_formula_test.py
 25 passed      # formula test DSL + CLI
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_caveats.py
@@ -330,6 +332,17 @@ local remote, commits a change, and confirms the CLI updates it.
 - Full suite: 295 passed, 5 skipped (the added caveats/formula Ruby tests are
   the main reason the suite is slower).
 
+## Resource / service batch
+
+- The opt-in Ruby bridge now eagerly downloads and safely extracts formula
+  resources (`url`+`sha256`) into `build_root/.pybrew-resources/<name>` when a
+  downloader is available; `resource(...).stage { ... }` works. No downloader or
+  missing checksum stays metadata-only with a clear error. Extraction rejects
+  absolute/`..` members and archive links.
+- Service DSL gained `keep_alive` hash forms, `process_type`, `interval`,
+  `environment_variables`, `sockets` (launchd), `macos_legacy_timers`,
+  `launch_only_once`, and matching systemd fields where applicable.
+
 ## Final parallel batch
 
 - Cask preflight/postflight scripts are parsed inertly and executed only with
@@ -418,6 +431,8 @@ install, `doctor`, `list`, `deps`, `search`, `config`, and `parse`.
   outside the shim still fail explicitly.
 - `brew lgtm`, remaining advanced Brewfile options.
 - Full Homebrew Ruby API coverage; the bridge/test/caveats runners remain partial shims.
+- Resource staging is eager and does not implement patches; systemd has no
+  timer unit for standalone `interval`.
 
 These are tracked in the README roadmap and `docs/parity.md`.
 

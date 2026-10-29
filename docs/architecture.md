@@ -218,6 +218,14 @@ runner is opt-in and requires an installed keg.
 `caveats.py` runs a formula's captured caveats body under Ruby with a small
 platform/path shim; `pybrew caveats <formula>` does not require installation.
 
+## Resource staging
+
+When the opt-in Ruby bridge has a downloader, declared formula resources with
+`url`+`sha256` are fetched and safely extracted into
+`build_root/.pybrew-resources/<name>` before the install body runs. This is
+eager (all declared resources), unlike Homebrew's lazy staging; patches remain
+warnings rather than applied changes.
+
 ## Known limitations
 
 - Source builds support a common literal `def install` subset (on_arm/on_intel,
