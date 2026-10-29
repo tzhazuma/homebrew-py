@@ -193,8 +193,7 @@ homebrew-core 变更。
 RFC PR 已提交，Homebrew maintainer 已给出最终范围决定：
 
 - PR：<https://github.com/Homebrew/brew/pull/24362>
-- 状态：**closed**（2026-10-28，MikeMcQuaid：*"Not interested in this, sorry."*）
-- 关闭评论：<https://github.com/Homebrew/brew/pull/24362#issuecomment-...>（以 GitHub 页面为准）
+- 状态：**closed**（2026-10-28，MikeMcQuaid：*"Not interested in this, sorry."*；见 PR 页面）
 - 提案正文：[docs/python-port-rfc.md](docs/python-port-rfc.md)
 - PR 正文：[docs/upstream-pr/PR_BODY.md](docs/upstream-pr/PR_BODY.md)
 
