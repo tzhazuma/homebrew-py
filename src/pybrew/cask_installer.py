@@ -5,6 +5,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import platform
 import plistlib
 import re
 import shutil
@@ -676,6 +677,7 @@ class CaskInstaller:
         self._system_pkg_attempted = False
         self._system_pkg_before_ids = None
         self._script_results = {}
+        self._check_arch_dependency(cask)
         if cask.disabled:
             detail = f" ({cask.disable_reason})" if cask.disable_reason else ""
             raise CaskError(f"{cask.token} is disabled{detail}")
@@ -990,6 +992,20 @@ class CaskInstaller:
             else:
                 raise CaskError(f"{cask.token}: unsupported artifact {artifact.kind}")
         return installed
+
+    def _check_arch_dependency(self, cask: Cask) -> None:
+        value = cask.depends_on.get("arch")
+        if value is None:
+            return
+        requested = value if isinstance(value, list) else [value]
+        machine = platform.machine().lower()
+        current = "arm64" if machine in ("arm64", "aarch64") else "intel"
+        allowed = {str(item).lstrip(":") for item in requested}
+        if current not in allowed:
+            raise CaskError(
+                f"{cask.token} requires arch {', '.join(sorted(allowed))} "
+                f"but this machine is {current}"
+            )
 
     def _install_manpage_artifact(
         self,

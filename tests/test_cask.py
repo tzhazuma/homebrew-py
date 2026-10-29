@@ -682,3 +682,31 @@ def test_disabled_cask_is_rejected(tmp_path: Path) -> None:
     )
     with pytest.raises(CaskError, match="disabled"):
         installer.install(CaskLoader(discover_taps([tap])).load("gone"))
+
+
+def test_cask_arch_dependency_is_enforced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "a" / "archy.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        '''cask "archy" do
+  version "1.0"
+  stage_only true
+  depends_on arch: :arm64
+end
+'''
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    monkeypatch.setattr("pybrew.cask_installer.platform.machine", lambda: "x86_64")
+    with pytest.raises(CaskError, match="requires arch arm64"):
+        installer.install(CaskLoader(discover_taps([tap])).load("archy"))
