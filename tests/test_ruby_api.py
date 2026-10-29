@@ -2122,3 +2122,18 @@ def test_formula_service_ref(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     assert lines[1] == "ruby-service-ref"
     assert lines[2] == "bar"
     assert lines[3] == "true"
+
+
+def test_formula_python3_ref(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-python3",
+        "1.0",
+        (
+            '  ref = Formula["ruby-python3"]\n'
+            '  value = ref.python3\n'
+            '  (prefix/"python3").write [(value.nil? ? "nil" : "path")].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "python3").read_text().strip() in ("nil", "path")

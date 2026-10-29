@@ -3005,6 +3005,11 @@ class PybrewFormulaRef
     options.include?(name.to_s)
   end
 
+  def python3
+    found = Utils.which("python3")
+    found.nil? ? nil : Pathname.new(found)
+  end
+
   def service
     data = @info["service"]
     data.nil? ? nil : PybrewServiceRef.new(data)

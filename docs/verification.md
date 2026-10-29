@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-517 passed, 5 skipped in 90.74s
+518 passed, 5 skipped in 75.40s
 ```
 
 Breakdown of the feature slices:
@@ -37,7 +37,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
-93 passed      # declarative + opt-in Ruby bridge/API + service ref
+94 passed      # declarative + opt-in Ruby bridge/API + python3
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_patches.py tests/test_post_install.py
 47 passed      # patch url/file/:DATA application + post_install
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py tests/test_service_ruby.py
@@ -632,6 +632,10 @@ local remote, commits a change, and confirms the CLI updates it.
 - The service block is parsed through the existing literal service parser; an
   unparseable block leaves `service` nil but `service?` still reflects the
   declared source.
+
+## Formula#python3
+
+- Added `Formula#python3` returning the discovered `python3` Pathname or nil.
 
 ## Final parallel batch
 
