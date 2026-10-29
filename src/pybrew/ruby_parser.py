@@ -550,6 +550,8 @@ class RubyFormulaParser:
             self.formula.caveats = raw
         elif name == "post_install":
             self.formula.post_install_source = raw
+        elif name == "fetch":
+            self.formula.fetch_source = raw
 
     def _line_has_endless_equals(self) -> bool:
         """Detect ``def name(args) = expr`` on the current line."""

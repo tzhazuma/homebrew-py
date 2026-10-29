@@ -198,3 +198,20 @@ end
     assert formula.deprecated_options == {"with-old": "with-extra"}
     assert formula.preserve_rpath is True
     assert formula.skip_clean == ["bin"]
+
+
+def test_fetch_definition_is_captured() -> None:
+    formula = parse_formula_source(
+        '''class Fetchy < Formula
+  url "https://example.com/fetchy-1.0.tar.gz"
+  sha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+  def fetch
+    system "true"
+  end
+end
+''',
+        name="fetchy",
+    )
+    assert formula.fetch_source is not None
+    assert "system" in formula.fetch_source

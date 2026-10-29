@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-519 passed, 5 skipped in 98.80s
+520 passed, 5 skipped in 79.80s
 ```
 
 Breakdown of the feature slices:
@@ -37,7 +37,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
-95 passed      # declarative + opt-in Ruby bridge/API + service ref fields
+96 passed      # declarative + opt-in Ruby bridge/API + fetch_defined
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_patches.py tests/test_post_install.py
 47 passed      # patch url/file/:DATA application + post_install
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py tests/test_service_ruby.py
@@ -648,6 +648,11 @@ local remote, commits a change, and confirms the CLI updates it.
 
 - `Formula#service` now also exposes `nice`, `restart_delay`, `stop_timeout`,
   `root_dir` and `input_path`.
+
+## fetch_defined?
+
+- Added `Formula.fetch_source` capture for `def fetch` and
+  `Formula#fetch_defined?` backed by it.
 
 ## Final parallel batch
 
