@@ -740,9 +740,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `4e4347d` (Formula head pkg helpers)
-- CI run for `4e4347d`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40966857417>
+- Latest feature commit: `4569f98` (Formula metadata compatibility helpers)
+- CI run for `4569f98`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40967479191>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
