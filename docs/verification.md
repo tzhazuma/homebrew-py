@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-512 passed, 5 skipped in 72.89s
+513 passed, 5 skipped in 74.61s
 ```
 
 Breakdown of the feature slices:
@@ -37,7 +37,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
-89 passed      # declarative + opt-in Ruby bridge/API + service names/paths
+90 passed      # declarative + opt-in Ruby bridge/API + ref identity
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_patches.py tests/test_post_install.py
 47 passed      # patch url/file/:DATA application + post_install
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py tests/test_service_ruby.py
@@ -603,6 +603,10 @@ local remote, commits a change, and confirms the CLI updates it.
 - `depends_on macos:` now checks the host macOS version against `>=`/`<=`/`>`/
   `<`/`=` requirements using version symbols (`:sonoma`, etc.).
 - `PYBREW_MACOS_VERSION` can override detection for tests/CI.
+
+## Formula ref identity
+
+- Added `to_s`, `inspect`, `==`/`eql?`, `hash` and `<=>` to `PybrewFormulaRef`.
 
 ## Final parallel batch
 

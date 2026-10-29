@@ -2022,3 +2022,21 @@ def test_formula_service_name_paths(
     assert lines[2].endswith("sh.brew.ruby-service-paths.plist")
     assert lines[3].endswith("sh.brew.ruby-service-paths.service")
     assert lines[4].endswith("sh.brew.ruby-service-paths.timer")
+
+
+def test_formula_ref_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-identity",
+        "1.0",
+        (
+            '  a = Formula["ruby-identity"]\n'
+            '  b = Formula["ruby-identity"]\n'
+            '  (prefix/"identity").write [\n'
+            '    (a == b).to_s, (a.to_s == "ruby-identity").to_s,\n'
+            '    (a.hash == b.hash).to_s, a.inspect.include?("ruby-identity").to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "identity").read_text().splitlines() == ["true", "true", "true", "true"]

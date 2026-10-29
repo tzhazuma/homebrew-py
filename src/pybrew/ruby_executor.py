@@ -2241,6 +2241,27 @@ class PybrewFormulaRef
     end
   end
 
+  def to_s
+    name
+  end
+
+  def inspect
+    "#<PybrewFormulaRef #{name}>"
+  end
+
+  def ==(other)
+    other.respond_to?(:name) && other.name.to_s == name
+  end
+  alias eql? ==
+
+  def hash
+    name.hash
+  end
+
+  def <=>(other)
+    name <=> other.name.to_s
+  end
+
   def full_name
     raw = @info["full_name"]
     raw.nil? || raw.to_s.empty? ? name : raw.to_s
