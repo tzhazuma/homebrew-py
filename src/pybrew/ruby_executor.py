@@ -2259,7 +2259,7 @@ class PybrewFormulaRef
   end
 
   def installed_prefixes
-    installed_kegs
+    installed_kegs.sort_by { |path| path.basename.to_s }
   end
 
   def latest_head_version
