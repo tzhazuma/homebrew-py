@@ -34,6 +34,7 @@ from .models import (
     Formula,
     Opaque,
     PatchSpec,
+    Requirement,
     SourceSpec,
     Sym,
     is_linux,
@@ -1428,10 +1429,15 @@ class RubyFormulaParser:
                 entries.extend((name, positional_tags) for name in positional_names)
             else:
                 entries.extend((name, positional_tags) for name in positional_names)
+        elif not entries and isinstance(positional_tags, Sym):
+            entries.append((str(positional_tags).lstrip(":"), None))
         for name, tags in entries:
-            if name in ("macos", "arch", "xcode", "linux"):
-                continue
             tag_set = self._normalise_tags(tags)
+            if name in ("macos", "arch", "xcode", "linux"):
+                requirement = Requirement(name, tag_set)
+                if requirement not in self.formula.requirements:
+                    self.formula.requirements.append(requirement)
+                continue
             self._add_dependency(target, name, tag_set)
 
     @staticmethod

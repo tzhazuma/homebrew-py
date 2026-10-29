@@ -101,6 +101,14 @@ class SourceSpec:
 
 
 @dataclass
+class Requirement:
+    """A platform/tool requirement such as ``depends_on :macos``."""
+
+    name: str
+    tags: frozenset[str] = frozenset()
+
+
+@dataclass
 class PatchSpec:
     """A formula patch declared with ``patch do ... end`` or ``patch :DATA``.
 
@@ -235,6 +243,7 @@ class Formula:
     uses_from_macos: list[Dependency] = field(default_factory=list)
 
     conflicts_with: list[str] = field(default_factory=list)
+    requirements: list[Requirement] = field(default_factory=list)
     link_overwrite: list[str] = field(default_factory=list)
     caveats: str = ""
     service: Any = None

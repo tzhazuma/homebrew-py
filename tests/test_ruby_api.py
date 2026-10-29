@@ -24,7 +24,7 @@ import pytest
 import pybrew.download as download_module
 from pybrew.download import Downloader
 from pybrew.errors import BuildError, UnsupportedInstall
-from pybrew.models import BottleFile, Dependency, Formula, PatchSpec, SourceSpec, is_linux, is_macos
+from pybrew.models import BottleFile, Dependency, Formula, PatchSpec, Requirement, SourceSpec, is_linux, is_macos
 from pybrew.paths import Config
 from pybrew.ruby_executor import execute_install_body
 from pybrew.source_builder import build_source
@@ -1569,7 +1569,7 @@ def test_formula_dependency_categories_and_conflicts(
             '    ref.uses_from_macos.map(&:name).join(","),\n'
             '    ref.conflicts.join(","),\n'
             '    ref.link_overwrite.join(","),\n'
-            '    ref.requirements.length\n'
+            '    ref.requirements.map(&:name).join(",")\n'
             '  ].join("\\n")\n'
         ),
     )
@@ -1582,6 +1582,7 @@ def test_formula_dependency_categories_and_conflicts(
     formula.uses_from_macos = [Dependency("macos")]
     formula.conflicts_with = ["old-ruby-deps"]
     formula.link_overwrite = ["bin/ruby-deps"]
+    formula.requirements = [Requirement("macos")]
 
     keg = _build(tmp_path, formula)
     lines = (keg / "deps").read_text().splitlines()
@@ -1594,7 +1595,7 @@ def test_formula_dependency_categories_and_conflicts(
         "macos",
         "old-ruby-deps",
         "bin/ruby-deps",
-        "0",
+        "macos",
     ]
 
 

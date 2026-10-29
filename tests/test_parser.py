@@ -164,3 +164,18 @@ end
     )
     assert formula.oldname == "old-renamed"
     assert formula.aliases == ["short-renamed"]
+
+
+def test_depends_on_platform_requirements() -> None:
+    formula = parse_formula_source(
+        '''class Requiry < Formula
+  depends_on :macos
+  depends_on :xcode
+  url "https://example.com/requiry-1.0.tar.gz"
+  sha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+end
+''',
+        name="requiry",
+    )
+    assert [requirement.name for requirement in formula.requirements] == ["macos", "xcode"]
+    assert formula.dependencies == []

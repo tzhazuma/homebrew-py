@@ -2318,7 +2318,13 @@ class PybrewFormulaRef
   end
 
   def requirements
-    []
+    Array(@info["requirements"]).map do |requirement|
+      if requirement.is_a?(Hash)
+        PybrewDependencyRef.new(requirement["name"], requirement["tags"])
+      else
+        PybrewDependencyRef.new(requirement)
+      end
+    end
   end
 
   def conflicts
@@ -3238,6 +3244,10 @@ def _formula_reference_map(
         "head_dependencies": _dependency_category_metadata(formula, "head_dependencies"),
         "uses_from_macos": _dependency_category_metadata(formula, "uses_from_macos"),
         "conflicts_with": list(formula.conflicts_with),
+        "requirements": [
+            {"name": requirement.name, "tags": sorted(requirement.tags)}
+            for requirement in formula.requirements
+        ],
         "link_overwrite": list(formula.link_overwrite),
         "desc": formula.desc,
         "homepage": formula.homepage,
