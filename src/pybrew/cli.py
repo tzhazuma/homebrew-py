@@ -76,6 +76,12 @@ def _common_parser() -> argparse.ArgumentParser:
         default=argparse.SUPPRESS,
         help="evaluate cask source with Ruby (opt-in, unsafe)",
     )
+    parser.add_argument(
+        "--ruby-service",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="evaluate service blocks with Ruby (opt-in, unsafe)",
+    )
     return parser
 
 
@@ -1482,6 +1488,8 @@ def main(argv: Optional[list[str]] = None) -> int:
     args = parser.parse_args(argv)
     if getattr(args, "ruby_cask", False):
         os.environ["PYBREW_ALLOW_CASK_RUBY"] = "1"
+    if getattr(args, "ruby_service", False):
+        os.environ["PYBREW_ALLOW_SERVICE_RUBY"] = "1"
     try:
         handler = _COMMANDS[args.command]
         return handler(args)

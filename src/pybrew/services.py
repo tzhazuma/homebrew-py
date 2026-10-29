@@ -205,6 +205,12 @@ def parse_service_block(formula: Formula, config: Config, raw: Optional[str] = N
     raw = raw or (formula.service or {}).get("source") if isinstance(formula.service, dict) else None
     if not raw:
         raise ServiceError(f"{formula.name} does not define a service")
+    # Arbitrary-Ruby evaluation is strictly opt-in (exactly "1"); otherwise the
+    # default literal parser below is used unchanged.
+    if os.environ.get("PYBREW_ALLOW_SERVICE_RUBY", "") == "1":
+        from .service_ruby import evaluate_service_source
+
+        return evaluate_service_source(raw, formula, config)
     tokens = Lexer(raw).tokenise()
     # Drop the opening `do` and the trailing `end`; parse the inner statements.
     if tokens and tokens[0].kind == "kw" and tokens[0].value == "do":

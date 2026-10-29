@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-429 passed, 5 skipped in 75.86s
+479 passed, 5 skipped in 86.62s
 ```
 
 Breakdown of the feature slices:
@@ -40,8 +40,8 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py te
 65 passed      # declarative + opt-in Ruby bridge/API + resource staging + compiler helpers
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_patches.py tests/test_post_install.py
 47 passed      # patch url/file/:DATA application + post_install
-$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
-34 passed      # service DSL fields + launchd/systemd rendering
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py tests/test_service_ruby.py
+84 passed      # literal service DSL + opt-in arbitrary Ruby evaluator
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_formula_test.py
 27 passed      # formula test DSL + CLI + expected-status shell_output
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_caveats.py
@@ -398,6 +398,17 @@ local remote, commits a change, and confirms the CLI updates it.
   comma/newline continuation (e.g. `sha256 arm: ..., intel: ...` and
   `uninstall launchctl: ..., quit: ...`); regression tests use the VSCode
   fixture and a synthetic multiline cask.
+
+## Arbitrary Ruby service DSL
+
+- `PYBREW_ALLOW_SERVICE_RUBY=1` / `--ruby-service` evaluates captured
+  `service do ... end` source under Ruby with a JSON-collecting shim.
+- Supports variables/conditionals/loops, platform/arch blocks, run arrays,
+  keep_alive hashes, sockets, environment variables, intervals and paths.
+- Default literal service parser remains unchanged when the env is unset.
+- The shim intentionally mirrors pybrew's literal path helpers
+  (`bin`/`lib`/`etc` under the formula opt prefix) rather than Homebrew's
+  global-prefix helpers.
 
 ## Final parallel batch
 
