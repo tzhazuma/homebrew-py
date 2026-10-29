@@ -31,13 +31,13 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 from .errors import BuildError, UnsupportedInstall
 from .models import Formula
 from .paths import Config
 from .ruby_parser import Lexer, Token
-from .version import compare_versions
+from .version import compare_versions, detect_version
 
 #: Environment variable that opts a build into the arbitrary-Ruby bridge.
 ALLOW_ENV = "PYBREW_ALLOW_ARBITRARY_RUBY"
@@ -1697,6 +1697,127 @@ class PybrewInreplace
   end
 end
 
+class PybrewDependencyRef
+  attr_reader :name, :tags
+
+  def initialize(name, tags = [])
+    @name = name.to_s
+    @tags = Array(tags).map { |tag| tag.to_s }
+  end
+
+  def full_name
+    @name
+  end
+
+  def build?
+    @tags.include?("build")
+  end
+
+  def test?
+    @tags.include?("test")
+  end
+
+  def optional?
+    @tags.include?("optional")
+  end
+
+  def recommended?
+    @tags.include?("recommended")
+  end
+
+  def runtime?
+    !build? && !test?
+  end
+
+  def to_s
+    @name
+  end
+
+  def inspect
+    "#<PybrewDependencyRef #{@name}>"
+  end
+
+  def ==(other)
+    if other.is_a?(String) || other.is_a?(Symbol)
+      @name == other.to_s
+    else
+      other.respond_to?(:name) && other.name.to_s == @name
+    end
+  end
+  alias eql? ==
+
+  def hash
+    @name.hash
+  end
+end
+
+# Homebrew's ``Formula#resources`` returns an array of resources, but a lot of
+# formula code also looks them up by name.  This small Array subclass supports
+# both shapes without pretending to be a full Hash.
+class PybrewResourceList < Array
+  def [](key)
+    if key.is_a?(String) || key.is_a?(Symbol)
+      find { |resource| resource.name == key.to_s }
+    else
+      super
+    end
+  end
+
+  def key?(key)
+    any? { |resource| resource.name == key.to_s }
+  end
+  alias has_key? key?
+
+  def keys
+    map { |resource| resource.name }
+  end
+
+  def values
+    to_a
+  end
+
+  # Support both Homebrew's ``resources.each { |resource| ... }`` and the
+  # Hash-style ``resources.each { |name, resource| ... }`` shape.
+  def each(&block)
+    return enum_for(:each) unless block
+
+    if block.arity == 2
+      super() { |resource| block.call(resource.name, resource) }
+    else
+      super(&block)
+    end
+  end
+
+  def each_value(&block)
+    return enum_for(:each_value) unless block
+
+    each(&block)
+  end
+
+  def each_pair
+    return enum_for(:each_pair) unless block_given?
+
+    each { |resource| yield(resource.name, resource) }
+  end
+
+  def to_h
+    result = {}
+    each { |resource| result[resource.name] = resource }
+    result
+  end
+
+  def fetch(key, *args)
+    if key.is_a?(String) || key.is_a?(Symbol)
+      resource = self[key]
+      return resource unless resource.nil?
+      return args.first unless args.empty?
+      raise KeyError, "resource not found: #{key.inspect}"
+    else
+      super
+    end
+  end
+end
+
 class PybrewFormulaRef
   attr_reader :name
 
@@ -1726,6 +1847,16 @@ class PybrewFormulaRef
     text.to_s.scan(/\d+|[A-Za-z]+/).map do |part|
       part =~ /\A\d+\z/ ? [0, part.to_i] : [1, part.downcase]
     end
+  end
+
+  def full_name
+    raw = @info["full_name"]
+    raw.nil? || raw.to_s.empty? ? name : raw.to_s
+  end
+
+  def revision
+    raw = @info["revision"]
+    raw.nil? ? 0 : raw.to_i
   end
 
   def installed_kegs
@@ -1773,15 +1904,116 @@ class PybrewFormulaRef
     raw.nil? || raw.to_s.empty? ? nil : PybrewVersion.new(raw.to_s)
   end
 
-  def installed?
-    raw = @info["prefix"]
-    return true unless raw.nil? || raw.to_s.empty?
+  def pkg_version
+    raw = @info["pkg_version"]
+    if raw.nil? || raw.to_s.empty?
+      base = version
+      return nil if base.nil?
 
-    !latest_installed_keg.nil?
+      raw = base.to_s
+      raw = "#{raw}_#{revision}" if revision > 0
+    end
+    PybrewVersion.new(raw.to_s)
+  end
+
+  def build
+    @build ||= PybrewBuild.new
+  end
+
+  def deps
+    Array(@info["dependencies"]).map do |dependency|
+      if dependency.is_a?(Hash)
+        PybrewDependencyRef.new(dependency["name"], dependency["tags"])
+      else
+        PybrewDependencyRef.new(dependency)
+      end
+    end
+  end
+
+  def runtime_dependencies(*_args)
+    names = @info["runtime_dependencies"]
+    return deps.select { |dependency| dependency.runtime? } if names.nil?
+
+    by_name = {}
+    deps.each { |dependency| by_name[dependency.name] = dependency }
+    Array(names).map do |dependency_name|
+      by_name[dependency_name.to_s] || PybrewDependencyRef.new(dependency_name)
+    end
+  end
+
+  # Walk the dependency entries known to the bridge recursively.  Only the
+  # current formula's declared dependencies and the runtime dependencies
+  # recorded in installed receipts are available without loading more formulae.
+  def recursive_dependencies(*_args)
+    formulae = PYBREW_CONFIG["formulae"] || {}
+    seen = {}
+    result = []
+    queue = deps.dup
+    until queue.empty?
+      dependency = queue.shift
+      next if seen[dependency.name]
+
+      seen[dependency.name] = true
+      result << dependency
+      entry = formulae[dependency.name] || {}
+      Array(entry["dependencies"]).each do |child|
+        child_name = child.is_a?(Hash) ? child["name"] : child
+        next if child_name.nil?
+
+        child_name = child_name.to_s
+        next if seen[child_name]
+
+        child_tags = child.is_a?(Hash) ? child["tags"] : []
+        queue << PybrewDependencyRef.new(child_name, child_tags)
+      end
+    end
+    result
+  end
+
+  def resources
+    result = PybrewResourceList.new
+    (@info["resources"] || {}).each do |resource_name, info|
+      result << PybrewResource.new(resource_name.to_s, info)
+    end
+    result
+  end
+
+  def resource(resource_name)
+    key = resource_name.to_s
+    info = (@info["resources"] || {})[key]
+    if info.nil?
+      raise "resource(#{key.inspect}) is not defined in formula #{self.name}"
+    end
+    PybrewResource.new(key, info)
+  end
+
+  def installed_prefix
+    target = pkg_version
+    return nil if target.nil?
+
+    match = installed_kegs.find { |keg| keg.basename.to_s == target.to_s }
+    return match unless match.nil?
+
+    raw = @info["prefix"]
+    return nil if raw.nil? || raw.to_s.empty?
+
+    path = Pathname.new(raw.to_s)
+    return path if path.basename.to_s == target.to_s && path.directory?
+
+    nil
+  end
+
+  def installed_version
+    path = installed_prefix
+    path.nil? ? nil : PybrewVersion.new(path.basename.to_s)
+  end
+
+  def installed?
+    !installed_prefix.nil?
   end
 
   def any_version_installed?
-    installed?
+    !installed_kegs.empty? || installed?
   end
 
   def latest_version_installed?
@@ -1832,6 +2064,10 @@ class PybrewFormulaRef
     prefix + "lib"
   end
 
+  def include
+    prefix + "include"
+  end
+
   def share
     prefix + "share"
   end
@@ -1844,6 +2080,10 @@ class PybrewFormulaRef
     prefix + "libexec"
   end
 
+  def testpath
+    prefix + "test"
+  end
+
   def keg_only?
     false
   end
@@ -1852,6 +2092,10 @@ end
 module Formula
   def self.[](name)
     PybrewFormulaRef.new(name)
+  end
+
+  def self.factory(name)
+    self[name]
   end
 end
 
@@ -1866,7 +2110,13 @@ class PybrewResource
   end
 
   def version
-    nil
+    raw = @info["version"]
+    raw.nil? || raw.to_s.empty? ? nil : PybrewVersion.new(raw.to_s)
+  end
+
+  def staged?
+    staged = @info["staged"]
+    !(staged.nil? || staged.to_s.empty?)
   end
 
   def staged_path
@@ -1874,7 +2124,11 @@ class PybrewResource
     if staged.nil? || staged.to_s.empty?
       raise "resource(#{name.inspect}) has not been staged: the pybrew opt-in Ruby bridge does not download formula resources"
     end
-    Pathname.new(staged.to_s)
+    path = Pathname.new(staged.to_s)
+    unless path.directory?
+      raise "resource(#{name.inspect}) staged path does not exist: #{path}"
+    end
+    path
   end
 
   def stage(*_args, &block)
@@ -1891,7 +2145,11 @@ class PybrewResource
   end
 
   def to_s
-    staged_path.to_s
+    name
+  end
+
+  def inspect
+    "#<PybrewResource #{name}>"
   end
 end
 
@@ -1919,6 +2177,16 @@ class PybrewPatch
 
   def apply(*_args)
     nil
+  end
+
+  def method_missing(method_name, *args, &block)
+    raise NoMethodError,
+          "unsupported Homebrew patch API `#{method_name}' in the pybrew opt-in Ruby bridge; " \
+          "patch blocks are not applied"
+  end
+
+  def respond_to_missing?(_method_name, _include_private = false)
+    false
   end
 end
 
@@ -1968,6 +2236,52 @@ class PybrewInstallContext
 
   def args
     @args
+  end
+
+  # The install body runs inside the formula context (``formula`` is self), so
+  # expose the same object-model helpers that ``Formula["name"]`` provides.
+  def pybrew_formula_ref
+    @pybrew_formula_ref ||= PybrewFormulaRef.new(@formula_name)
+  end
+
+  def full_name
+    pybrew_formula_ref.full_name
+  end
+
+  def revision
+    pybrew_formula_ref.revision
+  end
+
+  def pkg_version
+    pybrew_formula_ref.pkg_version
+  end
+
+  def deps
+    pybrew_formula_ref.deps
+  end
+
+  def runtime_dependencies(*_args)
+    pybrew_formula_ref.runtime_dependencies(*_args)
+  end
+
+  def recursive_dependencies(*_args)
+    pybrew_formula_ref.recursive_dependencies(*_args)
+  end
+
+  def resources
+    pybrew_formula_ref.resources
+  end
+
+  def installed?
+    pybrew_formula_ref.installed?
+  end
+
+  def any_version_installed?
+    pybrew_formula_ref.any_version_installed?
+  end
+
+  def latest_version_installed?
+    pybrew_formula_ref.latest_version_installed?
   end
 
   def buildpath
@@ -2107,10 +2421,6 @@ class PybrewInstallContext
     nil
   end
 
-  def resource(name)
-    raise "resource(#{name.inspect}) staging is not supported by the opt-in Ruby bridge"
-  end
-
   def std_configure_args
     [
       "--disable-debug",
@@ -2196,20 +2506,16 @@ class PybrewInstallContext
   end
 
   # ``resource("name")`` never downloads anything in the opt-in bridge.  The
-  # object can still be queried (name/url/sha256); touching its staged path
-  # raises a clear error instead of silently building the wrong tree.
+  # object can still be queried (name/url/sha256/version); touching its staged
+  # path raises a clear error unless a staged path was provided to the bridge.
   def resource(name)
-    key = name.to_s
-    info = (PYBREW_CONFIG["resources"] || {})[key]
-    if info.nil?
-      raise "resource(#{key.inspect}) is not defined in formula #{@formula_name}"
-    end
-    PybrewResource.new(key, info)
+    pybrew_formula_ref.resource(name)
   end
 
   # Formula patches cannot be applied by the bridge.  Consume the block DSL
   # (so url/sha256 calls do not explode) and warn rather than silently
-  # pretending the patch happened.
+  # pretending the patch happened.  ``patch :DATA`` is likewise a warned
+  # no-op because the bridge never applies patches.
   def patch(*args, &block)
     target = args.empty? ? nil : args.first
     if block
@@ -2217,7 +2523,8 @@ class PybrewInstallContext
       definition.instance_eval(&block)
       opoo("patch #{target.nil? ? 'block' : target.inspect} was not applied: the pybrew opt-in Ruby bridge does not apply patches")
     else
-      opoo("patch #{target.inspect} was not applied: the pybrew opt-in Ruby bridge does not apply patches")
+      description = target.nil? ? "without a target" : target.inspect
+      opoo("patch #{description} was not applied: the pybrew opt-in Ruby bridge does not apply patches")
     end
     nil
   end
@@ -2306,24 +2613,31 @@ def _latest_keg(config: Config, name: str) -> Optional[Path]:
     )
 
 
-def _formula_reference_map(
-    formula: Formula, config: Config, keg: Path
-) -> dict[str, dict[str, Optional[str]]]:
-    """Metadata backing ``Formula["name"].prefix``/``opt_prefix`` in the shim.
+def _dependency_name(dependency: Any) -> str:
+    """Return the name of a dependency-like object."""
 
-    The current formula and its declared dependencies are included.  The
-    ``prefix`` entry is ``None`` when no keg is installed; the Ruby side turns
-    that into a clear error only when the method is actually called.
-    """
+    name = getattr(dependency, "name", None)
+    if name is None:
+        name = str(dependency)
+    return str(name)
 
-    entries: dict[str, dict[str, Optional[str]]] = {
-        formula.name: {
-            "prefix": str(keg),
-            "opt_prefix": str(config.opt_path(formula.name)),
-            "version": formula.pkg_version,
-        }
-    }
-    names: list[str] = []
+
+def _dependency_tags(dependency: Any) -> list[str]:
+    """Return the declared Homebrew tags for a dependency."""
+
+    tags = getattr(dependency, "tags", None) or ()
+    try:
+        values = [str(tag).lstrip(":") for tag in tags]
+    except TypeError:
+        values = [str(tags).lstrip(":")]
+    return sorted({tag for tag in values if tag})
+
+
+def _dependency_metadata(formula: Formula) -> list[dict[str, Any]]:
+    """Return declared dependencies (name and tags) for the Ruby shim."""
+
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
     for collection in (
         formula.dependencies,
         formula.head_dependencies,
@@ -2331,31 +2645,119 @@ def _formula_reference_map(
         formula.test_dependencies,
         formula.recommended_dependencies,
         formula.optional_dependencies,
+        formula.uses_from_macos,
     ):
         for dependency in collection:
-            name = getattr(dependency, "name", None)
-            if name is None:
-                name = str(dependency)
-            name = str(name)
-            if name and name not in names:
-                names.append(name)
+            name = _dependency_name(dependency)
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            entries.append({"name": name, "tags": _dependency_tags(dependency)})
+    return entries
+
+
+def _runtime_dependency_names(formula: Formula) -> list[str]:
+    """Return runtime dependency names in declaration order."""
+
+    names: list[str] = []
+    for dependency in formula.runtime_dependencies():
+        name = _dependency_name(dependency)
+        if name and name not in names:
+            names.append(name)
+    return names
+
+
+def _receipt_dependency_metadata(keg: Path) -> list[dict[str, Any]]:
+    """Return runtime dependencies recorded in an installed keg receipt."""
+
+    from .cellar import read_receipt
+
+    receipt = read_receipt(keg)
+    names = receipt.get("runtime_dependencies") if isinstance(receipt, dict) else None
+    entries: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    if not isinstance(names, list):
+        return entries
     for name in names:
+        text = str(name)
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        entries.append({"name": text, "tags": []})
+    return entries
+
+
+def _formula_reference_map(
+    formula: Formula, config: Config, keg: Path
+) -> dict[str, dict[str, Any]]:
+    """Metadata backing the Ruby ``Formula`` object model in the shim.
+
+    The current formula and its declared dependencies are included.  The
+    ``prefix`` entry is ``None`` when no keg is installed; the Ruby side turns
+    that into a clear error only when the method is actually called.  The
+    current formula's build target (``keg``) is exposed as its ``prefix`` so
+    the install DSL and ``Formula[name]`` agree during a build.
+    """
+
+    dependencies = _dependency_metadata(formula)
+    current: dict[str, Any] = {
+        "name": formula.name,
+        "full_name": formula.full_name,
+        "version": formula.version or "HEAD",
+        "revision": int(formula.revision or 0),
+        "pkg_version": formula.pkg_version,
+        "prefix": str(keg),
+        "opt_prefix": str(config.opt_path(formula.name)),
+        "dependencies": dependencies,
+        "runtime_dependencies": _runtime_dependency_names(formula),
+        "resources": {},
+    }
+    entries: dict[str, dict[str, Any]] = {formula.name: current}
+    for dependency in dependencies:
+        name = str(dependency["name"])
         if name in entries:
             continue
         installed = _latest_keg(config, name)
+        installed_dependencies = (
+            _receipt_dependency_metadata(installed) if installed is not None else []
+        )
         entries[name] = {
+            "name": name,
+            "full_name": name,
+            "version": installed.name if installed is not None else None,
+            "revision": 0,
+            "pkg_version": installed.name if installed is not None else None,
             "prefix": str(installed) if installed is not None else None,
             "opt_prefix": str(config.opt_path(name)),
-            "version": installed.name if installed is not None else None,
+            "dependencies": installed_dependencies,
+            "runtime_dependencies": [
+                item["name"] for item in installed_dependencies
+            ],
+            "resources": {},
         }
     return entries
 
 
-def _resource_metadata(formula: Formula) -> dict[str, dict[str, Optional[str]]]:
-    """Return resource name/url/sha256 metadata for the Ruby shim.
+def _resource_version(url: Optional[str]) -> Optional[str]:
+    """Infer a Homebrew-style version from a resource URL."""
+
+    if not url:
+        return None
+    version = detect_version(str(url))
+    if version == "HEAD" and "head" not in str(url).lower():
+        return None
+    return version
+
+
+def _resource_metadata(
+    formula: Formula,
+) -> dict[str, dict[str, Optional[str]]]:
+    """Return resource name/url/sha256/version metadata for the Ruby shim.
 
     Resources are deliberately never downloaded here: the shim only exposes
     their metadata and raises a clear error when a staged path is requested.
+    An explicit ``staged_path``/``staged`` attribute on the resource is passed
+    through as the staged path.
     """
 
     resources = getattr(formula, "resources", None) or {}
@@ -2365,12 +2767,37 @@ def _resource_metadata(formula: Formula) -> dict[str, dict[str, Optional[str]]]:
     except AttributeError:
         return payload
     for name, resource in items:
+        url = getattr(resource, "url", None)
+        sha256 = getattr(resource, "sha256", None)
+        staged = getattr(resource, "staged_path", None)
+        if staged is None:
+            staged = getattr(resource, "staged", None)
         payload[str(name)] = {
-            "url": getattr(resource, "url", None),
-            "sha256": getattr(resource, "sha256", None),
-            "staged": None,
+            "url": str(url) if url is not None else None,
+            "sha256": str(sha256) if sha256 is not None else None,
+            "version": _resource_version(url),
+            "staged": str(staged) if staged is not None else None,
         }
     return payload
+
+
+def _attach_staged_resource_paths(
+    resources: dict[str, dict[str, Optional[str]]], build_root: Path
+) -> None:
+    """Expose resources already staged under ``build_root`` to the shim.
+
+    The default source builder stages downloaded resources in
+    ``build_root/.pybrew-resources/<name>``.  When that directory already
+    exists the Ruby bridge reuses it instead of downloading anything.
+    """
+
+    staged_root = Path(build_root) / ".pybrew-resources"
+    for name, info in resources.items():
+        if info.get("staged"):
+            continue
+        candidate = staged_root / str(name)
+        if candidate.is_dir():
+            info["staged"] = str(candidate)
 
 
 def execute_install_body(
@@ -2401,8 +2828,18 @@ def execute_install_body(
 
     ruby = _ruby_binary(formula)
     version = formula.version or "HEAD"
+    resources = _resource_metadata(formula)
+    _attach_staged_resource_paths(resources, build_root)
+    formulae = _formula_reference_map(formula, config, keg)
+    formulae[formula.name]["resources"] = resources
     payload = {
-        "formula": {"name": formula.name, "version": version},
+        "formula": {
+            "name": formula.name,
+            "version": version,
+            "full_name": formula.full_name,
+            "revision": int(formula.revision or 0),
+            "pkg_version": formula.pkg_version,
+        },
         "paths": _install_paths(formula, config, keg, build_root),
         "verbose": bool(verbose),
         "arch": os.environ.get("PYBREW_TARGET_ARCH") or platform.machine(),
@@ -2411,8 +2848,8 @@ def execute_install_body(
         "body_line": body_line,
         "homebrew_prefix": str(config.prefix),
         "cellar": str(config.cellar),
-        "formulae": _formula_reference_map(formula, config, keg),
-        "resources": _resource_metadata(formula),
+        "formulae": formulae,
+        "resources": resources,
     }
     script = _render_script(body, body_line, payload)
 

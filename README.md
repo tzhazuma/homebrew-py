@@ -8,7 +8,7 @@ Formula 解析、依赖解析、Cellar、bottle 安装、链接/卸载和 receip
 
 > **状态：v0.1 原型（可运行、可测试）**
 >
-> - 257 个测试通过（另有 5 个 opt-in 测试跳过；`pytest -q`）
+> - 295 个测试通过（另有 5 个 opt-in 测试跳过；`pytest -q`）
 > - 15 个真实 homebrew-core 公式（bash、git、curl、openssl@3、python@3.12 等）与
 >   `brew info --json=v2` 的元数据逐项对比通过
 > - 使用真实 `hello 2.12.3` Formula 完成 autotools 源码构建并运行成功
@@ -104,7 +104,8 @@ Installer(config, loader).install(formula, InstallOptions())
 | Cask/Services/Tap 命令 | ✅ | 集成到 `pybrew` CLI |
 | 下载/源码查看 | ✅ | `fetch` formula bottle/source 或 `fetch --cask` artifact、`cat`/`home`/`edit` formula 与 cask |
 | 维护命令 | ✅ | `leaves`、`uses`、`autoremove`、`outdated`、`upgrade`（安装新版本并清理旧 keg，含 `--dry-run`）、`cleanup`（含 `--prune-cache`）、`reinstall`、`doctor --json`、`pin`/`unpin`、`services cleanup`、`tap --update`、`shellenv`；install `--no-link` |
-| Formula test | ✅ 基础 | `pybrew test <formula>` 在已安装 keg 上执行 formula 的 `test do ... end`，支持 shell_output/pipe_output/assert_*；不完整 DSL 会明确报错 |
+| Formula test | ✅ 基础 | `pybrew test <formula>` 在已安装 keg 上执行 `test do ... end`，支持 shell_output/pipe_output/assert_*、路径断言、`Formula[...]`；不完整 DSL 会明确报错 |
+| Caveats | ✅ 基础 | `pybrew caveats <formula>` 执行 caveats Ruby DSL（heredoc/平台分支/paths），无需安装 |
 | Brewfile | ✅ 基础 | `bundle install/check/list/dump`，支持 `tap`/`brew`/`cask`/`mas`/`vscode` 行，tap `url:`、brew `link:false`/`args:`/`restart_service:true` |
 | Analytics | ✅ 本地 | 默认关闭；`analytics on/off/state/log/clear`，事件仅存本机，不联网；install/uninstall/upgrade 会记录本地事件 |
 | 完整 Homebrew Ruby/测试 DSL / 部分高级 bundle 选项 / x86_64 Linux 真机验证 | ❌ | 路线图 |
@@ -148,7 +149,7 @@ Installer(config, loader).install(formula, InstallOptions())
 
 ```bash
 pytest -q
-# 257 passed, 5 skipped
+# 295 passed, 5 skipped
 ```
 
 测试覆盖：
@@ -164,6 +165,7 @@ pytest -q
 - `test_ruby_dsl.py`：opt-in 任意 Ruby install body、扩展 shim、失败上下文（无 Ruby 时跳过）
 - `test_ruby_api.py`：Pathname/Utils/Hardware/OS/MacOS/ENV/Formula/resource 等 API 兼容测试
 - `test_formula_test.py`：formula test DSL、PASS/FAIL、缺失安装/Ruby 时的错误
+- `test_caveats.py`：caveats DSL、平台分支、路径、CLI
 - `test_cask.py`：真实 cask（rectangle/iterm2/VSCode）解析、zip/dmg 安装/卸载/zap、pkg payload、`install --cask`、API 映射、outdated/upgrade/reinstall、uninstall quit/delete
 - `test_cask_depth.py`：13 种 Library artifact、stage_only、target 安全校验、升级 artifact 清理
 - `test_cask_pkg_system.py`：opt-in 系统 pkg 安装（fake installer、root 检查、receipt）

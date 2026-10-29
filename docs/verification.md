@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-257 passed, 5 skipped in 81.35s
+295 passed, 5 skipped in 272.40s
 ```
 
 Breakdown of the feature slices:
@@ -37,9 +37,11 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
-48 passed      # declarative + expanded opt-in Ruby bridge/API
+55 passed      # declarative + expanded opt-in Ruby bridge/API
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_formula_test.py
-16 passed      # formula test DSL + CLI
+25 passed      # formula test DSL + CLI
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_caveats.py
+22 passed      # caveats DSL + CLI
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
 8 passed       # launchd + systemd unit generation, orphan cleanup
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_taps.py
@@ -316,6 +318,18 @@ local remote, commits a change, and confirms the CLI updates it.
   services DSL and many cask APIs remain incomplete. See
   `docs/ruby-api-coverage.md`.
 
+## Caveats / test / Formula API batch
+
+- `pybrew caveats <formula>` executes the caveats Ruby DSL (heredoc, platform
+  branches, paths) without requiring installation.
+- Formula test DSL gained path/directory/symlink assertions, `shell_output`
+  `stderr:`/`env:`/`chdir:` options, and a limited `Formula[...]` context.
+- Formula/resource shim gained `Formula.factory`, metadata/paths/deps,
+  installed predicates, resource metadata and pre-staged paths; resources still
+  do not download and patches are warned no-ops.
+- Full suite: 295 passed, 5 skipped (the added caveats/formula Ruby tests are
+  the main reason the suite is slower).
+
 ## Final parallel batch
 
 - Cask preflight/postflight scripts are parsed inertly and executed only with
@@ -403,7 +417,7 @@ install, `doctor`, `list`, `deps`, `search`, `config`, and `parse`.
 - Cask login items and complete script API coverage; exotic cask script APIs
   outside the shim still fail explicitly.
 - `brew lgtm`, remaining advanced Brewfile options.
-- Full Homebrew Ruby API coverage; the bridge/test runner remain partial shims.
+- Full Homebrew Ruby API coverage; the bridge/test/caveats runners remain partial shims.
 
 These are tracked in the README roadmap and `docs/parity.md`.
 

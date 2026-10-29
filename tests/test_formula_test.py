@@ -204,6 +204,158 @@ def test_shell_output_failure_includes_status(tmp_path: Path) -> None:
     assert excinfo.value.returncode == 1
 
 
+# ---------------------------------------------------------------------------
+# expanded formula test DSL (real Ruby)
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_path_assertions_pass(tmp_path: Path) -> None:
+    source = """do
+  (testpath/"sub").mkpath
+  (testpath/"data.txt").write "data"
+  (testpath/"link").make_symlink("data.txt")
+  assert_path_exists testpath/"data.txt"
+  assert_path_exists testpath/"sub"
+  refute_path_exists testpath/"missing"
+  assert_directory testpath/"sub"
+  refute_directory testpath/"data.txt"
+  assert_file testpath/"data.txt"
+  assert_symlink testpath/"link"
+  assert_path_exists testpath/"link"
+  assert_predicate testpath/"sub", :directory?
+  refute_predicate testpath/"data.txt", :directory?
+  assert_empty ""
+  refute_empty "x"
+  assert_includes ["a", "b"], "b"
+  refute_includes ["a"], "b"
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert result.success is True
+    assert result.stderr == ""
+
+
+@requires_ruby
+def test_path_assertion_failure_names_the_path(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  assert_path_exists testpath/"missing.txt"\nend'
+    )
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert excinfo.value.returncode == 1
+    assert "missing.txt" in excinfo.value.stderr
+    assert "to exist" in excinfo.value.stderr
+
+
+@requires_ruby
+def test_output_assertions_pass(tmp_path: Path) -> None:
+    source = """do
+  assert_output "hello", "hello"
+  refute_output "hello", "world"
+  assert_output "piped\\n", pipe_output("cat", "piped\\n")
+  assert_output "", shell_output("true")
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert result.success is True
+
+
+@requires_ruby
+def test_output_assertion_failure_is_reported(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  assert_output "expected-output", "actual-output"\nend'
+    )
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    stderr = excinfo.value.stderr
+    assert "Expected output" in stderr
+    assert "expected-output" in stderr
+    assert "actual-output" in stderr
+
+
+@requires_ruby
+def test_shell_output_and_pipe_output_options(tmp_path: Path) -> None:
+    source = """do
+  assert_equal "out", shell_output("printf out; printf err >&2")
+  assert_equal "err", shell_output("printf out; printf err >&2", stderr: true)
+  assert_equal "custom", shell_output('printf %s "$PYBREW_TEST_EXTRA"',
+                                     env: {"PYBREW_TEST_EXTRA" => "custom"})
+  (testpath/"work").mkpath
+  (testpath/"work"/"marker").write "marker"
+  assert_equal "marker", shell_output("cat marker", chdir: testpath/"work")
+  assert_equal "pipe-err", pipe_output("printf out; printf pipe-err >&2", nil, stderr: true)
+  assert_equal "pipe-env", pipe_output('printf %s "$PYBREW_PIPE_EXTRA"', nil,
+                                      env: {"PYBREW_PIPE_EXTRA" => "pipe-env"})
+  assert_equal "marker", pipe_output("cat marker", nil, chdir: testpath/"work")
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert result.success is True
+
+
+@requires_ruby
+def test_shell_output_failure_with_stderr_option_still_raises(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  shell_output("printf boom >&2; exit 4", stderr: true)\nend'
+    )
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert "exit status 4" in str(excinfo.value)
+    assert "boom" in excinfo.value.stderr
+
+
+@requires_ruby
+def test_formula_reference_exposes_paths(tmp_path: Path) -> None:
+    source = """do
+  ref = Formula["hello-test"]
+  assert_equal "hello-test", ref.name
+  assert_equal prefix.to_s, ref.prefix.to_s
+  assert_equal opt_prefix.to_s, ref.opt_prefix.to_s
+  assert_equal bin.to_s, ref.bin.to_s
+  assert_equal testpath.to_s, ref.testpath.to_s
+  assert_predicate ref.testpath, :directory?
+  assert_predicate ref.bin, :directory?
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert result.success is True
+
+
+@requires_ruby
+def test_formula_reference_unknown_name_fails_clearly(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  Formula["not-this-formula"].prefix\nend'
+    )
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert "not-this-formula" in excinfo.value.stderr
+    assert "not available" in excinfo.value.stderr
+
+
+@requires_ruby
+def test_testpath_is_under_configured_prefix(tmp_path: Path) -> None:
+    formula, config = _installed_formula(tmp_path, "do\n  assert_equal 1, 1\nend")
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    testpath = os.path.realpath(result.testpath)
+    prefix = os.path.realpath(config.prefix)
+    assert os.path.commonpath([testpath, prefix]) == prefix
+    assert not Path(result.testpath).exists()
+
+
 def test_missing_test_block_raises(tmp_path: Path) -> None:
     formula, config = _installed_formula(tmp_path, "")
     assert has_test_block(formula) is False

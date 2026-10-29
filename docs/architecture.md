@@ -213,6 +213,11 @@ commands append local events when enabled.
 limited assertion/`shell_output` shim; `pybrew test <formula>` exposes it. The
 runner is opt-in and requires an installed keg.
 
+## Caveats
+
+`caveats.py` runs a formula's captured caveats body under Ruby with a small
+platform/path shim; `pybrew caveats <formula>` does not require installation.
+
 ## Known limitations
 
 - Source builds support a common literal `def install` subset (on_arm/on_intel,

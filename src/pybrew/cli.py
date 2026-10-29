@@ -22,6 +22,7 @@ from .analytics import (
 from .api import fetch_formula
 from .cask import CaskError
 from .bundle import bundle_check, bundle_dump, bundle_install, bundle_list, parse_brewfile
+from .caveats import CaveatsError, run_caveats
 from .cask_installer import CaskInstaller, CaskLoader, CaskNotFound
 from .cellar import Cellar, Linker, read_receipt
 from .doctor import diagnose, diagnose_issues
@@ -294,6 +295,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     test_cmd = subparsers.add_parser("test", parents=[common], help="run a formula's test block")
     test_cmd.add_argument("formula")
+
+    caveats_cmd = subparsers.add_parser(
+        "caveats", parents=[common], help="show a formula's caveats"
+    )
+    caveats_cmd.add_argument("formula")
     return parser
 
 
@@ -1368,6 +1374,22 @@ def cmd_test(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_caveats(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    loader = _loader(config)
+    formula = _load_formula(args.formula, loader)
+    try:
+        output = run_caveats(formula, config)
+    except CaveatsError as error:
+        details = str(error).strip()
+        if details:
+            print(f"Error: {details}", file=sys.stderr)
+        return 1
+    if output:
+        print(output, end="" if output.endswith("\n") else "\n")
+    return 0
+
+
 def cmd_parse(args: argparse.Namespace) -> int:
     path = Path(args.file).expanduser()
     if not path.is_file():
@@ -1418,6 +1440,7 @@ _COMMANDS = {
     "analytics": cmd_analytics,
     "parse": cmd_parse,
     "test": cmd_test,
+    "caveats": cmd_caveats,
 }
 
 

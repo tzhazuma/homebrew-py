@@ -9,6 +9,7 @@ no network access and no writes outside ``tmp_path``.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import platform
 import shutil
@@ -669,6 +670,333 @@ def test_formula_lookup_missing_keg_is_clear(
     formula.dependencies.append(Dependency(name="not-installed"))
 
     with pytest.raises(BuildError, match="is not installed"):
+        _build(tmp_path, formula)
+
+
+def test_formula_object_metadata_paths_and_dependencies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-formula-object",
+        "1.2.3",
+        r'''
+  ref = Formula["ruby-formula-object"]
+  (prefix/"formula-object").write [
+    ref.name,
+    ref.full_name,
+    ref.version.to_s,
+    ref.revision,
+    ref.pkg_version.to_s,
+    ref.prefix.to_s,
+    ref.opt_prefix.to_s,
+    ref.opt_bin.to_s,
+    ref.bin.to_s,
+    ref.lib.to_s,
+    ref.include.to_s,
+    ref.share.to_s,
+    ref.pkgshare.to_s,
+    ref.testpath.to_s,
+    ref.build.stable?,
+    ref.build.head?,
+    ref.build.bottle?,
+    ref.build.with?("extra"),
+    ref.build.without?("extra"),
+    Formula.factory("dep-runtime").name,
+    Formula.factory("dep-runtime").full_name,
+    ref.installed?,
+    ref.any_version_installed?,
+    ref.latest_version_installed?,
+  ].join("|")
+  (prefix/"formula-deps").write ref.deps.map { |dep| dep.name }.join(",")
+  (prefix/"formula-runtime").write(
+    ref.runtime_dependencies.map { |dep| dep.name }.join(",")
+  )
+  (prefix/"formula-recursive").write(
+    ref.recursive_dependencies.map { |dep| dep.name }.join(",")
+  )
+  (prefix/"formula-include").write ref.deps.include?("dep-runtime")
+''',
+    )
+    formula.tap = "acme/tap"
+    formula.revision = 2
+    formula.dependencies.append(Dependency(name="dep-runtime"))
+    formula.dependencies.append(
+        Dependency(name="dep-build", tags=frozenset({"build"}))
+    )
+    formula.dependencies.append(
+        Dependency(name="dep-test", tags=frozenset({"test"}))
+    )
+    formula.dependencies.append(
+        Dependency(name="dep-optional", tags=frozenset({"optional"}))
+    )
+
+    cellar_keg = tmp_path / "prefix" / "Cellar" / "ruby-formula-object" / "1.2.3_2"
+    cellar_keg.mkdir(parents=True)
+    keg = _build(tmp_path, formula, keg=cellar_keg)
+
+    prefix = tmp_path / "prefix"
+    parts = (keg / "formula-object").read_text().split("|")
+    assert parts[0] == "ruby-formula-object"
+    assert parts[1] == "acme/tap/ruby-formula-object"
+    assert parts[2] == "1.2.3"
+    assert parts[3] == "2"
+    assert parts[4] == "1.2.3_2"
+    assert parts[5] == str(cellar_keg)
+    assert parts[6] == str(prefix / "opt" / "ruby-formula-object")
+    assert parts[7] == str(prefix / "opt" / "ruby-formula-object" / "bin")
+    assert parts[8] == str(cellar_keg / "bin")
+    assert parts[9] == str(cellar_keg / "lib")
+    assert parts[10] == str(cellar_keg / "include")
+    assert parts[11] == str(cellar_keg / "share")
+    assert parts[12] == str(cellar_keg / "share" / "ruby-formula-object")
+    assert parts[13] == str(cellar_keg / "test")
+    assert parts[14:19] == ["true", "false", "false", "false", "true"]
+    assert parts[19] == "dep-runtime"
+    assert parts[20] == "dep-runtime"
+    assert parts[21] == "true"
+    assert parts[22] == "true"
+    assert parts[23] == "true"
+    assert (keg / "formula-deps").read_text() == (
+        "dep-runtime,dep-build,dep-test,dep-optional"
+    )
+    assert (keg / "formula-runtime").read_text() == "dep-runtime"
+    assert (keg / "formula-recursive").read_text() == (
+        "dep-runtime,dep-build,dep-test,dep-optional"
+    )
+    assert (keg / "formula-include").read_text() == "true"
+
+
+def test_recursive_dependencies_follow_installed_receipts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    dep_keg = tmp_path / "prefix" / "Cellar" / "dep-a" / "1.0"
+    dep_keg.mkdir(parents=True)
+    (dep_keg / "INSTALL_RECEIPT.json").write_text(
+        json.dumps({"runtime_dependencies": ["dep-b"]})
+    )
+    formula = _formula(
+        "ruby-recursive-deps",
+        "1.0",
+        r'''
+  ref = Formula["ruby-recursive-deps"]
+  (prefix/"recursive").write(
+    ref.recursive_dependencies.map { |dep| dep.name }.join(",")
+  )
+  (prefix/"dep-a-deps").write(
+    Formula["dep-a"].deps.map { |dep| dep.name }.join(",")
+  )
+  (prefix/"dep-a-runtime").write(
+    Formula["dep-a"].runtime_dependencies.map { |dep| dep.name }.join(",")
+  )
+''',
+    )
+    formula.dependencies.append(Dependency(name="dep-a"))
+
+    keg = _build(tmp_path, formula)
+
+    assert (keg / "recursive").read_text() == "dep-a,dep-b"
+    assert (keg / "dep-a-deps").read_text() == "dep-b"
+    assert (keg / "dep-a-runtime").read_text() == "dep-b"
+
+
+def test_formula_installed_predicates_for_versions_and_missing_deps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    prefix = tmp_path / "prefix"
+    (prefix / "Cellar" / "old-dep" / "1.0").mkdir(parents=True)
+    (prefix / "Cellar" / "new-dep" / "2.0").mkdir(parents=True)
+    (prefix / "Cellar" / "ruby-installed-predicates" / "1.0").mkdir(
+        parents=True
+    )
+    formula = _formula(
+        "ruby-installed-predicates",
+        "2.0",
+        r'''
+  old = Formula["old-dep"]
+  newest = Formula["new-dep"]
+  absent = Formula["absent-dep"]
+  current = Formula["ruby-installed-predicates"]
+  (prefix/"installed").write [
+    old.installed?,
+    old.any_version_installed?,
+    old.latest_version_installed?,
+    old.version.to_s,
+    old.pkg_version.to_s,
+    newest.installed?,
+    newest.version.to_s,
+    absent.installed?,
+    absent.any_version_installed?,
+    absent.latest_version_installed?,
+    current.installed?,
+    current.any_version_installed?,
+    current.latest_version_installed?,
+  ].join("|")
+''',
+    )
+    formula.dependencies.append(Dependency(name="old-dep"))
+    formula.dependencies.append(Dependency(name="new-dep"))
+    formula.dependencies.append(Dependency(name="absent-dep"))
+
+    keg = _build(tmp_path, formula)
+
+    parts = (keg / "installed").read_text().split("|")
+    assert parts[0:5] == ["true", "true", "true", "1.0", "1.0"]
+    assert parts[5:7] == ["true", "2.0"]
+    assert parts[7:10] == ["false", "false", "false"]
+    # The current formula is 2.0 and only 1.0 is installed in the Cellar.
+    assert parts[10:13] == ["false", "true", "false"]
+
+
+def test_resource_metadata_lookup_and_staged_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-resource-metadata",
+        "1.0",
+        r'''
+  declared = resource("declared")
+  list = formula.resources
+  (prefix/"resource-meta").write [
+    declared.name,
+    declared.url,
+    declared.sha256,
+    declared.version.to_s,
+    declared.staged?,
+    list.length,
+    list["declared"].name,
+    list.map(&:name).join(","),
+    list.key?(:declared),
+    list.keys.join(","),
+    list.to_h["declared"].version.to_s,
+    formula.resource("declared").name,
+  ].join("|")
+  declared.stage do |path|
+    (prefix/"resource-stage").write(Dir.pwd + "|" + path.to_s)
+  end
+  (prefix/"resource-fetch").write(declared.fetch.to_s)
+  pairs = []
+  list.each { |name, item| pairs << "#{name}=#{item.name}" }
+  values = []
+  list.each_value { |item| values << item.name }
+  (prefix/"resource-shapes").write [pairs.join(","), values.join(",")].join("|")
+''',
+    )
+    formula.resources["declared"] = SourceSpec(
+        url="https://example.com/declared-2.4.1.tar.gz", sha256="b" * 64
+    )
+    build_root = tmp_path / "build"
+    staged = build_root / ".pybrew-resources" / "declared"
+    staged.mkdir(parents=True)
+    (staged / "payload.txt").write_text("staged payload\n")
+
+    keg = _build(tmp_path, formula, build_root=build_root)
+
+    parts = (keg / "resource-meta").read_text().split("|")
+    assert parts[0] == "declared"
+    assert parts[1] == "https://example.com/declared-2.4.1.tar.gz"
+    assert parts[2] == "b" * 64
+    assert parts[3] == "2.4.1"
+    assert parts[4] == "true"
+    assert parts[5] == "1"
+    assert parts[6] == "declared"
+    assert parts[7] == "declared"
+    assert parts[8] == "true"
+    assert parts[9] == "declared"
+    assert parts[10] == "2.4.1"
+    assert parts[11] == "declared"
+
+    stage = (keg / "resource-stage").read_text().split("|")
+    assert Path(stage[0]).resolve() == staged.resolve()
+    assert Path(stage[1]).resolve() == staged.resolve()
+    assert (keg / "resource-fetch").read_text() == str(staged)
+    assert (keg / "resource-shapes").read_text() == (
+        "declared=declared|declared"
+    )
+
+
+def test_resource_stage_and_fetch_without_staged_path_are_clear(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-resource-unstaged",
+        "1.0",
+        r'''
+  declared = resource("declared")
+  begin
+    declared.stage { }
+  rescue => error
+    (prefix/"stage-error").write error.message
+  end
+  begin
+    declared.fetch
+  rescue => error
+    (prefix/"fetch-error").write error.message
+  end
+  (prefix/"resource-version").write declared.version.to_s
+''',
+    )
+    formula.resources["declared"] = SourceSpec(
+        url="https://example.com/plain.tar.gz", sha256="c" * 64
+    )
+
+    keg = _build(tmp_path, formula)
+
+    assert "has not been staged" in (keg / "stage-error").read_text()
+    assert "has not been staged" in (keg / "fetch-error").read_text()
+    # A URL without a detectable version yields no resource version.
+    assert (keg / "resource-version").read_text() == ""
+
+
+def test_patch_data_and_block_are_warned_noops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-patch-noops",
+        "1.0",
+        r'''
+  patch :DATA
+  patch do
+    url "https://example.com/fix.patch"
+    sha256 "abc"
+    strip :p1
+  end
+  patch :p2 do
+    url "https://example.com/other.patch"
+  end
+  (prefix/"patch-ok").write "ok"
+''',
+    )
+
+    keg = _build(tmp_path, formula, verbose=True)
+
+    assert (keg / "patch-ok").read_text() == "ok"
+    captured = capsys.readouterr()
+    assert "patch :DATA was not applied" in captured.err
+    assert "patch block was not applied" in captured.err
+    assert "patch :p2 was not applied" in captured.err
+
+
+def test_patch_block_unsupported_api_is_clear(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-patch-unsupported",
+        "1.0",
+        r'''
+  patch do
+    definitely_not_a_patch_api "x"
+  end
+''',
+    )
+
+    with pytest.raises(BuildError, match="unsupported Homebrew patch API"):
         _build(tmp_path, formula)
 
 

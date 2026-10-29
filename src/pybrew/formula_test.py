@@ -4,7 +4,7 @@ Homebrew formula tests are arbitrary Ruby, but the common subset used by the
 vast majority of formulae is small: a few shell helpers plus assertions.  This
 module executes the captured test body with the system Ruby (``/usr/bin/ruby``
 by default, overridable with ``PYBREW_RUBY``) inside a throw-away ``testpath``
-and with a deliberately small compatibility shim.
+under the configured prefix and with a deliberately small compatibility shim.
 
 Nothing here runs unless the ``test`` CLI command (or the public
 :func:`run_formula_test` helper) is called.  Failures are reported as
@@ -105,6 +105,62 @@ class FormulaTestContext
 
   attr_reader :testpath
 
+  class << self
+    # The context currently executing a formula test.  Only one test runs per
+    # Ruby process, so a simple class-level reference is enough for
+    # ``Formula["name"]`` to find the formula under test.
+    attr_accessor :current
+  end
+
+  # Minimal stand-in for Homebrew's ``Formula`` class.  The test runner only
+  # knows about the formula under test (its dependency graph is not loaded), so
+  # ``Formula["name"]`` is limited to that formula and fails clearly otherwise.
+  class Formula
+    attr_reader :name
+
+    def initialize(context, name)
+      @context = context
+      @name = name.to_s
+    end
+
+    def prefix
+      @context.prefix
+    end
+
+    def opt_prefix
+      @context.opt_prefix
+    end
+
+    def bin
+      @context.bin
+    end
+
+    def testpath
+      @context.testpath
+    end
+
+    def version
+      @context.version
+    end
+
+    def to_s
+      @name
+    end
+
+    def inspect
+      "#<Formula #{@name}>"
+    end
+
+    def self.[](name)
+      context = FormulaTestContext.current
+      if context.nil?
+        raise FormulaTestFailure, "Formula[...] is only available inside a formula test"
+      end
+
+      context.formula_reference(name)
+    end
+  end
+
   PATH_NAMES = %w[
     prefix bin sbin lib include share etc libexec opt_prefix opt_bin pkgshare
     var man
@@ -117,6 +173,19 @@ class FormulaTestContext
     (config["paths"] || {}).each do |name, value|
       @paths[name.to_s] = Pathname.new(value.to_s)
     end
+    FormulaTestContext.current = self
+  end
+
+  # Return the ``Formula["name"]`` reference for the formula under test.
+  def formula_reference(name)
+    name = name.to_s
+    unless name == self.name
+      raise FormulaTestFailure,
+            "Formula[#{name.inspect}] is not available: this test runner only exposes " \
+            "the formula under test (#{self.name.inspect})"
+    end
+
+    Formula.new(self, name)
   end
 
   PATH_NAMES.each do |name|
@@ -143,19 +212,29 @@ class FormulaTestContext
     block.call
   end
 
-  def shell_output(command, input = nil)
-    stdout, stderr, status = run_shell(command, input)
+  # Run a shell command and return its standard output.  A non-zero exit
+  # status raises (the message carries the captured stderr).
+  #
+  # ``stderr: true`` returns the captured standard error instead.
+  # ``env:`` adds/overrides environment variables for the child only and
+  # ``chdir:`` runs it in another directory.
+  def shell_output(command, input = nil, stderr: false, env: nil, chdir: nil)
+    stdout, stderr_text, status = run_shell(command, input, env: env, chdir: chdir)
     unless status.success?
       raise FormulaTestFailure,
-            "shell_output failed with exit status #{status.exitstatus}: #{command}\n#{stderr}"
+            "shell_output failed with exit status #{status.exitstatus}: #{command}\n#{stderr_text}"
     end
 
-    stdout
+    stderr ? stderr_text : stdout
   end
 
-  def pipe_output(command, input = nil)
-    stdout, _stderr, _status = run_shell(command, input)
-    stdout
+  # Run a shell command with the optional input and return its standard
+  # output, ignoring the exit status (``pipe_output`` historically behaves
+  # this way).  ``stderr:``, ``env:`` and ``chdir:`` work as in
+  # ``shell_output``.
+  def pipe_output(command, input = nil, stderr: false, env: nil, chdir: nil)
+    stdout, stderr_text, _status = run_shell(command, input, env: env, chdir: chdir)
+    stderr ? stderr_text : stdout
   end
 
   def assert(value, message = nil)
@@ -232,6 +311,54 @@ class FormulaTestContext
     raise_failure("Expected #{collection.inspect} to not include #{object.inspect}", message)
   end
 
+  def assert_output(expected, actual, message = nil)
+    return if expected == actual
+
+    raise_failure("Expected output #{expected.inspect} to equal #{actual.inspect}", message)
+  end
+
+  def refute_output(expected, actual, message = nil)
+    return unless expected == actual
+
+    raise_failure("Expected output #{expected.inspect} to not equal #{actual.inspect}", message)
+  end
+
+  def assert_path_exists(path, message = nil)
+    return if File.exist?(path.to_s)
+
+    raise_failure("Expected path #{path.to_s.inspect} to exist", message)
+  end
+
+  def refute_path_exists(path, message = nil)
+    return unless File.exist?(path.to_s)
+
+    raise_failure("Expected path #{path.to_s.inspect} to not exist", message)
+  end
+
+  def assert_directory(path, message = nil)
+    return if File.directory?(path.to_s)
+
+    raise_failure("Expected path #{path.to_s.inspect} to be a directory", message)
+  end
+
+  def refute_directory(path, message = nil)
+    return unless File.directory?(path.to_s)
+
+    raise_failure("Expected path #{path.to_s.inspect} to not be a directory", message)
+  end
+
+  def assert_file(path, message = nil)
+    return if File.file?(path.to_s)
+
+    raise_failure("Expected path #{path.to_s.inspect} to be a file", message)
+  end
+
+  def assert_symlink(path, message = nil)
+    return if File.symlink?(path.to_s)
+
+    raise_failure("Expected path #{path.to_s.inspect} to be a symlink", message)
+  end
+
   def assert_nil(object, message = nil)
     return if object.nil?
 
@@ -246,17 +373,20 @@ class FormulaTestContext
 
   private
 
-  def run_shell(command, input)
+  def run_shell(command, input, env: nil, chdir: nil)
     args = if command.is_a?(Array)
              command.map(&:to_s)
            else
              ["/bin/sh", "-c", command.to_s]
            end
-    if input.nil?
-      Open3.capture3(*args)
-    else
-      Open3.capture3(*args, stdin_data: input.to_s)
+    environment = {}
+    (env || {}).each do |key, value|
+      environment[key.to_s] = value.nil? ? nil : value.to_s
     end
+    options = {}
+    options[:stdin_data] = input.to_s unless input.nil?
+    options[:chdir] = chdir.to_s unless chdir.nil?
+    Open3.capture3(environment, *args, **options)
   end
 
   def raise_failure(detail, message)
@@ -378,6 +508,25 @@ def _as_text(value: object) -> str:
     return str(value)
 
 
+def _make_test_root(config: Config) -> Path:
+    """Create the throw-away directory that holds the runner and testpath.
+
+    The directory deliberately lives under the configured prefix (in
+    ``var/pybrew/tmp``) so formula tests run on the same filesystem as the
+    installation and ``testpath`` is under ``prefix``.  It is removed after
+    every run.
+    """
+
+    parent = config.var / "pybrew" / "tmp"
+    try:
+        parent.mkdir(parents=True, exist_ok=True)
+        return Path(tempfile.mkdtemp(prefix="formula-test-", dir=str(parent)))
+    except OSError as error:
+        raise FormulaTestError(
+            f"could not create a formula test directory under {parent}: {error}"
+        ) from error
+
+
 def run_formula_test(
     formula: Formula,
     config: Config,
@@ -386,7 +535,7 @@ def run_formula_test(
     timeout: Optional[float] = None,
     env: Optional[Mapping[str, str]] = None,
 ) -> FormulaTestResult:
-    """Run ``formula.test_source`` in a throw-away testpath.
+    """Run ``formula.test_source`` in a throw-away testpath under ``prefix``.
 
     On success a :class:`FormulaTestResult` is returned.  Missing tests,
     missing installations, missing Ruby interpreters, timeouts and failing
@@ -403,10 +552,10 @@ def run_formula_test(
     if timeout is None:
         timeout = DEFAULT_TIMEOUT
 
-    root = Path(tempfile.mkdtemp(prefix="pybrew-formula-test-"))
+    root = _make_test_root(config)
     # Resolve the testpath so ``Dir.pwd`` inside the Ruby test matches
-    # ``testpath.to_s`` even when the system temp directory is a symlink
-    # (for example /var -> /private/var on macOS).
+    # ``testpath.to_s`` even when the prefix contains a symlink (for example
+    # /var -> /private/var on macOS).
     testpath = (root / "testpath").resolve()
     testpath.mkdir()
     runner = root / "runner.rb"

@@ -20,22 +20,23 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
 | ENV | `ENV[...]`, `fetch`, `append_path`, `prepend_path`, `prepend_create_path`, `append`, `prepend`, `delete`, `cc`, `cxx`, `cflags`, `cppflags`, `ldflags`, `make_jobs`, `with_build_environment` |
 | Formula / resources | `Formula["name"]` path lookup, `name`, `version`, `prefix`, `bin`, `sbin`, `lib`, `include`, `share`, `etc`, `libexec`, `opt_prefix`, `opt_bin`, `pkgshare`, `appdir`, `buildpath`, `staged_path`, `resource(name)` staged-path object, `patch`/`option`/`depends_on` warnings |
 | Build helpers | `build.head?/stable?/with?/without?`, `args`, `on_macos`/`on_linux`/`on_arm`/`on_intel`, `std_configure_args`, `std_cmake_args`, `std_meson_args`, `std_cargo_args`, `std_go_args`, `std_pip_args`, `std_service_path_env` |
-| Test DSL | `shell_output`, `pipe_output`, `assert_equal`, `assert_match`, `assert_predicate`, `assert_empty`, `assert_includes`, `assert_nil`, `refute_*` |
+| Test DSL | `shell_output`/`pipe_output` with `stderr:`/`env:`/`chdir:`, `assert_output`, path/directory/symlink assertions, `assert_equal`, `assert_match`, `assert_predicate`, `assert_empty`, `assert_includes`, `assert_nil`, `refute_*` |
+| Caveats DSL | `pybrew caveats`: heredocs/strings, platform/arch blocks, paths, `ohai`/`opoo`/`puts`, ENV/Utils |
 
 ## Not implemented / partial
 
 - Complete `Formula` class: specs, dependencies, requirements, build options,
   bottle metadata, version schemes, aliases and formula loading internals.
-- Resource download and staging (`resource(...).stage`), patch application,
-  `patch do ... end` execution.
+- Resource download/staging beyond pre-staged paths (`resource(...).stage`),
+  patch application, `patch do ... end` execution.
 - Homebrew internals: `Formulary`, `FormulaInstaller`, `Keg`, `Tab`, `Superenv`,
   compiler selection, sandbox, GitHub/API helpers, analytics internals.
 - Full `MacOS`/SDK/Xcode/CLT detection, `DevelopmentTools`, `SystemConfig`.
 - Services DSL (`service do ... end`), caveats DSL, livecheck DSL.
 - Full cask DSL and cask script APIs (`Utils` internals, `MacOS` cask helpers,
   `system_command` variants are partial).
-- Full test DSL (`assert_output`, `assert_path_exists`, `shell_output` options,
-  `Formula["x"].test` etc.).
+- Full test DSL (Minitest block forms, `Formula["x"].test`, all path/type
+  assertions and dependency lookup).
 - Any Ruby gem or third-party API used by formulae.
 
 Unknown methods fail loudly through `method_missing`/Ruby errors instead of
