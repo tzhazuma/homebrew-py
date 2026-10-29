@@ -690,6 +690,7 @@ class CaskInstaller:
         self._system_pkg_before_ids = None
         self._script_results = {}
         self._check_arch_dependency(cask)
+        self._check_os_dependency(cask)
         self._check_macos_dependency(cask)
         self._check_named_dependencies(cask)
         if cask.disabled:
@@ -1027,6 +1028,12 @@ class CaskInstaller:
             return []
         values = value if isinstance(value, list) else [value]
         return [str(item) for item in values if str(item)]
+
+    def _check_os_dependency(self, cask: Cask) -> None:
+        if cask.os.get("macos") and not sys.platform.startswith("darwin"):
+            raise CaskError(f"{cask.token} is only available on macOS")
+        if cask.os.get("linux") and not sys.platform.startswith("linux"):
+            raise CaskError(f"{cask.token} is only available on Linux")
 
     def _check_macos_dependency(self, cask: Cask) -> None:
         value = cask.depends_on.get("macos")

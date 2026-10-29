@@ -824,3 +824,31 @@ def test_cask_no_autobump_metadata() -> None:
     )
     assert cask.no_autobump is True
     assert cask.no_autobump_reason == "version is manual"
+
+
+def test_cask_os_stanza_is_enforced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "o" / "osy.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        '''cask "osy" do
+  version "1.0"
+  stage_only true
+  os macos: ">= :sonoma"
+end
+'''
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    monkeypatch.setattr("pybrew.cask_installer.sys.platform", "linux")
+    with pytest.raises(CaskError, match="only available on macOS"):
+        installer.install(CaskLoader(discover_taps([tap])).load("osy"))

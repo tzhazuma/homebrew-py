@@ -42,6 +42,7 @@ class Cask:
     uninstall: dict[str, Any] = field(default_factory=dict)
     zap: list[str] = field(default_factory=list)
     depends_on: dict[str, Any] = field(default_factory=dict)
+    os: dict[str, Any] = field(default_factory=dict)
     conflicts_with: dict[str, Any] = field(default_factory=dict)
     auto_updates: bool = False
     stage_only: bool = False
@@ -588,6 +589,10 @@ class CaskParser:
                 cask.zap.extend(str(item) for item in trash)
             elif trash:
                 cask.zap.append(str(trash))
+        elif name == "os":
+            for key, value in kwargs.items():
+                if key in ("macos", "linux"):
+                    cask.os[key] = value
         elif name == "depends_on":
             cask.depends_on.update({str(k): v for k, v in kwargs.items()})
         elif name == "conflicts_with":

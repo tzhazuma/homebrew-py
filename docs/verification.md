@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-525 passed, 5 skipped in 91.30s
+526 passed, 5 skipped in 73.79s
 ```
 
 Breakdown of the feature slices:
@@ -33,7 +33,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_ruby.py
-69 passed      # cask base + Ruby evaluator + artifacts + uninstall actions + metadata
+70 passed      # cask base + Ruby evaluator + artifacts + uninstall actions + os
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
@@ -680,6 +680,11 @@ local remote, commits a change, and confirms the CLI updates it.
 
 - Added `Cask.no_autobump`/`no_autobump_reason` and literal/evaluator support
   for `no_autobump! because: "..."`.
+
+## Cask os stanza
+
+- Added `Cask.os` and literal support for `os macos:`/`os linux:`.
+- The installer rejects a cask whose declared OS does not match the host.
 
 ## Final parallel batch
 
