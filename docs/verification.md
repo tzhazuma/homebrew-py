@@ -360,9 +360,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest parallel-batch feature commit: `40089f7` (cask depth, source DSL, Brewfile, ELF)
-- CI run for the parallel-batch commit `40089f7`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40816301690>
+- Latest feature commit: `5523bf4` (opt-in system pkg + Brewfile restart_service)
+- CI run for `5523bf4`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40817611123>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
