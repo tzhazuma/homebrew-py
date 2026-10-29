@@ -1969,3 +1969,30 @@ def test_std_zig_args(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert "--release=small" in lines[0]
     assert "-Doptimize=ReleaseSmall" in lines[0]
     assert "Invalid Zig release mode" in lines[1]
+
+
+def test_formula_head_and_installed_prefix_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-headpaths",
+        "1.0",
+        (
+            '  ref = Formula["ruby-headpaths"]\n'
+            '  (prefix/"headpaths").write [\n'
+            '    ref.latest_head_version.to_s,\n'
+            '    ref.latest_head_prefix.to_s,\n'
+            '    ref.installed_prefixes.map { |path| path.basename.to_s }.join(",")\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.head = SourceSpec(url="https://example.com/head.tar.gz")
+    config = _config(tmp_path)
+    (config.cellar / "ruby-headpaths" / "1.0").mkdir(parents=True)
+    (config.cellar / "ruby-headpaths" / "HEAD").mkdir(parents=True)
+    keg = _build(tmp_path, formula)
+    lines = (keg / "headpaths").read_text().splitlines()
+    assert lines[0] == "HEAD"
+    assert lines[1] == str(config.cellar / "ruby-headpaths" / "HEAD")
+    assert lines[2] == "1.0,HEAD"

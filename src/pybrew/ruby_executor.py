@@ -2258,6 +2258,20 @@ class PybrewFormulaRef
     rack.children.select { |child| child.directory? }
   end
 
+  def installed_prefixes
+    installed_kegs
+  end
+
+  def latest_head_version
+    value = @info["head_version"]
+    value.nil? ? nil : PybrewVersion.new(value.to_s)
+  end
+
+  def latest_head_prefix
+    version = latest_head_version
+    version.nil? ? nil : Pathname.new(self.class.cellar) + name + version.to_s
+  end
+
   def latest_installed_keg
     kegs = installed_kegs
     return nil if kegs.empty?
@@ -3602,6 +3616,8 @@ def _formula_reference_map(
         "aliases": list(formula.aliases),
         "oldname": formula.oldname,
         "homebrew_prefix": str(config.prefix),
+        "cellar": str(config.cellar),
+        "head_version": "HEAD" if getattr(formula.head, "url", None) else None,
         "post_install?": bool(formula.post_install_source),
         "service?": bool(
             isinstance(formula.service, dict) and formula.service.get("source")
@@ -3928,6 +3944,8 @@ def execute_install_body(
         "kernel_version": platform.release(),
         "body_line": body_line,
         "homebrew_prefix": str(config.prefix),
+        "cellar": str(config.cellar),
+        "head_version": "HEAD" if getattr(formula.head, "url", None) else None,
         "cellar": str(config.cellar),
         "formulae": formulae,
         "resources": resources,
