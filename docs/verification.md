@@ -491,9 +491,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `a0b8a44` (opt-in cask uninstall scripts)
-- CI run for `a0b8a44`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40932903013>
+- Latest feature commit: `f94c1ef` (cask caveats rendering)
+- CI run for `f94c1ef`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40933594684>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
