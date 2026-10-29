@@ -232,10 +232,12 @@ def extract_install_body(formula: Formula) -> tuple[str, int]:
 # quotes, heredocs or non-ASCII text in the formula.
 _RUBY_SHIM = r'''
 require "base64"
+require "etc"
 require "fileutils"
 require "json"
 require "pathname"
 require "rbconfig"
+require "shellwords"
 
 $stdout.sync = true
 $stderr.sync = true
@@ -250,6 +252,26 @@ module OS
 
   def self.linux?
     !!(RUBY_PLATFORM =~ /linux/)
+  end
+
+  def self.kernel_release
+    release = (PYBREW_CONFIG["kernel_version"] || "").to_s.strip
+    if release.empty?
+      begin
+        release = Etc.uname[:release].to_s.strip
+      rescue StandardError
+        release = ""
+      end
+    end
+    release.empty? ? "0" : release
+  end
+
+  # On macOS this mirrors MacOS.version; other platforms fall back to the
+  # kernel release so simple version checks keep working.
+  def self.version
+    return MacOS.version if mac?
+
+    @version ||= PybrewVersion.new(kernel_release)
   end
 end
 
@@ -286,6 +308,24 @@ module Hardware
       Etc.nprocessors
     rescue StandardError
       1
+    end
+
+    def self.physical_cores
+      @physical_cores ||= begin
+        count = nil
+        if OS.mac?
+          output = `/usr/sbin/sysctl -n hw.physicalcpu 2>/dev/null`.strip
+          count = output.to_i if output =~ /\A\d+\z/
+        elsif OS.linux? && File.file?("/proc/cpuinfo")
+          text = File.read("/proc/cpuinfo")
+          sockets = text.scan(/^physical id\s*:\s*(\d+)/).flatten.uniq.length
+          per_socket = text.scan(/^cpu cores\s*:\s*(\d+)/).flatten.first.to_i
+          count = sockets * per_socket if sockets > 0 && per_socket > 0
+        end
+        count && count > 0 ? count : cores
+      rescue StandardError
+        cores
+      end
     end
   end
 end
@@ -353,6 +393,165 @@ class PybrewVersion < String
 
   def dots_to_hyphens
     tr(".", "-")
+  end
+end
+
+module MacOS
+  RELEASES = {
+    :el_capitan => "10.11",
+    :sierra => "10.12",
+    :high_sierra => "10.13",
+    :mojave => "10.14",
+    :catalina => "10.15",
+    :big_sur => "11",
+    :monterey => "12",
+    :ventura => "13",
+    :sonoma => "14",
+    :sequoia => "15",
+    :tahoe => "26",
+    :golden_gate => "27",
+  }.freeze
+
+  SYMBOLS = RELEASES
+
+  class Version < PybrewVersion
+    def strip_patch
+      major_number = major.to_i
+      major_number >= 11 ? major_number.to_s : major_minor
+    end
+
+    def to_sym
+      MacOS::RELEASES.invert.fetch(strip_patch, :dunno)
+    end
+
+    def pretty_name
+      symbol = to_sym
+      return "Dunno" if symbol == :dunno
+
+      symbol.to_s.split("_").map(&:capitalize).join(" ")
+    end
+
+    # Compare against release symbols as Homebrew formulae do:
+    # ``MacOS.version >= :ventura``.
+    def <=>(other)
+      if other.is_a?(Symbol)
+        other = MacOS::RELEASES[other]
+        return nil if other.nil?
+      end
+      return nil unless other.is_a?(String)
+
+      left = to_s.split(".").map(&:to_i)
+      right = other.to_s.split(".").map(&:to_i)
+      [left.length, right.length].max.times do |index|
+        a = left[index] || 0
+        b = right[index] || 0
+        return a <=> b unless a == b
+      end
+      0
+    end
+
+    def ==(other)
+      return to_sym == other if other.is_a?(Symbol)
+
+      super
+    end
+    alias eql? ==
+  end
+
+  def self.full_version
+    @full_version ||= begin
+      raw = ENV["HOMEBREW_MACOS_VERSION"].to_s.strip
+      raw = PYBREW_CONFIG["macos_version"].to_s.strip if raw.empty?
+      if raw.empty? && OS.mac?
+        raw = `/usr/bin/sw_vers -productVersion 2>/dev/null`.strip
+      end
+      if raw.empty?
+        raise "MacOS.full_version is not available on this host: " \
+              "not macOS and HOMEBREW_MACOS_VERSION is not set"
+      end
+      Version.new(raw)
+    end
+  end
+
+  def self.version
+    @version ||= Version.new(full_version.strip_patch)
+  end
+
+  def self.version_symbol
+    version.to_sym
+  end
+end
+
+module OS
+  Mac = ::MacOS
+end
+
+OS_VERSION = begin
+  override = ENV["HOMEBREW_OS_VERSION"].to_s.strip
+  if !override.empty?
+    override
+  elsif OS.mac?
+    "macOS #{MacOS.full_version}"
+  elsif OS.linux?
+    "Linux #{OS.kernel_release}"
+  else
+    RUBY_PLATFORM
+  end
+end
+
+module PybrewSystem
+  module_function
+
+  # Normalise the flexible call styles used by Homebrew formulae:
+  # ``system(env, cmd, *args)``, ``system(cmd, env: ..., chdir: ...)`` and the
+  # positional options hash accepted by ``Kernel.system``.
+  def normalize(args, options)
+    arguments = args.dup
+    environment = {}
+    environment = arguments.shift if arguments.first.is_a?(Hash)
+    options = options.dup
+    trailing = arguments.last.is_a?(Hash) ? arguments.pop : nil
+    options = trailing.merge(options) if trailing
+    env_option = options.delete(:env)
+    environment = environment.merge(env_option) if env_option.is_a?(Hash)
+    normalized_env = {}
+    environment.each do |key, value|
+      normalized_env[key.to_s] = value.nil? ? nil : value.to_s
+    end
+    chdir = options.delete(:chdir)
+    options[:chdir] = chdir.to_s unless chdir.nil?
+    command = arguments.flatten.compact.map(&:to_s)
+    raise ArgumentError, "system: no command given" if command.empty?
+
+    [normalized_env, command, options]
+  end
+
+  def run!(args, options = {})
+    environment, command, options = normalize(args, options)
+    success = Kernel.system(environment, *command, **options)
+    raise "Failed executing: #{command.join(' ')}" unless success
+
+    true
+  end
+
+  def quiet(args, options = {})
+    environment, command, options = normalize(args, options)
+    options = { out: File::NULL, err: File::NULL }.merge(options)
+    Kernel.system(environment, *command, **options) ? true : false
+  rescue RuntimeError, ArgumentError
+    false
+  end
+end
+
+module Utils
+  module_function
+
+  def safe_system(*args, **options)
+    PybrewSystem.run!(args, options)
+  end
+
+  def quiet_system(*args, **options)
+    PybrewSystem.quiet(args, options)
   end
 end
 
@@ -480,6 +679,57 @@ class << ENV
   end
 end
 
+class PybrewInreplace
+  attr_accessor :errors
+  attr_accessor :inreplace_string
+
+  def initialize(string)
+    @inreplace_string = string.dup
+    @errors = []
+  end
+
+  def gsub!(before, after, audit_result: true)
+    before = before.to_s if before.is_a?(Pathname)
+    result = @inreplace_string.gsub!(before, after.to_s)
+    if audit_result && result.nil?
+      @errors << "expected replacement of #{before.inspect} with #{after.inspect}"
+    end
+    result
+  end
+
+  def sub!(before, after, audit_result: true)
+    before = before.to_s if before.is_a?(Pathname)
+    result = @inreplace_string.sub!(before, after.to_s)
+    if audit_result && result.nil?
+      @errors << "expected replacement of #{before.inspect} with #{after.inspect}"
+    end
+    result
+  end
+
+  def change_make_var!(flag, new_value)
+    return if gsub!(/^#{Regexp.escape(flag)}[ \t]*[\\?+:!]?=[ \t]*((?:.*\\\n)*.*)$/,
+                    "#{flag}=#{new_value}",
+                    audit_result: false)
+
+    @errors << "expected to change #{flag.inspect} to #{new_value.inspect}"
+  end
+
+  def remove_make_var!(flags)
+    Array(flags).each do |flag|
+      next if gsub!(/^#{Regexp.escape(flag)}[ \t]*[\\?+:!]?=(?:.*\\\n)*.*$\n?/,
+                    "",
+                    audit_result: false)
+
+      @errors << "expected to remove #{flag.inspect}"
+    end
+  end
+
+  def get_make_var(flag)
+    @inreplace_string[/^#{Regexp.escape(flag)}[ \t]*[\\?+:!]?=[ \t]*((?:.*\\\n)*.*)$/, 1] ||
+      raise(ArgumentError, "expected to find make variable #{flag.inspect}")
+  end
+end
+
 class PybrewInstallContext
   include FileUtils
 
@@ -536,29 +786,39 @@ class PybrewInstallContext
     @paths["staged_path"]
   end
 
+  # ``formula_opt_prefix``/``formula_opt`` mirror Homebrew's stable opt path
+  # helpers for this or another formula name.
+  def formula_opt_prefix(formula_name = nil)
+    formula_name = name if formula_name.nil?
+    opt_root = if @paths["opt_prefix"]
+      @paths["opt_prefix"].dirname
+    else
+      @paths["prefix"] + "opt"
+    end
+    Pathname.new(File.join(opt_root.to_s, formula_name.to_s))
+  end
+
+  def formula_opt(formula_name = nil)
+    formula_opt_prefix(formula_name)
+  end
+
   def testpath
     Pathname.new(File.join(@paths["prefix"].to_s, "test"))
   end
 
-  def system(*args)
-    environment = {}
-    args = args.dup
-    environment = args.shift if args.first.is_a?(Hash)
-    command = args.flatten.compact.map(&:to_s)
-    raise ArgumentError, "system: no command given" if command.empty?
+  def system(*args, **options)
+    environment, command, options = PybrewSystem.normalize(args, options)
     ohai("system #{command.join(' ')}") if @verbose
-    success = Kernel.system(environment, *command)
+    success = Kernel.system(environment, *command, **options)
     raise "Failed executing: #{command.join(' ')}" unless success
+
     true
   end
 
   alias safe_system system
 
-  def quiet_system(*args)
-    system(*args)
-    true
-  rescue RuntimeError, ArgumentError
-    false
+  def quiet_system(*args, **options)
+    PybrewSystem.quiet(args, options)
   end
 
   def cd(path, &block)
@@ -570,26 +830,35 @@ class PybrewInstallContext
     end
   end
 
-  def inreplace(paths, before = nil, after = nil)
+  def inreplace(paths, before = nil, after = nil, audit_result: true, global: true, &block)
+    if before.nil? && after.nil?
+      if block.nil?
+        raise ArgumentError, "inreplace: must supply a block or before/after params"
+      end
+    elsif before.nil? || after.nil?
+      raise ArgumentError, "inreplace: must supply both before and after params"
+    end
     Array(paths).flatten.each do |pattern|
       matches = Dir.glob(pattern.to_s)
       matches = [pattern.to_s] if matches.empty?
       matches.each do |file|
         path = Pathname.new(file)
         raise "inreplace: file not found: #{file}" unless path.file?
-        text = path.read
-        if block_given?
-          text = yield(text)
+        helper = PybrewInreplace.new(path.read)
+        if before.nil? && after.nil?
+          block.call(helper)
+        elsif global
+          helper.gsub!(before, after, audit_result: audit_result)
         else
-          needle = before.to_s
-          unless text.include?(needle)
-            raise "inreplace: string not found in #{file}: #{needle.inspect}"
-          end
-          text = text.gsub(needle, after.to_s)
+          helper.sub!(before, after, audit_result: audit_result)
         end
-        path.write(text)
+        unless helper.errors.empty?
+          raise "inreplace failed for #{file}: #{helper.errors.join('; ')}"
+        end
+        path.write(helper.inreplace_string)
       end
     end
+    nil
   end
 
   def ohai(*messages)
@@ -708,6 +977,31 @@ class PybrewInstallContext
 
   alias on_arm64 on_arm
   alias on_x86_64 on_intel
+
+  # ``on_sonoma``/``on_ventura``/``on_sequoia`` and friends follow Homebrew's
+  # exact-version platform blocks.  They are a clear no-op on non-macOS hosts
+  # and accept the usual ``:or_newer``/``:or_older`` qualifier.
+  MacOS::SYMBOLS.each_key do |symbol|
+    define_method(:"on_#{symbol}") do |or_condition = nil, &block|
+      return nil unless OS.mac?
+      return nil if block.nil?
+
+      condition = or_condition.nil? ? nil : or_condition.to_sym
+      unless condition.nil? || condition == :or_newer || condition == :or_older
+        raise ArgumentError, "Invalid OS `or_*` condition: #{or_condition.inspect}"
+      end
+
+      version = MacOS.version
+      matched = case condition
+                when :or_newer then version >= symbol
+                when :or_older then version <= symbol
+                else version == symbol
+                end
+      return nil unless matched
+
+      block.call
+    end
+  end
 end
 
 context = PybrewInstallContext.new(PYBREW_CONFIG)
@@ -792,6 +1086,8 @@ def execute_install_body(
         "paths": _install_paths(formula, config, keg, build_root),
         "verbose": bool(verbose),
         "arch": os.environ.get("PYBREW_TARGET_ARCH") or platform.machine(),
+        "macos_version": platform.mac_ver()[0],
+        "kernel_version": platform.release(),
         "body_line": body_line,
     }
     script = _render_script(body, body_line, payload)

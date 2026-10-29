@@ -271,6 +271,38 @@ def test_default_install_does_not_run_scripts(
     assert receipt["script_results"] == {}
 
 
+def test_default_install_does_not_run_expanded_script_api(
+    script_env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_cask(
+        script_env.tap,
+        "expanded",
+        "1.0",
+        script_env.digest,
+        script_env.archive,
+        "  preflight do\n"
+        '    Utils.safe_system "/bin/true"\n'
+        '    puts MacOS.version_symbol\n'
+        "  end\n"
+        "  postflight do\n"
+        '    Utils.quiet_system "/bin/false"\n'
+        "    puts OS.version\n"
+        "    puts Hardware::CPU.cores\n"
+        "  end",
+    )
+    marker = script_env.tmp_path / "ruby-called"
+    fake = script_env.tmp_path / "fake-ruby"
+    fake.write_text(f"#!/bin/sh\ntouch \"{marker}\"\nexit 1\n", encoding="utf-8")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PYBREW_RUBY", str(fake))
+
+    installer = CaskInstaller(script_env.config)
+    result = installer.install(script_env.loader.load("expanded"))
+
+    assert not marker.exists()
+    assert _receipt(result.room)["scripts_requested"] is False
+
+
 def test_run_scripts_enabled_without_scripts_never_needs_ruby(
     script_env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -491,3 +523,60 @@ def test_ruby_shim_exposes_common_cask_script_api() -> None:
         assert accessor in _CASK_SCRIPT_SHIM
     # The captured body is read from a file, never interpolated into the shim.
     assert "instance_eval(File.read(body_path)" in _CASK_SCRIPT_SHIM
+
+
+def test_ruby_shim_exposes_expanded_platform_and_utils_api() -> None:
+    from pybrew.cask_installer import _CASK_SCRIPT_SHIM
+
+    for snippet in (
+        "module Utils",
+        "def safe_system",
+        "def quiet_system",
+        "module MacOS",
+        "def self.version",
+        "def self.version_symbol",
+        "def self.full_version",
+        "module OS",
+        "def self.version",
+        "module Hardware",
+        "module CPU",
+        "def self.cores",
+        'require "shellwords"',
+        'require "fileutils"',
+        'require "pathname"',
+    ):
+        assert snippet in _CASK_SCRIPT_SHIM
+    # The required libraries remain reachable from the evaluated body.
+    for constant in ("Shellwords", "FileUtils", "Pathname"):
+        assert constant in _CASK_SCRIPT_SHIM
+    # Non-interactive only: no sudo helper is part of the shim API.
+    assert "def sudo" not in _CASK_SCRIPT_SHIM
+
+
+def test_generated_shim_file_contains_expanded_api(
+    script_env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured = script_env.tmp_path / "captured-shim.rb"
+    fake = script_env.tmp_path / "capture-ruby"
+    fake.write_text(
+        '#!/bin/sh\ncp "$1" "$FAKE_SHIM_CAPTURE"\nexit 0\n', encoding="utf-8"
+    )
+    fake.chmod(0o755)
+    monkeypatch.setenv("PYBREW_RUBY", str(fake))
+    monkeypatch.setenv("FAKE_SHIM_CAPTURE", str(captured))
+
+    installer = CaskInstaller(script_env.config, run_scripts=True)
+    installer.install(script_env.loader.load("scripty"))
+
+    shim = captured.read_text(encoding="utf-8")
+    for snippet in (
+        "module Utils",
+        "module MacOS",
+        "module OS",
+        "module Hardware",
+        "def self.cores",
+        "def self.version_symbol",
+        "def self.full_version",
+    ):
+        assert snippet in shim
+    assert "def sudo" not in shim

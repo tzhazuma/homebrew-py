@@ -140,10 +140,11 @@ cask's declared trash paths after checking they stay inside the user
 home/prefix/temp roots. Library artifact kinds (`font`, `qlplugin`, VST plugins,
 etc.) copy into `<prefix>/Library/...` by default or `--library-root`; `stage_only`
 writes a receipt without artifacts. `.pkg` payloads are expanded under
-`--pkg-root`; `--system-pkg` opts into a root-only macOS `installer` call and
-tracks package IDs for root-only uninstall. `--run-scripts` opts into
-preflight/postflight Ruby scripts (inert by default). System pkg rollback during
-upgrade and exotic script APIs remain out of scope.
+`--pkg-root`; `--system-pkg` opts into a root-only macOS `installer` call,
+tracks package IDs for root-only uninstall, and cleans/rolls back IDs during
+upgrade. `--run-scripts` opts into preflight/postflight Ruby scripts (inert by
+default) with a shim covering common Utils/MacOS/OS/Shellwords helpers. Exotic
+script APIs remain out of scope.
 
 ## Services
 
@@ -210,7 +211,8 @@ commands append local events when enabled.
 
 - Source builds support a common literal `def install` subset (on_arm/on_intel,
   predicates, resources and HEAD included); an opt-in Ruby bridge covers
-  arbitrary install bodies but not every Homebrew Ruby API.
+  arbitrary install bodies with a broader Utils/MacOS/OS/Shellwords shim, but not
+  every Homebrew Ruby API.
 - ELF relocation needs `patchelf` for long RPATH replacements; Mach-O uses
   `install_name_tool`; further edge cases remain.
 - Cask `.pkg` payloads are expanded under `--pkg-root`; `--system-pkg` delegates

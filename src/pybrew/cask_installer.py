@@ -110,10 +110,158 @@ _CASK_SCRIPT_SHIM = r'''
 # pybrew cask script shim.  This file is generated at install time and is only
 # used when a caller explicitly opts in to cask script execution.
 
+require "etc"
 require "fileutils"
 require "open3"
 require "pathname"
+require "rbconfig"
 require "shellwords"
+
+# Shellwords, FileUtils and Pathname are available to cask script bodies (for
+# example Shellwords.escape or FileUtils.rm_rf) in addition to the helpers
+# defined below.
+
+# Host platform helpers available to opt-in cask scripts.  They mirror the
+# small subset of Homebrew's MacOS/OS/Hardware helpers that casks commonly
+# use; none of this runs unless the caller enabled ``run_scripts``.
+module MacOS
+  VERSION_SYMBOLS = {
+    "10.15" => :catalina,
+    "11" => :big_sur,
+    "12" => :monterey,
+    "13" => :ventura,
+    "14" => :sonoma,
+    "15" => :sequoia,
+    "26" => :tahoe,
+    "27" => :golden_gate,
+  }.freeze
+
+  SYMBOL_VERSIONS = VERSION_SYMBOLS.invert.freeze
+
+  DARWIN_VERSIONS = {
+    19 => "10.15",
+    20 => "11",
+    21 => "12",
+    22 => "13",
+    23 => "14",
+    24 => "15",
+    25 => "26",
+    26 => "27",
+  }.freeze
+
+  # A version string that also compares against the version symbols casks
+  # use (``MacOS.version >= :sonoma``).
+  class Version < String
+    include Comparable
+
+    def <=>(other)
+      other = MacOS.version_string(other) if other.is_a?(Symbol)
+      MacOS.version_parts(self) <=> MacOS.version_parts(other)
+    end
+
+    def ==(other)
+      (self <=> other).zero?
+    end
+    alias eql? ==
+  end
+
+  def self.version_string(value)
+    return SYMBOL_VERSIONS[value] if value.is_a?(Symbol) && SYMBOL_VERSIONS.key?(value)
+    value.to_s
+  end
+
+  def self.version_parts(value)
+    value.to_s.split(".").map(&:to_i)
+  end
+
+  def self.full_version
+    @full_version ||= begin
+      override = ENV["PYBREW_MACOS_VERSION"].to_s
+      if override.empty?
+        detected = nil
+        begin
+          output, status = Open3.capture2("/usr/bin/sw_vers", "-productVersion")
+          detected = output.strip if status.success?
+        rescue StandardError
+          detected = nil
+        end
+        if detected.nil? || detected.empty?
+          darwin = RbConfig::CONFIG["host_os"].to_s[/darwin(\d+)/, 1]
+          detected = DARWIN_VERSIONS[darwin.to_i] unless darwin.nil?
+        end
+        detected.nil? || detected.empty? ? "0" : detected
+      else
+        override
+      end
+    end
+  end
+
+  def self.version
+    Version.new(full_version)
+  end
+
+  def self.version_symbol
+    parts = full_version.split(".")
+    key = parts[0].to_i == 10 ? "10.#{parts[1]}" : parts[0].to_s
+    VERSION_SYMBOLS.fetch(key, :unknown)
+  end
+end
+
+module OS
+  def self.mac?
+    !!(RUBY_PLATFORM =~ /darwin/)
+  end
+
+  def self.linux?
+    !!(RUBY_PLATFORM =~ /linux/)
+  end
+
+  def self.version
+    return MacOS.version if mac?
+
+    release = Etc.uname[:release].to_s[/\d+(\.\d+)*/] || "0"
+    MacOS::Version.new(release)
+  rescue StandardError
+    MacOS::Version.new("0")
+  end
+end
+
+module Hardware
+  module CPU
+    def self.cores
+      Etc.nprocessors
+    rescue StandardError
+      1
+    end
+  end
+end
+
+# Command helpers used by some cask scripts through ``Utils``.  They are
+# intentionally limited to non-interactive execution: no sudo helper is
+# provided and pybrew never prompts for a password.
+module Utils
+  module_function
+
+  def safe_system(*args)
+    raise ArgumentError, "Utils.safe_system: no command given" if args.empty?
+
+    success = Kernel.system(*args)
+    unless success
+      status = $?
+      code = status.respond_to?(:exitstatus) ? status.exitstatus : 1
+      raise "Utils.safe_system failed (exit #{code}): #{args.flatten.compact.join(' ')}"
+    end
+    true
+  end
+
+  def quiet_system(*args)
+    return false if args.empty?
+
+    Kernel.system(*args, out: File::NULL, err: File::NULL)
+  rescue StandardError
+    false
+  end
+end
 
 class PybrewCaskScriptResult
   attr_reader :stdout, :stderr, :exit_status
@@ -376,6 +524,12 @@ class CaskInstaller:
         # whether ``pkgutil --pkgs`` tracking was available at all.
         self._system_pkg_ids: list[str] = []
         self._system_pkg_tracked = False
+        # Upgrade rollback state: whether the macOS installer was invoked and
+        # the package ID snapshot taken just before it ran.  The snapshot is
+        # what lets a failed upgrade identify *newly* installed packages
+        # without ever touching files that predate the attempt.
+        self._system_pkg_attempted = False
+        self._system_pkg_before_ids: Optional[set[str]] = None
         self._script_results: dict[str, dict[str, Any]] = {}
 
     # -- paths -----------------------------------------------------------
@@ -404,6 +558,8 @@ class CaskInstaller:
         self._system_pkg_used = False
         self._system_pkg_ids = []
         self._system_pkg_tracked = False
+        self._system_pkg_attempted = False
+        self._system_pkg_before_ids = None
         self._script_results = {}
         version = cask.resolved_version()
         if version in ("latest", "0"):
@@ -799,6 +955,12 @@ class CaskInstaller:
         before: Optional[set[str]] = None
         if pkgutil is not None:
             before = self._pkgutil_list_ids(cask.token, pkgutil)
+        if before is not None and self._system_pkg_before_ids is None:
+            # Keep the earliest snapshot: a multi-pkg cask must roll back
+            # every package installed by the whole failed upgrade, including
+            # packages from earlier artifacts.
+            self._system_pkg_before_ids = set(before)
+        self._system_pkg_attempted = True
         command = [executable, "-pkg", str(package), "-target", "/"]
         try:
             result = subprocess.run(command, text=True, capture_output=True)
@@ -903,6 +1065,52 @@ class CaskInstaller:
             elif key == "location":
                 location = value
         return Path(volume) / location.lstrip("/")
+
+    def _system_pkg_files(self, token: str, ids: Iterable[str]) -> list[Path]:
+        """Best-effort list of the files owned by ``ids``.
+
+        Upgrade cleanup uses this to avoid deleting an old package path that
+        the new installation also owns (a moved payload, or a new system
+        package that overwrites the same files).  Receipts that cannot be read
+        are skipped: the package-ID comparison still protects shared IDs.
+        """
+
+        pkg_ids = list(ids)
+        if not pkg_ids:
+            return []
+        try:
+            executable = self._pkgutil_executable(required=True)
+            roots = self._system_pkg_roots()
+        except CaskError:
+            return []
+        files: list[Path] = []
+        seen: set[str] = set()
+        for pkg_id in pkg_ids:
+            try:
+                base = self._pkgutil_install_location(token, executable, pkg_id)
+                result = self._run_pkgutil(
+                    token,
+                    executable,
+                    ["--files", pkg_id],
+                    f"list files for package {pkg_id}",
+                )
+            except CaskError:
+                continue
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                raw = Path(line)
+                candidate = raw if raw.is_absolute() else base / raw
+                try:
+                    validated = self._validate_system_pkg_path(candidate, roots)
+                except CaskError:
+                    continue
+                key = str(validated)
+                if key not in seen:
+                    seen.add(key)
+                    files.append(validated)
+        return files
 
     @staticmethod
     def _system_pkg_roots() -> list[Path]:
@@ -1030,15 +1238,26 @@ class CaskInstaller:
         return plan
 
     def _execute_system_pkg_uninstall(
-        self, token: str, plan: list[tuple[str, list[Path]]]
+        self,
+        token: str,
+        plan: list[tuple[str, list[Path]]],
+        shared_paths: Iterable[Path] = (),
+        shared_pkg_files: Iterable[Path] = (),
     ) -> None:
         if not plan:
             return
+        shared = list(shared_paths)
+        pkg_files = list(shared_pkg_files)
         for _pkg_id, paths in plan:
             # Deepest paths first so package-owned directories can be removed
             # with rmdir once they are empty.  Shared directories are left in
-            # place rather than recursively deleted.
+            # place rather than recursively deleted.  Paths owned by the new
+            # installation are never removed during an upgrade.
             for path in sorted(paths, key=lambda item: len(item.parts), reverse=True):
+                if shared and self._path_shared_with_receipt(path, shared):
+                    continue
+                if pkg_files and self._path_shared_with_pkg_files(path, pkg_files):
+                    continue
                 self._remove_system_pkg_path(token, path)
         executable = self._pkgutil_executable(required=True)
         for pkg_id, _paths in plan:
@@ -1123,24 +1342,236 @@ class CaskInstaller:
         by old versions are removed unless the new receipt also owns the same
         path (or an overlapping parent/child path, which can happen when a
         bundle payload moves); those belong to the new installation.
+
+        For system-wide pkg casks the previous receipts' ``system_pkg_ids``
+        are read before the new version is installed.  Old package files are
+        only removed after the new install succeeds, are validated with the
+        same pkgutil/allowed-root checks as uninstall, and the corresponding
+        package receipts are forgotten.  If the new install fails after the
+        macOS installer was invoked, package IDs that did not exist before the
+        attempt are rolled back on a best-effort basis: files that predate the
+        upgrade are never removed.
         """
 
-        old_versions = self.installed_versions(cask.token)
-        result = self.install(cask, force=True)
+        token = cask.token
+        new_version = cask.resolved_version()
+        old_versions = self.installed_versions(token)
+
+        # Read the old receipts before installing: a same-version force
+        # reinstall removes the old room, and a failed install must not
+        # destroy the information about the previous installation.
+        old_rooms: list[Path] = []
+        old_system_receipts: dict[Path, dict[str, Any]] = {}
+        for version in old_versions:
+            old_room = self.config.caskroom / token / version
+            receipt = self._read_receipt(old_room)
+            if version == new_version:
+                # install(force=True) replaces this room in place.
+                continue
+            old_rooms.append(old_room)
+            if self._is_system_pkg_receipt(receipt):
+                old_system_receipts[old_room] = receipt
+
+        # Validate the old system pkg receipts and plan every removal before
+        # touching the new version.  A non-root or unsafe upgrade therefore
+        # fails before anything is installed or removed.
+        old_system_plans: dict[Path, list[tuple[str, list[Path]]]] = {}
+        old_system_ids: set[str] = set()
+        if old_system_receipts:
+            has_ids = any(
+                self._system_pkg_ids_from_receipt(token, receipt)
+                for receipt in old_system_receipts.values()
+            )
+            if has_ids and os.geteuid() != 0:
+                raise CaskError(
+                    f"cask {token}: upgrading a system pkg cask requires root to "
+                    "remove the previous version's system files; rerun with sudo"
+                )
+            for room, receipt in old_system_receipts.items():
+                plan = self._plan_system_pkg_uninstall(token, receipt)
+                old_system_plans[room] = plan
+                old_system_ids.update(pkg_id for pkg_id, _paths in plan)
+
+        try:
+            result = self.install(cask, force=True)
+        except Exception as error:
+            if not self._system_pkg_attempted:
+                raise
+            protected = self._upgrade_protected_paths(old_rooms, old_system_plans)
+            rollback = self._rollback_failed_system_pkg_upgrade(
+                token, protected_paths=protected
+            )
+            message = str(error)
+            if rollback:
+                message = f"{message}\n{rollback}"
+            raise CaskError(message) from error
         if result.skipped:
             return result
+
+        new_receipt = self._read_receipt(result.room)
+        new_ids: set[str] = set()
+        if self._is_system_pkg_receipt(new_receipt):
+            new_ids = set(self._system_pkg_ids_from_receipt(token, new_receipt))
+            if new_receipt.get("system_pkg_tracked") is False and any(
+                plan for plan in old_system_plans.values()
+            ):
+                raise CaskError(
+                    f"cask {token}: the new system pkg install could not be tracked "
+                    "by pkgutil; the previous version's system files were left in "
+                    "place and its caskroom entry was kept"
+                )
+            if (
+                not new_ids
+                and old_system_ids
+                and new_receipt.get("system_pkg_tracked") is not False
+            ):
+                # The installer added no new receipts, which means it replaced
+                # packages that already existed (the usual same-ID upgrade).
+                # Those IDs now belong to the new version: carry them forward
+                # instead of deleting the files that were just installed.
+                carried = sorted(old_system_ids)
+                pkgutil = self._pkgutil_executable(required=False)
+                if pkgutil is not None:
+                    try:
+                        installed = self._pkgutil_list_ids(token, pkgutil)
+                    except CaskError:
+                        installed = None
+                    if installed is not None:
+                        carried = sorted(old_system_ids & installed)
+                if carried:
+                    new_receipt["system_pkg_ids"] = carried
+                    (result.room / ".metadata" / "receipt.json").write_text(
+                        json.dumps(new_receipt, indent=2, sort_keys=True) + "\n",
+                        encoding="utf-8",
+                    )
+                    new_ids = set(carried)
+        # Paths owned by the new installation.  Receipt paths share
+        # parent/child overlaps (a moved bundle payload).  Package file lists
+        # also contain container directories, so an old file is only shared
+        # when the new package owns that exact path (or a path below it);
+        # owning ``/usr/local/bin`` must not protect an unrelated old binary.
         new_paths = self._installed_paths(result.room)
-        for version in old_versions:
-            if version == result.version:
-                continue
-            old_room = self.config.caskroom / cask.token / version
-            for path in self._installed_paths(old_room):
-                if self._path_shared_with_receipt(path, new_paths):
-                    continue
-                if path.exists() or path.is_symlink():
-                    self._remove_path(path)
+        new_pkg_files = self._system_pkg_files(token, new_ids)
+        for old_room in old_rooms:
+            plan = old_system_plans.get(old_room)
+            if plan is not None:
+                filtered = [
+                    (pkg_id, paths)
+                    for pkg_id, paths in plan
+                    if pkg_id not in new_ids
+                ]
+                self._execute_system_pkg_uninstall(
+                    token,
+                    filtered,
+                    shared_paths=new_paths,
+                    shared_pkg_files=new_pkg_files,
+                )
+            else:
+                for path in self._installed_paths(old_room):
+                    if self._path_shared_with_receipt(path, new_paths):
+                        continue
+                    if self._path_shared_with_pkg_files(path, new_pkg_files):
+                        continue
+                    if path.exists() or path.is_symlink():
+                        self._remove_path(path)
             self._remove_path(old_room)
         return result
+
+    def _upgrade_protected_paths(
+        self,
+        old_rooms: Iterable[Path],
+        old_system_plans: dict[Path, list[tuple[str, list[Path]]]],
+    ) -> list[Path]:
+        """Paths that existed before the upgrade attempt.
+
+        A failed upgrade must never remove these, even when the new package
+        happens to list the same path.  Only exact old paths (and old
+        directories that still contain new files) are protected, so a new
+        package writing a fresh file into a pre-existing directory is still
+        rolled back.
+        """
+
+        protected: list[Path] = []
+        seen: set[str] = set()
+        for room in old_rooms:
+            paths = self._installed_paths(room)
+            for _pkg_id, pkg_paths in old_system_plans.get(room, []):
+                paths.extend(pkg_paths)
+            for path in paths:
+                key = str(path)
+                if key not in seen:
+                    seen.add(key)
+                    protected.append(path)
+        return protected
+
+    def _rollback_failed_system_pkg_upgrade(
+        self,
+        token: str,
+        protected_paths: Iterable[Path] = (),
+    ) -> str:
+        """Best-effort rollback of packages installed by a failed upgrade.
+
+        Only package IDs that did not exist before the installer ran are
+        touched, and paths recorded by the previous installation are never
+        removed.  The returned summary is appended to the re-raised error;
+        this helper never raises.
+        """
+
+        before = self._system_pkg_before_ids
+        if before is None:
+            return (
+                "rollback unavailable: pybrew could not snapshot the installed "
+                "system package IDs before the upgrade; no system files were removed"
+            )
+        if os.geteuid() != 0:
+            return (
+                "rollback unavailable: removing system package files requires root; "
+                "no system files were removed"
+            )
+        pkgutil = self._pkgutil_executable(required=False)
+        if pkgutil is None:
+            return (
+                "rollback unavailable: pkgutil was not found; no system files "
+                "were removed"
+            )
+        try:
+            after: Optional[set[str]] = self._pkgutil_list_ids(token, pkgutil)
+        except CaskError:
+            after = None
+        if after is not None:
+            new_ids = sorted(after - before)
+        else:
+            # The after snapshot failed; fall back to IDs the install had
+            # already recorded before it failed (if any).
+            new_ids = sorted(set(self._system_pkg_ids))
+        if not new_ids:
+            return (
+                "rollback: no newly installed system packages were identified; "
+                "no system files were removed"
+            )
+        protected = list(protected_paths)
+        removed: list[str] = []
+        failures: list[str] = []
+        for pkg_id in new_ids:
+            receipt = {"system_pkg_ids": [pkg_id], "system_pkg_tracked": True}
+            try:
+                plan = self._plan_system_pkg_uninstall(token, receipt)
+                self._execute_system_pkg_uninstall(
+                    token, plan, shared_pkg_files=protected
+                )
+                removed.append(pkg_id)
+            except CaskError as error:
+                failures.append(f"{pkg_id}: {error}")
+        if failures:
+            return (
+                "rollback incomplete: removed "
+                f"{', '.join(removed) or 'none'}; failed to roll back "
+                + "; ".join(failures)
+            )
+        return (
+            "rollback removed newly installed system package(s): "
+            + ", ".join(removed)
+        )
 
     @staticmethod
     def _installed_paths(room: Path) -> list[Path]:
@@ -1157,6 +1588,21 @@ class CaskInstaller:
     def _path_shared_with_receipt(path: Path, receipt_paths: Iterable[Path]) -> bool:
         for other in receipt_paths:
             if path == other or path in other.parents or other in path.parents:
+                return True
+        return False
+
+    @staticmethod
+    def _path_shared_with_pkg_files(path: Path, pkg_files: Iterable[Path]) -> bool:
+        """Return true when a new package owns ``path`` or files below it.
+
+        Unlike receipt paths, pkgutil file lists include container
+        directories, so a new package owning ``/usr/local/bin`` does not make
+        every old file below it "shared".  The old path itself (or an old
+        directory that still contains new package files) is protected.
+        """
+
+        for other in pkg_files:
+            if path == other or path in other.parents:
                 return True
         return False
 

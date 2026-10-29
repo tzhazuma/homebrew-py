@@ -9,6 +9,12 @@ reproducible verifier (which also prints every command and result)::
 
     python3 scripts/linux_verify.py --cache ~/.cache/pybrew/linux-verify
 
+Both Homebrew Linux bottle architectures are covered: on an x86_64 host the
+tests select and assert the ``x86_64_linux`` bottle (``arm64_linux`` on
+arm64/aarch64).  The ELF ``e_machine`` and the ``readelf -l`` PT_INTERP are
+checked too, so pouring a wrong-architecture bottle fails loudly instead of
+passing on an emulated host.
+
 Bottles are located by the SHA-256 recorded in the fixture formula, first in
 ``PYBREW_LINUX_REAL_BOTTLE`` (an exact tarball path) and then in the
 directories listed in ``PYBREW_LINUX_REAL_CACHE`` (``os.pathsep`` separated)
@@ -19,11 +25,12 @@ instead of downloading it, so the normal CI run stays offline.
 from __future__ import annotations
 
 import os
+import platform
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 import pytest
 
@@ -40,6 +47,19 @@ PLACEHOLDER = b"@@HOMEBREW"
 DEFAULT_CACHE = Path.home() / ".cache" / "pybrew" / "linux-verify"
 ELF_MAGIC = b"\x7fELF"
 
+LINUX_BOTTLE_TAG_BY_MACHINE = {
+    "x86_64": "x86_64_linux",
+    "amd64": "x86_64_linux",
+    "aarch64": "arm64_linux",
+    "arm64": "arm64_linux",
+}
+ELF_MACHINE_BY_MACHINE = {
+    "x86_64": 62,
+    "amd64": 62,
+    "aarch64": 183,
+    "arm64": 183,
+}
+
 pytestmark = [
     pytest.mark.real_bottle,
     pytest.mark.skipif(
@@ -54,6 +74,27 @@ pytestmark = [
 
 
 # -- helpers -------------------------------------------------------------
+def _host_machine() -> str:
+    return platform.machine().lower()
+
+
+def _host_bottle_tag() -> str:
+    tag = LINUX_BOTTLE_TAG_BY_MACHINE.get(_host_machine())
+    assert tag is not None, (
+        f"unsupported Linux architecture for Homebrew bottles: "
+        f"{platform.machine()!r}"
+    )
+    return tag
+
+
+def _host_elf_machine() -> int:
+    machine = ELF_MACHINE_BY_MACHINE.get(_host_machine())
+    assert machine is not None, (
+        f"unsupported Linux architecture for ELF checks: {platform.machine()!r}"
+    )
+    return machine
+
+
 def _formula(name: str):
     path = FIXTURES / f"{name}.rb"
     assert path.is_file(), f"missing fixture formula: {path}"
@@ -65,7 +106,11 @@ def _host_bottle(formula):
     if bottle is None:
         pytest.skip(f"{formula.name} has no bottle for this host")
     tag, bottle_file = bottle
-    assert tag in {"arm64_linux", "x86_64_linux"}, tag
+    expected = _host_bottle_tag()
+    assert tag == expected, (
+        f"{formula.name} selected bottle tag {tag!r} on "
+        f"{platform.machine()!r}; expected {expected!r}"
+    )
     return tag, bottle_file
 
 
@@ -162,6 +207,25 @@ def _elf_files(keg: Path) -> list[Path]:
     ]
 
 
+def _elf_machine(path: Path) -> int:
+    """Read ``e_machine`` straight from the ELF header (no external tools)."""
+
+    header = path.read_bytes()[:20]
+    assert header[:4] == ELF_MAGIC, f"not an ELF file: {path}"
+    endian = "little" if header[5] == 1 else "big"
+    return int.from_bytes(header[18:20], endian)
+
+
+def _assert_native_elf(paths: Iterable[Path]) -> None:
+    expected = _host_elf_machine()
+    for path in paths:
+        actual = _elf_machine(path)
+        assert actual == expected, (
+            f"{path} is not a native {platform.machine()} ELF "
+            f"(e_machine={actual}, expected {expected}); wrong-architecture bottle?"
+        )
+
+
 def _system_loader(patchelf: str) -> Optional[str]:
     for probe in ("/bin/sh", "/usr/bin/env"):
         path = Path(probe)
@@ -186,6 +250,15 @@ def _skip_without_bottle(archive: Optional[Path], formula, sha256: str) -> Path:
 # -- tests ---------------------------------------------------------------
 def test_patchelf_is_a_real_executable() -> None:
     _require_patchelf()
+
+
+def test_fixture_bottles_select_native_architecture() -> None:
+    """x86_64 Linux must select ``x86_64_linux`` (arm64 -> ``arm64_linux``)."""
+
+    expected = _host_bottle_tag()
+    for name in ("libslirp", "tree"):
+        tag, _bottle_file = _host_bottle(_formula(name))
+        assert tag == expected
 
 
 def test_install_real_libslirp_bottle(tmp_path: Path) -> None:
@@ -215,6 +288,7 @@ def test_install_real_libslirp_bottle(tmp_path: Path) -> None:
 
     elf_paths = _elf_files(keg)
     assert elf_paths, "a real libslirp bottle must contain ELF libraries"
+    _assert_native_elf(elf_paths)
     rpaths: list[str] = []
     for path in elf_paths:
         code, rpath = _patchelf_query(patchelf, "--print-rpath", path)
@@ -263,6 +337,7 @@ def test_install_real_tree_bottle_relocates_interpreter(tmp_path: Path) -> None:
     tree_bin = keg / "bin" / "tree"
     assert tree_bin.is_file()
     assert tree_bin.read_bytes()[:4] == ELF_MAGIC
+    _assert_native_elf([tree_bin])
 
     code, interpreter = _patchelf_query(patchelf, "--print-interpreter", tree_bin)
     assert code == 0
@@ -278,13 +353,17 @@ def test_install_real_tree_bottle_relocates_interpreter(tmp_path: Path) -> None:
     readelf = shutil.which("readelf")
     if readelf is not None:
         program = subprocess.run(
-            [readelf, "-l", str(tree_bin)],
+            [readelf, "-lW", str(tree_bin)],
             text=True,
             capture_output=True,
             timeout=30,
         )
         assert program.returncode == 0, program.stderr
         assert "@@HOMEBREW" not in program.stdout
+        assert (
+            f"Requesting program interpreter: {config.prefix / 'lib' / 'ld.so'}"
+            in program.stdout
+        )
 
     # With the lib/ld.so link the glibc formula would provide, the relocated
     # executable must actually start.

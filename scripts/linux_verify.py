@@ -1,24 +1,29 @@
 #!/usr/bin/env python3
 """Reproducible real-Linux verification for pybrew bottles and patchelf.
 
-Run this inside a Linux machine or container that shares this checkout (the
-OrbStack Ubuntu machine used during development works):
+Run this inside a Linux machine or container that shares this checkout.  The
+OrbStack machines used during development work: ``ubuntu`` is arm64 and
+``ubuntu-x64`` is x86_64.  Use ``/usr/bin/python3`` when the ``python3`` on
+``PATH`` lacks SSL (the live ghcr.io download needs HTTPS):
 
-    orb -m ubuntu bash -lc \
-      'cd /path/to/homebrew-py && python3 scripts/linux_verify.py'
+    orb -m ubuntu-x64 bash -lc \
+      'cd /path/to/homebrew-py && /usr/bin/python3 scripts/linux_verify.py'
 
 The script:
 
-1. checks that it really is running on Linux and that a real ``patchelf`` is
-   available (installing it with apt is printed if it is missing);
+1. checks that it really is running on Linux, that the host is a supported
+   Homebrew bottle architecture (``x86_64`` or ``arm64``/``aarch64``) and that
+   a real ``patchelf`` is available (installing it with apt is printed if it
+   is missing);
 2. downloads the real Homebrew bottles referenced by
    ``tests/fixtures/core_formulas/*.rb`` from ghcr.io and verifies their
    SHA-256, or reuses the download cache with ``--offline``;
 3. installs them with ``--ignore-dependencies`` into a throwaway prefix;
 4. reads ``INSTALL_RECEIPT.json`` and inspects every ELF file with
-   ``readelf -d``, ``patchelf --print-rpath`` and
-   ``patchelf --print-interpreter``, asserting that no ``@@HOMEBREW_*@@``
-   placeholder survives in RPATH, RUNPATH or PT_INTERP;
+   ``readelf -d``/``readelf -l``, ``patchelf --print-rpath`` and
+   ``patchelf --print-interpreter``, asserting that the ELF machine matches
+   the host architecture and that no ``@@HOMEBREW_*@@`` placeholder survives
+   in RPATH, RUNPATH or PT_INTERP;
 5. runs the relocated executables (after providing the ``lib/ld.so`` symlink a
    real Homebrew prefix would get from its glibc formula).
 
@@ -67,6 +72,24 @@ FIXTURES = ROOT / "tests" / "fixtures" / "core_formulas"
 PLACEHOLDER = b"@@HOMEBREW"
 DEFAULT_FORMULAS = ("libslirp", "tree")
 DEFAULT_CACHE = Path.home() / ".cache" / "pybrew" / "linux-verify"
+
+# Homebrew publishes one Linux bottle tag per CPU architecture; a real
+# verification must never pour the other architecture's bottle (for example
+# under emulation or with PYBREW_BOTTLE_TAG/HOMEBREW_BOTTLE_TAG overridden).
+LINUX_BOTTLE_TAG_BY_MACHINE = {
+    "x86_64": "x86_64_linux",
+    "amd64": "x86_64_linux",
+    "aarch64": "arm64_linux",
+    "arm64": "arm64_linux",
+}
+# ELF e_machine values for those architectures.
+ELF_MACHINE_BY_MACHINE = {
+    "x86_64": 62,
+    "amd64": 62,
+    "aarch64": 183,
+    "arm64": 183,
+}
+ELF_MACHINE_NAMES = {62: "x86_64", 183: "aarch64"}
 
 
 class CheckFailure(RuntimeError):
@@ -121,6 +144,37 @@ def patchelf_query(patchelf: str, flag: str, path: Path) -> tuple[int, str]:
     return result.returncode, result.stdout.strip()
 
 
+def host_machine() -> str:
+    """The host CPU name as Linux reports it, lowercased."""
+
+    return platform.machine().lower()
+
+
+def expected_linux_tag() -> str:
+    """The Homebrew Linux bottle tag for this host, or raise."""
+
+    tag = LINUX_BOTTLE_TAG_BY_MACHINE.get(host_machine())
+    if tag is None:
+        raise PrerequisiteError(
+            f"unsupported Linux architecture {platform.machine()!r}: this "
+            "verifier only knows Homebrew's x86_64_linux and arm64_linux bottles"
+        )
+    return tag
+
+
+def elf_machine(path: Path) -> Optional[int]:
+    """Return the ELF ``e_machine`` value, or None when *path* is not ELF."""
+
+    try:
+        header = path.read_bytes()[:20]
+    except OSError:
+        return None
+    if len(header) < 20 or header[:4] != b"\x7fELF":
+        return None
+    endian = "little" if header[5] == 1 else "big"
+    return int.from_bytes(header[18:20], endian)
+
+
 def check_platform() -> None:
     say("[1/5] platform")
     say(f"  sys.platform = {sys.platform}")
@@ -131,6 +185,7 @@ def check_platform() -> None:
             "this verifier must run inside Linux; from macOS use:\n"
             f"  orb -m ubuntu bash -lc 'cd {ROOT} && python3 scripts/linux_verify.py'"
         )
+    say(f"  bottle tag   = {expected_linux_tag()} (native for {host_machine()})")
 
 
 def check_tools() -> tuple[str, Optional[str]]:
@@ -188,6 +243,13 @@ def resolve_bottle(formula: Formula) -> tuple[str, BottleFile]:
     tag, bottle_file = bottle
     if not tag.endswith("_linux"):
         raise CheckFailure(f"{formula.name}: expected a Linux bottle tag, got {tag!r}")
+    expected_tag = expected_linux_tag()
+    if tag != expected_tag:
+        raise CheckFailure(
+            f"{formula.name}: selected bottle tag {tag!r} does not match the host "
+            f"architecture {platform.machine()!r} (expected {expected_tag!r}); "
+            "unset PYBREW_BOTTLE_TAG/HOMEBREW_BOTTLE_TAG or run on the matching host"
+        )
     return tag, bottle_file
 
 
@@ -280,15 +342,31 @@ def inspect_elf_files(
     paths = elf_files(keg)
     if not paths:
         raise CheckFailure("no ELF files found in the keg")
+    expected_machine = ELF_MACHINE_BY_MACHINE.get(host_machine())
     relocated_rpath = 0
     relocated_interpreter = 0
     for path in paths:
         say(f"  ELF {path.relative_to(keg)}")
+        machine = elf_machine(path)
+        machine_name = ELF_MACHINE_NAMES.get(machine, str(machine))
+        say(f"    ELF machine = {machine} ({machine_name})")
+        if expected_machine is not None and machine != expected_machine:
+            raise CheckFailure(
+                f"{path} is {machine_name} ELF but the host is {host_machine()}"
+            )
+        readelf_interpreter: Optional[str] = None
         if readelf is not None:
             result = run([readelf, "-d", str(path)], timeout=30)
             for line in result.stdout.splitlines():
                 if "RPATH" in line or "RUNPATH" in line:
                     say(f"    readelf: {line.strip()}")
+            program = run([readelf, "-lW", str(path)], timeout=30)
+            for line in program.stdout.splitlines():
+                if "Requesting program interpreter" in line:
+                    readelf_interpreter = (
+                        line.split("interpreter:", 1)[1].strip().rstrip("]").strip()
+                    )
+                    break
 
         rcode, rpath = patchelf_query(patchelf, "--print-rpath", path)
         say(f"    patchelf --print-rpath      = {rpath!r} (exit {rcode})")
@@ -307,6 +385,15 @@ def inspect_elf_files(
                 raise CheckFailure(f"placeholder left in PT_INTERP of {path}")
             if interpreter and str(prefix) in interpreter:
                 relocated_interpreter += 1
+        if readelf_interpreter is not None:
+            say(f"    readelf PT_INTERP            = {readelf_interpreter!r}")
+            if PLACEHOLDER.decode() in readelf_interpreter:
+                raise CheckFailure(f"placeholder left in readelf PT_INTERP of {path}")
+            if interpreter and readelf_interpreter != interpreter:
+                raise CheckFailure(
+                    f"readelf and patchelf disagree on the PT_INTERP of {path}: "
+                    f"{readelf_interpreter!r} != {interpreter!r}"
+                )
 
     if relocated_rpath == 0 and relocated_interpreter == 0:
         raise CheckFailure("no ELF file shows a relocated prefix path")
@@ -356,6 +443,7 @@ def run_relocated_binaries(keg: Path, prefix: Path, patchelf: str) -> None:
     if loader is None:
         say("  cannot determine the system loader; skipping executable run")
         return
+    say(f"  system loader = {loader}")
     loader_link = prefix / "lib" / "ld.so"
     loader_link.parent.mkdir(parents=True, exist_ok=True)
     if not os.path.lexists(loader_link):
@@ -476,8 +564,8 @@ def main(argv: Optional[list[str]] = None) -> int:
 
         say("[5/5] summary")
         say(
-            f"  PASS: {len(formulas)} real Linux bottle(s) verified "
-            f"({', '.join(formulas)})"
+            f"  PASS: {len(formulas)} real Linux bottle(s) verified on "
+            f"{host_machine()} ({', '.join(formulas)})"
         )
         say(f"  kegs: {config.cellar}")
         elapsed = time.monotonic() - started

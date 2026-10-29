@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-200 passed, 3 skipped in 66.88s
+219 passed, 5 skipped in 51.41s
 ```
 
 Breakdown of the feature slices:
@@ -32,10 +32,10 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 17 passed      # 15 parametrized real formulae + 2 aggregate checks
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
-$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_scripts.py
-56 passed      # base/depth/system install/uninstall/scripts
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_scripts.py tests/test_cask_rollback.py
+70 passed      # base/depth/system install/uninstall/scripts/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py
-27 passed      # declarative + opt-in arbitrary Ruby bridge
+33 passed      # declarative + expanded opt-in Ruby bridge
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
 8 passed       # launchd + systemd unit generation, orphan cleanup
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_taps.py
@@ -51,7 +51,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_relocation.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_analytics.py
 20 passed      # local-only analytics
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_linux_real.py
-3 skipped      # opt-in OrbStack/Linux verification
+4 skipped      # opt-in OrbStack/Linux verification (arm64 + x86_64)
 ```
 
 ## Real formula parity
@@ -234,7 +234,13 @@ PASS: 2 real Linux bottle(s) verified (libslirp, tree)
 - `readelf -d` / `patchelf --print-rpath` showed the final prefix with no
   `@@HOMEBREW` placeholders; the relocated `tree --version` actually ran.
 
-This run found and fixed a real bug: ELF **PT_INTERP** still pointed at
+An x86_64 OrbStack run (`orb start ubuntu-x64`) used the same verifier with
+`x86_64_linux` bottles: libslirp 4.9.6 (sha `9ab723e5…`) and tree 2.3.2
+(sha `b98eef11…`), both SHA-verified; `readelf -d`/patchelf showed native
+RUNPATH and PT_INTERP, ELF `e_machine=62`, no placeholders, and `tree --version`
+ran. The verifier now enforces host-arch bottle tags and native ELF machines.
+
+This arm64 run found and fixed a real bug: ELF **PT_INTERP** still pointed at
 `@@HOMEBREW_PREFIX@@/lib/ld.so`, making executables unrunnable. `_relocate_elf`
 now uses `patchelf --print-interpreter/--set-interpreter` as well as RPATH.
 `tests/test_linux_real.py` covers this opt-in (`PYBREW_LINUX_REAL=1`; skipped by
@@ -376,10 +382,10 @@ install, `doctor`, `list`, `deps`, `search`, `config`, and `parse`.
 - Live download from ghcr.io is not part of the offline suite; the real bottle
   test intentionally uses a cached artefact. Live download is recorded manually
   above.
-- Cask login items and full script API coverage; system pkg rollback during
-  upgrade (uninstall is implemented).
+- Cask login items and complete script API coverage; exotic cask script APIs
+  outside the shim still fail explicitly.
 - `brew lgtm`, remaining advanced Brewfile options.
-- x86_64 Linux real verification (only arm64 OrbStack was exercised).
+- Full Homebrew Ruby API coverage; the bridge remains an opt-in shim.
 
 These are tracked in the README roadmap and `docs/parity.md`.
 

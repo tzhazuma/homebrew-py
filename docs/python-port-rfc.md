@@ -51,8 +51,8 @@ A clean-room Python 3.9+ package (`pybrew`) with no runtime dependencies:
   `upgrade` and `reinstall` are implemented, uninstall runs the safe
   `quit`/`delete`/`pkgutil` actions, and Library artifacts plus `stage_only`
   are supported; `--system-pkg` opts into a root-required macOS installer path
-  with ID-tracked uninstall, and `--run-scripts` opts into preflight/postflight
-  Ruby scripts;
+  with ID-tracked uninstall and upgrade rollback, and `--run-scripts` opts into
+  preflight/postflight Ruby scripts;
 - services on macOS (launchd) and Linux (systemd user units);
 - tap management (`tap`/`untap`/list, local and GitHub URLs);
 - `info`, `search`, `list`, `deps`, `install`, `uninstall`, `link`, `unlink`,
@@ -61,7 +61,7 @@ A clean-room Python 3.9+ package (`pybrew`) with no runtime dependencies:
 
 ## Validation
 
-- 200 tests pass, 3 opt-in Linux tests skipped (`pytest -q`).
+- 219 tests pass, 5 opt-in tests skipped (`pytest -q`).
 - 15 real homebrew-core formulae (bash, git, curl, openssl@3, python@3.12, ...)
   parse to exactly the desc/homepage/license/version/dependency values returned
   by `brew info --json=v2` (Homebrew 7.0.9).
@@ -84,7 +84,7 @@ A clean-room Python 3.9+ package (`pybrew`) with no runtime dependencies:
   uninstall/rollback are not implemented.
 - Analytics is local-only and opt-in; no telemetry upload. Arbitrary Ruby is an
   opt-in shim, not a full Homebrew Ruby environment. Some advanced Brewfile
-  options and arbitrary Ruby/build systems remain incomplete.
+  options and full Ruby API coverage remain incomplete.
 - Running arbitrary Ruby from formulae.
 
 ## Questions for Homebrew maintainers

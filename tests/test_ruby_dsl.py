@@ -253,6 +253,217 @@ def test_bridge_platform_build_and_args_predicates(
     assert (keg / "platform").read_text() == expected_platform
 
 
+# ---------------------------------------------------------------------------
+# expanded shim APIs
+# ---------------------------------------------------------------------------
+
+
+def test_bridge_utils_shellwords_system_options_and_env_fetch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    monkeypatch.setenv("PYBREW_SHIM_TEST_ENV", "from-parent")
+    build_root = tmp_path / "build"
+    build_root.mkdir()
+    formula = _formula(
+        "ruby-system",
+        "1.0",
+        (
+            '  (prefix/"shellwords").write Shellwords.escape("hello world")\n'
+            '  Utils.safe_system("sh", "-c", "printf safe > safe.txt")\n'
+            '  quiet_ok = Utils.quiet_system("sh", "-c", "exit 0")\n'
+            '  quiet_bad = Utils.quiet_system("sh", "-c", "exit 3")\n'
+            '  (prefix/"system").write "ok=#{quiet_ok} bad=#{quiet_bad}"\n'
+            '  (prefix/"env").write ENV.fetch("PYBREW_SHIM_TEST_ENV") + "/" +\n'
+            '    ENV.fetch("PYBREW_SHIM_MISSING", "default") + "/" +\n'
+            '    ENV.fetch("PYBREW_SHIM_MISSING") { "block-default" }\n'
+            '  system "sh", "-c", "printf %s \\"$SHIM_CHILD_ENV\\" > child.txt",\n'
+            '    env: { "SHIM_CHILD_ENV" => "child-env" }\n'
+            '  (prefix/"child").write File.read("child.txt")\n'
+            '  (buildpath/"subdir").mkdir\n'
+            '  system "sh", "-c", "pwd > where.txt", chdir: "subdir"\n'
+            '  (prefix/"chdir").write File.read("subdir/where.txt")\n'
+            '  system({ "SHIM_POSITIONAL" => "positional" }, "sh", "-c",\n'
+            '    "printf %s \\"$SHIM_POSITIONAL\\" > positional.txt")\n'
+            '  (prefix/"positional").write File.read("positional.txt")\n'
+            '  bin.install "safe.txt"\n'
+        ),
+    )
+
+    keg = _build(tmp_path, formula, build_root=build_root)
+
+    assert (keg / "shellwords").read_text() == "hello\\ world"
+    assert (keg / "system").read_text() == "ok=true bad=false"
+    assert (keg / "env").read_text() == "from-parent/default/block-default"
+    assert (keg / "child").read_text() == "child-env"
+    assert Path((keg / "chdir").read_text().strip()).resolve() == (
+        build_root / "subdir"
+    ).resolve()
+    assert (keg / "positional").read_text() == "positional"
+    assert (keg / "bin" / "safe.txt").read_text() == "safe"
+
+
+def test_utils_safe_system_failure_raises_build_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-safe-fail",
+        "1.0",
+        (
+            '  Utils.safe_system("sh", "-c", "exit 4")\n'
+            '  (prefix/"never").write "x"\n'
+        ),
+    )
+
+    with pytest.raises(BuildError, match="Failed executing"):
+        _build(tmp_path, formula)
+
+    assert not (tmp_path / "keg" / "never").exists()
+
+
+def test_bridge_inreplace_block_form(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    build_root = tmp_path / "build"
+    build_root.mkdir()
+    (build_root / "Makefile").write_text(
+        "PREFIX = /usr/local\nCFLAGS = -O2\nLDFLAGS = -lm\nall: build\n"
+    )
+    formula = _formula(
+        "ruby-inreplace",
+        "1.0",
+        (
+            '  inreplace "Makefile" do |s|\n'
+            '    s.gsub! "/usr/local", prefix.to_s\n'
+            '    s.change_make_var! "CFLAGS", "-O3"\n'
+            '    s.remove_make_var! "LDFLAGS"\n'
+            '    s.sub! "all: build", "all: patched"\n'
+            '    (prefix/"makevar").write s.get_make_var("PREFIX")\n'
+            "  end\n"
+            '  prefix.install "Makefile"\n'
+        ),
+    )
+
+    keg = _build(tmp_path, formula, build_root=build_root)
+
+    text = (keg / "Makefile").read_text()
+    assert f"PREFIX = {keg}" in text
+    assert "CFLAGS=-O3" in text
+    assert "LDFLAGS" not in text
+    assert "all: patched" in text
+    assert (keg / "makevar").read_text() == str(keg)
+
+
+def test_bridge_macos_os_versions_and_platform_blocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    monkeypatch.setenv("HOMEBREW_MACOS_VERSION", "14.5")
+    formula = _formula(
+        "ruby-versions",
+        "1.0",
+        (
+            '  (prefix/"macos").write '
+            '"#{MacOS.version}|#{MacOS.version_symbol}|#{MacOS.full_version}"\n'
+            '  (prefix/"os").write OS.version.to_s\n'
+            '  (prefix/"compare").write "#{MacOS.version >= :ventura}/'
+            '#{MacOS.version < :sequoia}/#{MacOS.version == :sonoma}"\n'
+            "  on_sonoma do\n"
+            '    (prefix/"sonoma").write "yes"\n'
+            "  end\n"
+            "  on_ventura do\n"
+            '    (prefix/"ventura").write "yes"\n'
+            "  end\n"
+            "  on_sequoia do\n"
+            '    (prefix/"sequoia").write "yes"\n'
+            "  end\n"
+            "  on_monterey :or_older do\n"
+            '    (prefix/"monterey-or-older").write "yes"\n'
+            "  end\n"
+            "  on_sonoma :or_newer do\n"
+            '    (prefix/"sonoma-or-newer").write "yes"\n'
+            "  end\n"
+        ),
+    )
+
+    keg = _build(tmp_path, formula)
+
+    assert (keg / "macos").read_text() == "14|sonoma|14.5"
+    assert (keg / "compare").read_text() == "true/true/true"
+    if is_macos():
+        assert (keg / "os").read_text() == "14"
+        assert (keg / "sonoma").read_text() == "yes"
+        assert (keg / "sonoma-or-newer").read_text() == "yes"
+        assert not (keg / "ventura").exists()
+        assert not (keg / "sequoia").exists()
+        assert not (keg / "monterey-or-older").exists()
+    else:
+        assert (keg / "os").read_text() == platform.release()
+        assert not (keg / "sonoma").exists()
+        assert not (keg / "sonoma-or-newer").exists()
+
+
+def test_bridge_opt_paths_buildpath_and_hardware_cores(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    build_root = tmp_path / "build"
+    build_root.mkdir()
+    formula = _formula(
+        "ruby-opt",
+        "1.0",
+        (
+            '  (prefix/"paths").write [opt_prefix, buildpath, formula_opt, '
+            'formula_opt_prefix(name)].join("|")\n'
+            '  (prefix/"cores").write '
+            '"#{Hardware::CPU.cores}|#{Hardware::CPU.physical_cores}"\n'
+        ),
+    )
+
+    keg = _build(tmp_path, formula, build_root=build_root)
+
+    expected_opt = tmp_path / "prefix" / "opt" / "ruby-opt"
+    parts = (keg / "paths").read_text().split("|")
+    assert parts == [
+        str(expected_opt),
+        str(build_root),
+        str(expected_opt),
+        str(expected_opt),
+    ]
+    cores, physical = (int(value) for value in (keg / "cores").read_text().split("|"))
+    assert cores >= 1
+    assert 1 <= physical <= cores
+
+
+def test_macos_version_host_fallback_or_clear_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    monkeypatch.delenv("HOMEBREW_MACOS_VERSION", raising=False)
+    formula = _formula(
+        "ruby-host-version",
+        "1.0",
+        (
+            '  (prefix/"macos").write '
+            '"#{MacOS.version}|#{MacOS.full_version}|#{OS.version}"\n'
+        ),
+    )
+
+    if not is_macos():
+        with pytest.raises(BuildError, match="not available on this host"):
+            _build(tmp_path, formula)
+        return
+
+    keg = _build(tmp_path, formula)
+    full = platform.mac_ver()[0]
+    assert full
+    major = int(full.split(".")[0])
+    stripped = str(major) if major >= 11 else ".".join(full.split(".")[:2])
+    assert (keg / "macos").read_text() == f"{stripped}|{full}|{stripped}"
+
+
 def test_installer_end_to_end_uses_ruby_bridge(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

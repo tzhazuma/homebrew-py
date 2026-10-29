@@ -41,11 +41,11 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 | Formula DSL metadata | Full Ruby evaluation + DSL | Literal-only parser, tolerates unknown calls |
 | Dependency resolution | Full, options/requirements | Runtime/build/test/optional/recommended + uses_from_macos |
 | Bottle install | All platforms, OCI + legacy mirrors | ghcr.io OCI + plain root_url + local file; SHA-256; text relocation + Mach-O install_name_tool + ELF patchelf (RPATH + PT_INTERP, real OrbStack test) |
-| Source install | Any build system / formula Ruby | Declarative subset plus opt-in arbitrary-Ruby bridge; autotools/CMake/Cargo tested; meson fake + manual real; unsupported Ruby fails explicitly unless bridge enabled |
+| Source install | Any build system / formula Ruby | Declarative subset plus opt-in arbitrary-Ruby bridge (Utils/MacOS/OS/Shellwords shim); autotools/CMake/Cargo tested; meson fake + manual real; unsupported Ruby fails explicitly unless bridge enabled |
 | Cellar / keg / receipts | Yes | Yes, compatible layout |
 | opt / linking | Yes | Yes, conflict-aware, --overwrite |
 | `info --json` | Full v2 schema | Compatible subset of v2 fields |
-| Casks | Yes | zip/dmg + 13 Library artifact kinds, stage_only, upgrade cleanup; pkg payload or opt-in system pkg + tracked uninstall; opt-in preflight/postflight; API; outdated/upgrade/reinstall |
+| Casks | Yes | zip/dmg + 13 Library artifact kinds, stage_only, upgrade cleanup; pkg payload or opt-in system pkg + tracked uninstall/upgrade rollback; opt-in preflight/postflight shim; API; outdated/upgrade/reinstall |
 | Tap management | `brew tap` | `tap`/`untap`/list/`--update`/`update` with GitHub or local git URLs |
 | Services | Yes | macOS launchd + Linux systemd user units; start/stop/restart/list/info/run |
 | Outdated / upgrade / auto-remove / leaves / uses / cleanup / reinstall / pin | Yes | outdated; upgrade installs/relinks/removes old kegs; autoremove; cleanup; reinstall; pin |
@@ -92,5 +92,5 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 4. On this machine brew is x86_64 under Rosetta; corpus expectations therefore
    set `PYBREW_TARGET_ARCH=x86_64`, while native pybrew/pytest is arm64. The
    parser supports both.
-5. Full cask script API coverage, system pkg rollback during upgrade, some
-   advanced Brewfile options and x86_64 Linux verification remain incomplete.
+5. Full cask/Ruby API coverage, some advanced Brewfile options and broader
+   script compatibility remain incomplete.

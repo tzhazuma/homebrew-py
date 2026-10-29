@@ -216,6 +216,8 @@ def build_parser() -> argparse.ArgumentParser:
     upgrade.add_argument("--dry-run", action="store_true")
     upgrade.add_argument("--api", action="store_true")
     upgrade.add_argument("--cask", action="store_true")
+    upgrade.add_argument("--system-pkg", action="store_true")
+    upgrade.add_argument("--run-scripts", action="store_true")
 
     update = subparsers.add_parser("update", parents=[common], help="update all taps")
     update.add_argument("--quiet", action="store_true")
@@ -238,6 +240,8 @@ def build_parser() -> argparse.ArgumentParser:
     reinstall_cmd = subparsers.add_parser("reinstall", parents=[common], help="reinstall formulae")
     reinstall_cmd.add_argument("formulae", nargs="+")
     reinstall_cmd.add_argument("--cask", action="store_true")
+    reinstall_cmd.add_argument("--system-pkg", action="store_true")
+    reinstall_cmd.add_argument("--run-scripts", action="store_true")
 
     pin_cmd = subparsers.add_parser("pin", parents=[common], help="pin a formula at its current version")
     pin_cmd.add_argument("formulae", nargs="+")
@@ -937,7 +941,11 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     if getattr(args, "cask", False):
         cask_loader = _cask_loader(config, allow_api=bool(getattr(args, "api", False)))
-        installer = CaskInstaller(config)
+        installer = CaskInstaller(
+            config,
+            system_pkg=bool(getattr(args, "system_pkg", False)),
+            run_scripts=bool(getattr(args, "run_scripts", False)),
+        )
         tokens = args.formulae or [row["token"] for row in installer.find_outdated(cask_loader)]
         if not tokens:
             print("Already up-to-date.")
@@ -1015,7 +1023,11 @@ def cmd_reinstall(args: argparse.Namespace) -> int:
     config.ensure()
     if getattr(args, "cask", False):
         cask_loader = _cask_loader(config)
-        installer = CaskInstaller(config)
+        installer = CaskInstaller(
+            config,
+            system_pkg=bool(getattr(args, "system_pkg", False)),
+            run_scripts=bool(getattr(args, "run_scripts", False)),
+        )
         exit_code = 0
         for token in args.formulae:
             try:
