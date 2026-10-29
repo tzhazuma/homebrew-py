@@ -515,3 +515,16 @@ end''',
     )
     result = run_formula_test(formula, config, ruby=_REAL_RUBY)
     assert result.success is True
+
+
+@requires_ruby
+def test_shell_output_expected_status(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path,
+        '''do
+  assert_equal "", shell_output("exit 7", 7)
+  assert_equal "out", shell_output("printf out; exit 3", 3)
+end''',
+    )
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True

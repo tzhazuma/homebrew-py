@@ -745,3 +745,21 @@ end
     assert cask.url == "https://example.com/1.0.zip"
     assert [artifact.kind for artifact in cask.artifacts] == ["app", "binary", "binary"]
     assert [artifact.source for artifact in cask.artifacts[1:]] == ["bin/one", "bin/two"]
+
+
+@requires_ruby
+def test_cli_ruby_cask_flag(run_cli, sample) -> None:
+    cask_path = sample.tap / "Casks" / "r" / "ruby-flag.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        '''cask "ruby-flag" do
+  version "2.0"
+  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  url "https://example.com/#{version}.zip"
+  app "RubyFlag.app"
+end
+'''
+    )
+    proc = run_cli("info", "--cask", "--ruby-cask", "ruby-flag")
+    assert proc.returncode == 0, proc.stderr
+    assert "ruby-flag: 2.0" in proc.stdout

@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-425 passed, 5 skipped in 65.04s
+427 passed, 5 skipped in 81.17s
 ```
 
 Breakdown of the feature slices:
@@ -33,7 +33,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_ruby.py
-52 passed      # cask base + opt-in arbitrary Ruby DSL evaluator
+53 passed      # cask base + opt-in arbitrary Ruby DSL evaluator + --ruby-cask CLI
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
@@ -43,7 +43,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_patches.py tests/t
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
 34 passed      # service DSL fields + launchd/systemd rendering
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_formula_test.py
-25 passed      # formula test DSL + CLI
+27 passed      # formula test DSL + CLI + expected-status shell_output
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_caveats.py
 22 passed      # formula caveats DSL + CLI
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_caveats.py
@@ -387,6 +387,10 @@ local remote, commits a change, and confirms the CLI updates it.
   depends_on/conflicts, stage_only/auto_updates.
 - Scripts and unknown stanzas are not executed/captured; they are recorded as
   warnings/unsupported. Default parser remains unchanged when the env is unset.
+- `--ruby-cask` exposes the evaluator as a global CLI opt-in in addition to
+  `PYBREW_ALLOW_CASK_RUBY=1`.
+- `shell_output` now follows Homebrew's second positional argument
+  (`expected_status`, default 0) instead of treating it as stdin.
 - Fixed the default cask parser dropping keyword arguments after a
   comma/newline continuation (e.g. `sha256 arm: ..., intel: ...` and
   `uninstall launchctl: ..., quit: ...`); regression tests use the VSCode

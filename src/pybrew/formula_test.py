@@ -212,17 +212,19 @@ class FormulaTestContext
     block.call
   end
 
-  # Run a shell command and return its standard output.  A non-zero exit
-  # status raises (the message carries the captured stderr).
+  # Run a shell command and return its standard output.  The second positional
+  # argument is Homebrew's expected exit status (default 0); a different status
+  # raises with the captured stderr.
   #
   # ``stderr: true`` returns the captured standard error instead.
   # ``env:`` adds/overrides environment variables for the child only and
   # ``chdir:`` runs it in another directory.
-  def shell_output(command, input = nil, stderr: false, env: nil, chdir: nil)
-    stdout, stderr_text, status = run_shell(command, input, env: env, chdir: chdir)
-    unless status.success?
+  def shell_output(command, expected_status = 0, stderr: false, env: nil, chdir: nil)
+    stdout, stderr_text, status = run_shell(command, nil, env: env, chdir: chdir)
+    if status.exitstatus != expected_status
       raise FormulaTestFailure,
-            "shell_output failed with exit status #{status.exitstatus}: #{command}\n#{stderr_text}"
+            "shell_output failed with exit status #{status.exitstatus} " \
+            "(expected #{expected_status}): #{command}\n#{stderr_text}"
     end
 
     stderr ? stderr_text : stdout

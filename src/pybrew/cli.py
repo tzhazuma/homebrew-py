@@ -70,6 +70,12 @@ def _common_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--verbose", action="store_true", default=argparse.SUPPRESS, help="verbose output"
     )
+    parser.add_argument(
+        "--ruby-cask",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="evaluate cask source with Ruby (opt-in, unsafe)",
+    )
     return parser
 
 
@@ -1474,6 +1480,8 @@ _COMMANDS = {
 def main(argv: Optional[list[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if getattr(args, "ruby_cask", False):
+        os.environ["PYBREW_ALLOW_CASK_RUBY"] = "1"
     try:
         handler = _COMMANDS[args.command]
         return handler(args)
