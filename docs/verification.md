@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-489 passed, 5 skipped in 84.18s
+491 passed, 5 skipped in 90.60s
 ```
 
 Breakdown of the feature slices:
@@ -37,7 +37,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
-73 passed      # declarative + opt-in Ruby bridge/API + patches metadata
+75 passed      # declarative + opt-in Ruby bridge/API + patches/oldname
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_patches.py tests/test_post_install.py
 47 passed      # patch url/file/:DATA application + post_install
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py tests/test_service_ruby.py
@@ -469,6 +469,11 @@ local remote, commits a change, and confirms the CLI updates it.
   `url`/`file`/`sha256`/`strip`/`data?`.
 - The payload carries patch metadata; patch application itself remains in the
   source builder before install.
+
+## oldname / aliases
+
+- Formula model/parser now capture `oldname "..."` and `alias "..."`.
+- `Formula["name"]` exposes `oldname` and `aliases`.
 
 ## Final parallel batch
 

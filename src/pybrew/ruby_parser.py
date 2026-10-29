@@ -1020,6 +1020,12 @@ class RubyFormulaParser:
                 self.formula.license = self._format_license(args[0])
             elif kwargs:
                 self.formula.license = self._format_license(kwargs)
+        elif name == "oldname":
+            if args:
+                self.formula.oldname = str(args[0])
+        elif name == "alias":
+            if args:
+                self.formula.aliases.append(str(args[0]))
         elif name == "keg_only":
             self.formula.keg_only = True
             reason = args[0] if args else kwargs.get(Sym("reason"))

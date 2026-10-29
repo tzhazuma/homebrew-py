@@ -219,6 +219,8 @@ class Formula:
     compatibility_version: Optional[int] = None
     keg_only: bool = False
     keg_only_reason: Optional[str] = None
+    oldname: Optional[str] = None
+    aliases: list[str] = field(default_factory=list)
 
     stable: SourceSpec = field(default_factory=SourceSpec)
     head: SourceSpec = field(default_factory=SourceSpec)

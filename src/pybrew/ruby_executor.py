@@ -3274,7 +3274,8 @@ def _formula_reference_map(
         "disabled": bool(formula.disabled),
         "deprecation_reason": formula.deprecation_reason,
         "disable_reason": formula.disable_reason,
-        "aliases": [],
+        "aliases": list(formula.aliases),
+        "oldname": formula.oldname,
         "patches": [
             {
                 "url": patch.url,

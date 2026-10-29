@@ -1706,3 +1706,24 @@ def test_formula_patches_api(
     assert lines[0] == f"https://example.com/a.patch||{'a' * 64}|0|false"
     assert lines[1] == "|Patches/b.patch||1|false"
     assert lines[2] == "|||1|true"
+
+
+def test_formula_oldname_and_aliases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-aliases",
+        "1.0",
+        (
+            '  ref = Formula["ruby-aliases"]\n'
+            '  (prefix/"aliases").write [ref.oldname.to_s, ref.aliases.join(",")].join("\\n")\n'
+        ),
+    )
+    formula.oldname = "old-ruby-aliases"
+    formula.aliases = ["short-name", "other-name"]
+
+    keg = _build(tmp_path, formula)
+    lines = (keg / "aliases").read_text().splitlines()
+    assert lines[0] == "old-ruby-aliases"
+    assert lines[1] == "short-name,other-name"

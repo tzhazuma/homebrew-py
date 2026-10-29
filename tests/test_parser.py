@@ -149,3 +149,18 @@ end
     formula = parse_formula_source(source, name="autoconf-like")
     assert formula.license == "GPL-3.0-or-later AND (GPL-3.0-or-later WITH Autoconf-exception-3.0)"
     assert "This is a caveat." in formula.caveats
+
+
+def test_oldname_and_alias_stanzas() -> None:
+    formula = parse_formula_source(
+        '''class Renamed < Formula
+  oldname "old-renamed"
+  alias "short-renamed"
+  url "https://example.com/renamed-1.0.tar.gz"
+  sha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+end
+''',
+        name="renamed",
+    )
+    assert formula.oldname == "old-renamed"
+    assert formula.aliases == ["short-renamed"]
