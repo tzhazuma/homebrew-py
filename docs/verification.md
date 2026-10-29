@@ -552,9 +552,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `eb30f4f` (cask shell completion artifacts)
-- CI run for `eb30f4f`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40943673418>
+- Latest feature commit: `b827bda` (DevelopmentTools and CLT Ruby API)
+- CI run for `b827bda`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40944567089>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
