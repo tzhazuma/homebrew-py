@@ -702,9 +702,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `954c85c` (Formula head/installed prefix helpers + sort fix)
-- CI run for `954c85c`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40962198679>
+- Latest feature commit: `5360be4` (Formula service name and path helpers)
+- CI run for `5360be4`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40962736620>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
