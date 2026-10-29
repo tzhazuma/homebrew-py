@@ -434,3 +434,37 @@ end
     manpage = config.prefix / "share/man/man1/tool.1"
     assert manpage.is_file()
     assert ".TH TOOL 1" in manpage.read_text()
+
+
+def test_install_rename_then_artifact(tmp_path: Path) -> None:
+    archive = tmp_path / "Renamy.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("Old.app/Contents/Info.plist", "<plist/>")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "r" / "renamy.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        f'''cask "renamy" do
+  version "1.0"
+  sha256 "{digest}"
+  url "{archive.as_uri()}"
+  rename "Old.app", "New.app"
+  app "New.app"
+end
+'''
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    installer.install(CaskLoader(discover_taps([tap])).load("renamy"))
+
+    assert (tmp_path / "Applications" / "New.app" / "Contents" / "Info.plist").is_file()
+    assert not (tmp_path / "Applications" / "Old.app").exists()

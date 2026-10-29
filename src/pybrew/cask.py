@@ -38,6 +38,7 @@ class Cask:
     desc: Optional[str] = None
     homepage: Optional[str] = None
     artifacts: list[Artifact] = field(default_factory=list)
+    renames: list[tuple[str, str]] = field(default_factory=list)
     uninstall: dict[str, Any] = field(default_factory=dict)
     zap: list[str] = field(default_factory=list)
     depends_on: dict[str, Any] = field(default_factory=dict)
@@ -551,6 +552,9 @@ class CaskParser:
                 )
             else:
                 cask.stage_only = True
+        elif name == "rename":
+            if len(args) >= 2:
+                cask.renames.append((str(args[0]), str(args[1])))
         elif name == "uninstall":
             cask.uninstall.update({str(k): v for k, v in kwargs.items()})
             if args:

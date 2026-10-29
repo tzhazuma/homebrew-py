@@ -846,6 +846,7 @@ class CaskInstaller:
         installed: list[str] = []
         if cask.stage_only:
             return installed
+        self._apply_renames(cask, source_root)
         artifacts = cask.resolved_artifacts()
         appdir = self.appdir
         appdir.mkdir(parents=True, exist_ok=True)
@@ -949,6 +950,18 @@ class CaskInstaller:
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(source, destination)
         installed.append(str(destination))
+
+    def _apply_renames(self, cask: Cask, source_root: Path) -> None:
+        for old, new in cask.renames:
+            source = self._find(source_root, old)
+            if source is None:
+                raise CaskError(f"{cask.token}: rename source {old!r} not found in archive")
+            relative = _safe_artifact_target(new, new, cask.token)
+            destination = source_root / relative
+            if destination.exists() or destination.is_symlink():
+                raise CaskError(f"{cask.token}: rename target {destination} already exists")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            source.rename(destination)
 
     def _install_completion_artifact(
         self,

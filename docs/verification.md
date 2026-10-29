@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-485 passed, 5 skipped in 88.37s
+486 passed, 5 skipped in 72.18s
 ```
 
 Breakdown of the feature slices:
@@ -33,7 +33,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_ruby.py
-56 passed      # cask base + Ruby evaluator + completion/manpage artifacts
+57 passed      # cask base + Ruby evaluator + completion/manpage/rename
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
@@ -441,6 +441,14 @@ local remote, commits a change, and confirms the CLI updates it.
 - Added cask `manpage` artifacts (`share/man/manN`).
 - Added `ENV.cxx14/cxx17/cxx20`, `Os/Oz/Og`, `remove_from_cflags`,
   `remove_from_ldflags`, `enable_warnings`.
+
+## Cask rename
+
+- Added `Cask.renames` and parser/evaluator support for
+  `rename "Old.app", "New.app"`.
+- Installer applies renames to the staged source before artifact installation,
+  with safe relative targets and clear missing/conflict errors.
+- Literal parser and arbitrary-Ruby evaluator both support it.
 
 ## Final parallel batch
 

@@ -378,6 +378,12 @@ def _cask_from_result(
                 )
             )
 
+    renames = data.get("renames") or []
+    if isinstance(renames, list):
+        for entry in renames:
+            if isinstance(entry, list) and len(entry) >= 2:
+                cask.renames.append((str(entry[0]), str(entry[1])))
+
     uninstall = data.get("uninstall") or {}
     if isinstance(uninstall, dict):
         cask.uninstall.update({str(key): value for key, value in uninstall.items()})
@@ -533,6 +539,7 @@ class PybrewCaskDSL
       "homepage" => nil,
       "caveats" => nil,
       "artifacts" => [],
+      "renames" => [],
       "uninstall" => {},
       "uninstall_args" => [],
       "zap" => [],
@@ -796,6 +803,16 @@ class PybrewCaskDSL
   end
 
   # -- uninstall / zap / dependencies -----------------------------------
+
+  def rename(*args)
+    positional, kwargs = PybrewCaskJSON.split_args(args)
+    if positional.length == 2 && kwargs.empty?
+      @data["renames"] << positional.map(&:to_s)
+    else
+      record_unsupported("rename", positional, false, "rename expects two paths")
+    end
+    @data["renames"]
+  end
 
   def uninstall(*args)
     positional, kwargs = PybrewCaskJSON.split_args(args)
