@@ -2061,3 +2061,33 @@ def test_formula_head_pkg_helpers(
     formula.head = SourceSpec(url="https://example.com/head.tar.gz")
     keg = _build(tmp_path, formula)
     assert (keg / "headpkg").read_text().splitlines() == ["HEAD", "false", "0"]
+
+
+def test_formula_metadata_compatibility_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-metadata",
+        "1.0",
+        (
+            '  ref = Formula["ruby-metadata"]\n'
+            '  (prefix/"metadata").write [\n'
+            '    ref.full_installed_specified_name,\n'
+            '    ref.full_installed_alias_name,\n'
+            '    ref.installed_alias_name.nil?.to_s,\n'
+            '    ref.migration_needed?.to_s,\n'
+            '    (ref.latest_formula == ref).to_s,\n'
+            '    ref.old_installed_formulae.length.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "metadata").read_text().splitlines() == [
+        "ruby-metadata",
+        "ruby-metadata",
+        "true",
+        "false",
+        "true",
+        "0",
+    ]

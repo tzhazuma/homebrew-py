@@ -2746,6 +2746,70 @@ class PybrewFormulaRef
     false
   end
 
+  def tap_path
+    path.dirname.dirname
+  end
+
+  def reloadable_ref
+    path
+  end
+
+  def full_installed_specified_name
+    full_name
+  end
+
+  def full_installed_alias_name
+    name
+  end
+
+  def installed_alias_name
+    nil
+  end
+
+  def installed_alias_path
+    nil
+  end
+
+  def alias_path
+    nil
+  end
+
+  def current_installed_alias_target
+    nil
+  end
+
+  def oldnames_to_migrate
+    []
+  end
+
+  def migration_needed?
+    false
+  end
+
+  def new_formula_available?
+    false
+  end
+
+  def supersedes_an_installed_formula?
+    false
+  end
+
+  def alias_changed?
+    false
+  end
+
+  def installed_alias_target_changed?
+    false
+  end
+
+  def latest_formula
+    self
+  end
+
+  def old_installed_formulae
+    []
+  end
+
   def libexec
     prefix + "libexec"
   end
