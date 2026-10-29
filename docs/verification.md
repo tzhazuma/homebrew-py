@@ -511,9 +511,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `SPEC_COMMIT` (Formula spec/bottle/status API)
-- CI run for `41a9c6f`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40937721603>
+- Latest feature commit: `f82f62a` (Formula spec/bottle/status API + platform-independent test)
+- CI run for `f82f62a`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40938820937>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
