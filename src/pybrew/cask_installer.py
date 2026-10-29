@@ -86,9 +86,14 @@ class CaskLoader:
                 return fetch_cask(token)
             raise
         if os.environ.get("PYBREW_ALLOW_CASK_RUBY") == "1":
-            from .cask_ruby import evaluate_cask_file
+            from .cask_ruby import evaluate_cask_file, merge_captured_scripts
 
-            return evaluate_cask_file(path, tap=tap.name)
+            evaluated = evaluate_cask_file(path, tap=tap.name)
+            try:
+                parsed = parse_cask_file(path, tap=tap.name)
+            except Exception:
+                return evaluated
+            return merge_captured_scripts(evaluated, parsed)
         return parse_cask_file(path, tap=tap.name)
 
     def search(self, pattern: str) -> list[Cask]:

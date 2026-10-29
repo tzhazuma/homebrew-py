@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-428 passed, 5 skipped in 69.02s
+429 passed, 5 skipped in 75.86s
 ```
 
 Breakdown of the feature slices:
@@ -33,7 +33,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_ruby.py
-53 passed      # cask base + opt-in arbitrary Ruby DSL evaluator + --ruby-cask CLI
+54 passed      # cask base + Ruby evaluator + --ruby-cask CLI + script merge
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
@@ -389,6 +389,9 @@ local remote, commits a change, and confirms the CLI updates it.
   warnings/unsupported. Default parser remains unchanged when the env is unset.
 - `--ruby-cask` exposes the evaluator as a global CLI opt-in in addition to
   `PYBREW_ALLOW_CASK_RUBY=1`.
+- `CaskLoader` now merges inert script bodies captured by the default parser
+  into the Ruby-evaluated cask, so opting into Ruby does not silently lose
+  preflight/postflight/uninstall scripts.
 - `shell_output` now follows Homebrew's second positional argument
   (`expected_status`, default 0) instead of treating it as stdin.
 - Fixed the default cask parser dropping keyword arguments after a

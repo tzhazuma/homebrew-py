@@ -40,7 +40,8 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
 - Services DSL (`service do ... end`), caveats DSL, livecheck DSL.
 - Full cask DSL and cask script APIs (`Utils` internals, `MacOS` cask helpers,
   `system_command` variants are partial); the arbitrary-Ruby evaluator records
-  unsupported stanzas instead of applying them, and scripts remain opt-in.
+  unsupported stanzas instead of applying them, while `CaskLoader` merges
+  inert script bodies captured by the default parser.
   The default literal cask parser now preserves multiline keyword arguments.
 - Full test DSL (Minitest block forms, `Formula["x"].test`, all path/type
   assertions and dependency lookup).

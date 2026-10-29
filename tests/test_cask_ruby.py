@@ -763,3 +763,30 @@ end
     proc = run_cli("info", "--cask", "--ruby-cask", "ruby-flag")
     assert proc.returncode == 0, proc.stderr
     assert "ruby-flag: 2.0" in proc.stdout
+
+
+@requires_ruby
+def test_loader_merges_scripts_from_literal_parser(
+    tmp_path: Path, allow_ruby: None
+) -> None:
+    tap = tmp_path / "tap"
+    path = tap / "Casks" / "r" / "ruby-script.rb"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        '''cask "ruby-script" do
+  version "3.0"
+  sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+  url "https://example.com/#{version}.zip"
+  preflight do
+    puts "preflight body"
+  end
+  app "RubyScript.app"
+end
+'''
+    )
+    loader = CaskLoader(discover_taps([tap]))
+    cask = loader.load("ruby-script")
+    assert cask.version == "3.0"
+    assert cask.preflight is not None
+    assert "preflight body" in cask.preflight
+    assert "preflight" in cask.extra.get("ruby_merged_scripts", [])

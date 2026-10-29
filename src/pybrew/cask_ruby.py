@@ -935,3 +935,39 @@ rescue PybrewCaskError => error
   exit 2
 end
 '''
+
+
+#: Script blocks captured by the default literal parser.  The Ruby evaluator
+#: deliberately does not execute or capture block bodies, so callers that want
+#: both arbitrary-Ruby fields and scripts can merge these raw bodies in.
+CAPTURED_SCRIPT_NAMES = (
+    "preflight",
+    "postflight",
+    "uninstall_preflight",
+    "uninstall_postflight",
+)
+
+
+def merge_captured_scripts(evaluated: Cask, parsed: Cask) -> Cask:
+    """Copy inert script/caveats bodies from a literal parse into ``evaluated``.
+
+    The arbitrary-Ruby evaluator evaluates fields but cannot safely recover the
+    raw source of block bodies.  ``CaskLoader`` uses this helper to combine the
+    evaluator's result with the default parser's captured script bodies, so
+    opting into Ruby does not silently lose preflight/postflight hooks.
+    """
+
+    merged: list[str] = []
+    for name in CAPTURED_SCRIPT_NAMES:
+        body = getattr(parsed, name, None)
+        if body and not getattr(evaluated, name, None):
+            setattr(evaluated, name, body)
+            merged.append(name)
+    if parsed.caveats_source and not evaluated.caveats_source:
+        evaluated.caveats_source = parsed.caveats_source
+        merged.append("caveats_source")
+    if parsed.caveats and not evaluated.caveats:
+        evaluated.caveats = parsed.caveats
+    if merged:
+        evaluated.extra.setdefault("ruby_merged_scripts", []).extend(merged)
+    return evaluated
