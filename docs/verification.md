@@ -686,9 +686,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `e03bb19` (standard npm/shards/cabal build args)
-- CI run for `e03bb19`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40959516177>
+- Latest feature commit: `83205aa` (standard build args keyword support)
+- CI run for `83205aa`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40960268521>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
