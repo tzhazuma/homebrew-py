@@ -21,6 +21,7 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
 | Formula / resources | `Formula["name"]` metadata/path lookup (`desc`/`homepage`/`license`/`tap`/`keg_only?`/`linked_keg`/`spec`), `name`, `version`, `prefix`, `bin`, `sbin`, `lib`, `include`, `share`, `etc`, `libexec`, `opt_prefix`, `opt_bin`, `pkgshare`, `appdir`, `buildpath`, `staged_path`, `resource(name)` metadata + eager url/sha256 staging (safe tar/zip extraction), `patch` url/file/:DATA application, `option`/`depends_on` warnings |
 | Build helpers | `build.head?/stable?/with?/without?`, `args`, `on_macos`/`on_linux`/`on_arm`/`on_intel`, `std_configure_args`, `std_cmake_args`, `std_meson_args`, `std_cargo_args`, `std_go_args`, `std_pip_args`, `std_service_path_env` |
 | Test DSL | `shell_output`/`pipe_output` with `stderr:`/`env:`/`chdir:`, `assert_output`, path/directory/symlink assertions, `assert_equal`, `assert_match`, `assert_predicate`, `assert_empty`, `assert_includes`, `assert_nil`, `refute_*` |
+| Cask scripts | opt-in preflight/postflight/uninstall_preflight/uninstall_postflight; command/env/chdir forms; no sudo |
 | Caveats DSL | `pybrew caveats`: heredocs/strings, platform/arch blocks, paths, `ohai`/`opoo`/`puts`, ENV/Utils |
 | post_install | `post_install do ... end` after install, with paths/Formula/system/Utils/FileUtils |
 
@@ -36,7 +37,7 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
 - Full `MacOS`/SDK/Xcode/CLT detection, `DevelopmentTools`, `SystemConfig`.
 - Services DSL (`service do ... end`), caveats DSL, livecheck DSL.
 - Full cask DSL and cask script APIs (`Utils` internals, `MacOS` cask helpers,
-  `system_command` variants are partial).
+  `system_command` variants are partial); uninstall scripts are opt-in only.
 - Full test DSL (Minitest block forms, `Formula["x"].test`, all path/type
   assertions and dependency lookup).
 - Any Ruby gem or third-party API used by formulae.

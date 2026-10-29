@@ -1755,6 +1755,7 @@ class CaskInstaller:
         version: Optional[str] = None,
         zap: bool = False,
         cask: Optional[Cask] = None,
+        run_scripts: bool = False,
     ) -> list[Path]:
         rack = self.config.caskroom / token
         rooms: list[tuple[Path, dict[str, Any]]] = []
@@ -1782,10 +1783,21 @@ class CaskInstaller:
                     "rerun with sudo"
                 )
             plans[room] = self._plan_system_pkg_uninstall(token, receipt)
-        if cask is not None:
-            self._run_uninstall_actions(cask)
         if not rack.is_dir():
             raise CaskError(f"cask {token} is not installed")
+        script_cwd = rooms[0][0] if rooms else rack
+        previous_run_scripts = self.run_scripts
+        if run_scripts:
+            self.run_scripts = True
+        try:
+            if cask is not None:
+                self._run_cask_script(
+                    cask, "uninstall_preflight", script_cwd, script_cwd.name, cwd=script_cwd
+                )
+                self._run_uninstall_actions(cask)
+        finally:
+            if run_scripts:
+                self.run_scripts = previous_run_scripts
         removed: list[Path] = []
         for room, receipt in rooms:
             if room in plans:
@@ -1803,6 +1815,19 @@ class CaskInstaller:
                 rack.rmdir()
         except OSError:
             pass
+        if cask is not None and run_scripts:
+            previous_run_scripts = self.run_scripts
+            self.run_scripts = True
+            try:
+                self._run_cask_script(
+                    cask,
+                    "uninstall_postflight",
+                    rack,
+                    version or "",
+                    cwd=rack if rack.is_dir() else self.config.prefix,
+                )
+            finally:
+                self.run_scripts = previous_run_scripts
         if zap and cask is not None:
             self.zap(cask)
         return removed

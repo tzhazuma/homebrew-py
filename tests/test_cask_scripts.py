@@ -48,6 +48,8 @@ status=0
 case "$name" in
   preflight) status="${FAKE_PREFLIGHT_EXIT:-0}" ;;
   postflight) status="${FAKE_POSTFLIGHT_EXIT:-0}" ;;
+  uninstall_preflight) status="${FAKE_UNINSTALL_PREFLIGHT_EXIT:-0}" ;;
+  uninstall_postflight) status="${FAKE_UNINSTALL_POSTFLIGHT_EXIT:-0}" ;;
 esac
 if [ "$status" -ne 0 ]; then
   echo "pybrew-script-failure $name" >&2
@@ -814,3 +816,96 @@ def test_fake_ruby_receives_shim_and_body_as_separate_files(
         "preflight": {"status": "ok", "exit_code": 0},
         "postflight": {"status": "ok", "exit_code": 0},
     }
+
+
+# -- uninstall scripts ---------------------------------------------------
+
+
+UNINSTALL_SCRIPTY_SOURCE = '''cask "scripty" do
+  version "1.0"
+  sha256 "{digest}"
+  url "{url}"
+
+  uninstall_preflight do
+    puts "uninstall-preflight"
+  end
+
+  uninstall_postflight do
+    puts "uninstall-postflight"
+  end
+
+  app "Scripty.app"
+end
+'''
+
+
+def _install_uninstall_fixture(
+    script_env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> tuple[SimpleNamespace, Path]:
+    script, log = _fake_ruby(script_env.tmp_path, monkeypatch)
+    cask_path = script_env.tap / "Casks" / "s" / "scripty.rb"
+    cask_path.write_text(
+        UNINSTALL_SCRIPTY_SOURCE.format(
+            digest=script_env.digest, url=script_env.archive.as_uri()
+        ),
+        encoding="utf-8",
+    )
+    installer = CaskInstaller(script_env.config)
+    cask = script_env.loader.load("scripty")
+    installer.install(cask)
+    return installer, log
+
+
+def test_uninstall_default_does_not_run_scripts(
+    script_env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer, log = _install_uninstall_fixture(script_env, monkeypatch)
+    cask = script_env.loader.load("scripty")
+
+    installer.uninstall("scripty", cask=cask)
+    assert not log.exists()
+
+
+def test_uninstall_scripts_are_ordered(
+    script_env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer, log = _install_uninstall_fixture(script_env, monkeypatch)
+    cask = script_env.loader.load("scripty")
+
+    installer.uninstall("scripty", cask=cask, run_scripts=True)
+    entries = _read_log(log)
+    assert [entry["name"] for entry in entries] == [
+        "uninstall_preflight",
+        "uninstall_postflight",
+    ]
+
+
+def test_uninstall_preflight_failure_aborts_before_removal(
+    script_env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer, log = _install_uninstall_fixture(script_env, monkeypatch)
+    monkeypatch.setenv("FAKE_UNINSTALL_PREFLIGHT_EXIT", "9")
+    cask = script_env.loader.load("scripty")
+
+    with pytest.raises(CaskError, match="uninstall_preflight"):
+        installer.uninstall("scripty", cask=cask, run_scripts=True)
+
+    assert (script_env.config.caskroom / "scripty" / "1.0").is_dir()
+    assert [entry["name"] for entry in _read_log(log)] == ["uninstall_preflight"]
+
+
+def test_uninstall_postflight_failure_reports_after_removal(
+    script_env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer, log = _install_uninstall_fixture(script_env, monkeypatch)
+    monkeypatch.setenv("FAKE_UNINSTALL_POSTFLIGHT_EXIT", "8")
+    cask = script_env.loader.load("scripty")
+
+    with pytest.raises(CaskError, match="uninstall_postflight"):
+        installer.uninstall("scripty", cask=cask, run_scripts=True)
+
+    assert not (script_env.config.caskroom / "scripty" / "1.0").is_dir()
+    assert [entry["name"] for entry in _read_log(log)] == [
+        "uninstall_preflight",
+        "uninstall_postflight",
+    ]

@@ -157,6 +157,11 @@ def build_parser() -> argparse.ArgumentParser:
     uninstall.add_argument("--force", action="store_true")
     uninstall.add_argument("--cask", action="store_true", help="uninstall casks")
     uninstall.add_argument("--zap", action="store_true", help="also zap cask trash")
+    uninstall.add_argument(
+        "--run-scripts",
+        action="store_true",
+        help="run cask uninstall_preflight/uninstall_postflight (explicit opt-in)",
+    )
 
     link = subparsers.add_parser("link", parents=[common], help="link an installed keg")
     link.add_argument("formula")
@@ -731,7 +736,12 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
                     cask = cask_loader.load(token)
                 except CaskNotFound:
                     pass
-                removed = cask_installer.uninstall(token, zap=args.zap, cask=cask)
+                removed = cask_installer.uninstall(
+                    token,
+                    zap=args.zap,
+                    cask=cask,
+                    run_scripts=bool(getattr(args, "run_scripts", False)),
+                )
             except PybrewError as error:
                 print(f"Error: {error}", file=sys.stderr)
                 exit_code = 1
@@ -1177,7 +1187,10 @@ def cmd_cask(args: argparse.Namespace) -> int:
                     print(f"Installed cask: {result.token} {result.version} -> {result.room}")
             elif args.action == "uninstall":
                 removed = installer.uninstall(
-                    token, zap=args.zap, cask=cask
+                    token,
+                    zap=args.zap,
+                    cask=cask,
+                    run_scripts=bool(getattr(args, "run_scripts", False)),
                 )
                 print(f"Uninstalled cask: {token} ({', '.join(str(path) for path in removed)})")
             elif args.action == "zap":

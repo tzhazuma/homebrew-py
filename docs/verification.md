@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-379 passed, 5 skipped in 84.83s
+383 passed, 5 skipped in 88.33s
 ```
 
 Breakdown of the feature slices:
@@ -33,7 +33,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_scripts.py
-40 passed      # cask base + expanded script shim
+44 passed      # cask base + install/uninstall script shim
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
@@ -358,6 +358,13 @@ local remote, commits a change, and confirms the CLI updates it.
   and build/CPU helpers.
 - Note: the local full-suite run spent ~10 minutes in a pre-existing
   `hdiutil`-based DMG cask test; after the stuck child was cleared it passed.
+
+## Cask uninstall scripts
+
+- `--run-scripts` now also enables `uninstall_preflight`/`uninstall_postflight`
+  for `uninstall` and `cask uninstall`; default remains inert.
+- Preflight runs before artifact removal; postflight after room removal. A
+  postflight failure reports the error after the cask is removed.
 
 ## Final parallel batch
 
