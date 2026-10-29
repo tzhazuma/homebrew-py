@@ -2649,6 +2649,18 @@ class PybrewFormulaRef
     options.include?(name.to_s)
   end
 
+  def service?
+    !!@info["service?"]
+  end
+
+  def caveats?
+    !!@info["caveats?"]
+  end
+
+  def test?
+    !!@info["test?"]
+  end
+
   def stable?
     value = @info["stable"]
     value.is_a?(Hash) && !value["url"].to_s.empty?
@@ -3399,6 +3411,11 @@ def _formula_reference_map(
         "disable_reason": formula.disable_reason,
         "aliases": list(formula.aliases),
         "oldname": formula.oldname,
+        "service?": bool(
+            isinstance(formula.service, dict) and formula.service.get("source")
+        ),
+        "caveats?": bool(formula.caveats),
+        "test?": bool(formula.test_source),
         "options": list(formula.options),
         "deprecated_options": dict(formula.deprecated_options),
         "fails_with": list(formula.fails_with),

@@ -1837,3 +1837,25 @@ def test_formula_versioned_helpers(
     assert lines[0] == "true"
     assert lines[1] == "ruby-versioned"
     assert "ruby-versioned@2.0" in lines[2]
+
+
+def test_formula_block_presence_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-blocks",
+        "1.0",
+        (
+            '  ref = Formula["ruby-blocks"]\n'
+            '  (prefix/"blocks").write [\n'
+            '    ref.service?.to_s, ref.caveats?.to_s, ref.test?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.service = {"source": "service do\n  run \"x\"\nend\n"}
+    formula.caveats = "This is a caveat."
+    formula.test_source = "test do\n  assert true\nend\n"
+
+    keg = _build(tmp_path, formula)
+    assert (keg / "blocks").read_text().splitlines() == ["true", "true", "true"]
