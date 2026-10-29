@@ -640,9 +640,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `e469d6d` (Formula bottle tag helpers)
-- CI run for `e469d6d`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40954128986>
+- Latest feature commit: `95463a4` (cask uninstall launchctl/signal actions)
+- CI run for `95463a4`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40954964547>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
