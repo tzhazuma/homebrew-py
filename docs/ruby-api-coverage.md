@@ -41,6 +41,7 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
 - Full cask DSL and cask script APIs (`Utils` internals, `MacOS` cask helpers,
   `system_command` variants are partial); the arbitrary-Ruby evaluator records
   unsupported stanzas instead of applying them, and scripts remain opt-in.
+  The default literal cask parser now preserves multiline keyword arguments.
 - Full test DSL (Minitest block forms, `Formula["x"].test`, all path/type
   assertions and dependency lookup).
 - Any Ruby gem or third-party API used by formulae.

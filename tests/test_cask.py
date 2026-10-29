@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from pybrew.cask import parse_cask_file
+from pybrew.cask import parse_cask_file, parse_cask_source
 from pybrew.cask_installer import CaskInstaller, CaskLoader
 from pybrew.paths import Config
 from pybrew.taps import discover_taps
@@ -33,6 +33,8 @@ def test_parse_vscode_conditional_and_arch() -> None:
     cask = parse_cask_file(FIXTURES / "visual-studio-code.rb", tap="homebrew/cask")
     # on_monterey :or_newer is the current branch.
     assert cask.version == "1.143.1"
+    assert set(cask.sha256_map) == {"arm", "intel"}
+    assert cask.uninstall.get("quit") == "com.microsoft.VSCode"
     assert "Microsoft Visual Studio Code" in (cask.name or "")
     assert cask.resolved_sha256()
     assert any(artifact.kind == "app" for artifact in cask.artifacts)
@@ -337,3 +339,25 @@ def test_cask_reinstall(run_cli, sample) -> None:
     alias = run_cli("reinstall", "--cask", "testapp")
     assert alias.returncode == 0, alias.stderr
     assert "Reinstalled cask: testapp" in alias.stdout
+
+
+def test_multiline_keyword_arguments_are_preserved() -> None:
+    arm_sha = "a" * 64
+    intel_sha = "b" * 64
+    cask = parse_cask_source(
+        f'''cask "multiline" do
+  version "1.0"
+  sha256 arm:   "{arm_sha}",
+         intel: "{intel_sha}"
+  url "https://example.com/Multiline.zip"
+  uninstall launchctl: "com.example.helper",
+            quit:      "com.example.app"
+  app "Multiline.app"
+end
+'''
+    )
+    assert cask.sha256_map == {"arm": arm_sha, "intel": intel_sha}
+    assert cask.uninstall == {
+        "launchctl": "com.example.helper",
+        "quit": "com.example.app",
+    }

@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-424 passed, 5 skipped in 71.67s
+425 passed, 5 skipped in 65.04s
 ```
 
 Breakdown of the feature slices:
@@ -33,7 +33,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_ruby.py
-51 passed      # cask base + opt-in arbitrary Ruby DSL evaluator
+52 passed      # cask base + opt-in arbitrary Ruby DSL evaluator
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
@@ -387,6 +387,10 @@ local remote, commits a change, and confirms the CLI updates it.
   depends_on/conflicts, stage_only/auto_updates.
 - Scripts and unknown stanzas are not executed/captured; they are recorded as
   warnings/unsupported. Default parser remains unchanged when the env is unset.
+- Fixed the default cask parser dropping keyword arguments after a
+  comma/newline continuation (e.g. `sha256 arm: ..., intel: ...` and
+  `uninstall launchctl: ..., quit: ...`); regression tests use the VSCode
+  fixture and a synthetic multiline cask.
 
 ## Final parallel batch
 

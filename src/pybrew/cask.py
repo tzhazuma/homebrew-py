@@ -349,12 +349,13 @@ class CaskParser:
         parenthesised = token.kind == "punct" and token.value == "("
         if parenthesised:
             self.advance()
+        continuation = False
         while True:
             token = self.peek()
             if token.kind == "eof":
                 break
             if token.kind == "nl":
-                if parenthesised:
+                if parenthesised or continuation:
                     self.advance()
                     continue
                 break
@@ -375,7 +376,13 @@ class CaskParser:
                 key = str(self.advance().value)
                 self.advance()
                 kwargs[key] = self._parse_value()
-                continue
+                if self.peek().kind == "punct" and self.peek().value == ",":
+                    self.advance()
+                    continuation = True
+                    while self.peek().kind == "nl":
+                        self.advance()
+                    continue
+                break
             value = self._parse_value()
             if self.peek().kind == "op" and self.peek().value == "=>":
                 self.advance()
