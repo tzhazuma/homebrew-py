@@ -633,9 +633,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `ce69dc6` (Formula stable/head/option helpers)
-- CI run for `ce69dc6`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40953359087>
+- Latest feature commit: `e469d6d` (Formula bottle tag helpers)
+- CI run for `e469d6d`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40954128986>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
