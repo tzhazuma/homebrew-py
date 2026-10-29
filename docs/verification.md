@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-383 passed, 5 skipped in 88.33s
+389 passed, 5 skipped in 57.00s
 ```
 
 Breakdown of the feature slices:
@@ -45,7 +45,9 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_formula_test.py
 25 passed      # formula test DSL + CLI
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_caveats.py
-22 passed      # caveats DSL + CLI
+22 passed      # formula caveats DSL + CLI
+$ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_caveats.py
+6 passed       # cask caveats block/literal + CLI
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py
 8 passed       # launchd + systemd unit generation, orphan cleanup
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_taps.py
@@ -365,6 +367,14 @@ local remote, commits a change, and confirms the CLI updates it.
   for `uninstall` and `cask uninstall`; default remains inert.
 - Preflight runs before artifact removal; postflight after room removal. A
   postflight failure reports the error after the cask is removed.
+
+## Cask caveats
+
+- Cask parser captures `caveats do ... end` as inert source and keeps literal
+  `caveats "..."` strings.
+- `pybrew caveats --cask <token>` renders cask caveats with the Ruby shim
+  (token/version/appdir/paths/platform blocks); literal caveats print directly.
+- This is separate from cask install/uninstall scripts and does not run them.
 
 ## Final parallel batch
 

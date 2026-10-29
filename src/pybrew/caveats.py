@@ -31,7 +31,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Mapping, Optional
+from typing import Any, Mapping, Optional
 
 from .cellar import Cellar
 from .errors import PybrewError
@@ -236,7 +236,7 @@ end
 class PybrewCaveatsContext
   PATH_NAMES = %w[
     prefix bin sbin lib include share etc libexec opt_prefix opt_bin
-    opt_libexec pkgshare var man
+    opt_libexec pkgshare var man appdir
   ].freeze
 
   def initialize(config)
@@ -256,6 +256,10 @@ class PybrewCaveatsContext
   end
 
   def name
+    @name
+  end
+
+  def token
     @name
   end
 
@@ -402,6 +406,7 @@ def _caveats_paths(formula: Formula, config: Config) -> dict[str, str]:
         "pkgshare": keg / "share" / formula.name,
         "var": config.var,
         "man": keg / "share" / "man",
+        "appdir": config.applications,
     }
     return {name: str(path) for name, path in mapping.items()}
 
@@ -529,6 +534,33 @@ def run_caveats(
         return stdout
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def run_cask_caveats(
+    cask: Any,
+    config: Config,
+    *,
+    ruby: Optional[str] = None,
+    timeout: Optional[float] = None,
+    env: Optional[Mapping[str, str]] = None,
+) -> str:
+    """Render a cask's caveats block (or literal caveats string).
+
+    Cask caveats are ordinary Ruby too; the parser stores a captured block in
+    ``caveats_source`` and a literal string in ``caveats``.  Reuse the formula
+    runner with a lightweight Formula carrying the cask token/version.
+    """
+
+    source = (getattr(cask, "caveats_source", None) or "").strip()
+    if source:
+        pseudo = Formula(
+            name=str(getattr(cask, "token", "") or "cask"),
+            version=getattr(cask, "version", None),
+            caveats=source,
+        )
+        return run_caveats(pseudo, config, ruby=ruby, timeout=timeout, env=env)
+    literal = getattr(cask, "caveats", None)
+    return str(literal) if literal else ""
 
 
 def render_caveats(

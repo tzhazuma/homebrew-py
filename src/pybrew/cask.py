@@ -49,6 +49,7 @@ class Cask:
     arch_map: dict[str, str] = field(default_factory=dict)
     appdir: Optional[str] = None
     caveats: Optional[str] = None
+    caveats_source: Optional[str] = None
     deprecated: bool = False
     # Raw Ruby block bodies captured from the cask.  They are inert data: no
     # parser or installer path executes them unless a caller explicitly opts
@@ -294,6 +295,8 @@ class CaskParser:
                 self._parse_conditional(name, args, opener)
             elif name in _SCRIPT_STANZAS and block:
                 self._capture_script(name, opener)
+            elif name == "caveats" and block:
+                self.cask.caveats_source = self._consume_block_body(opener, capture=True)
             elif block:
                 self._skip_block_body(opener)
             else:

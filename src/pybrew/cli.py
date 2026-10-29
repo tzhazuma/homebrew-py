@@ -22,7 +22,7 @@ from .analytics import (
 from .api import fetch_formula
 from .cask import CaskError
 from .bundle import bundle_check, bundle_dump, bundle_install, bundle_list, parse_brewfile
-from .caveats import CaveatsError, run_caveats
+from .caveats import CaveatsError, run_cask_caveats, run_caveats
 from .cask_installer import CaskInstaller, CaskLoader, CaskNotFound
 from .cellar import Cellar, Linker, read_receipt
 from .doctor import diagnose, diagnose_issues
@@ -305,6 +305,7 @@ def build_parser() -> argparse.ArgumentParser:
         "caveats", parents=[common], help="show a formula's caveats"
     )
     caveats_cmd.add_argument("formula")
+    caveats_cmd.add_argument("--cask", action="store_true", help="show cask caveats")
     return parser
 
 
@@ -1389,6 +1390,19 @@ def cmd_test(args: argparse.Namespace) -> int:
 
 def cmd_caveats(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
+    if getattr(args, "cask", False):
+        loader = _cask_loader(config, allow_api=bool(getattr(args, "api", False)))
+        cask = loader.load(args.formula)
+        try:
+            output = run_cask_caveats(cask, config)
+        except CaveatsError as error:
+            details = str(error).strip()
+            if details:
+                print(f"Error: {details}", file=sys.stderr)
+            return 1
+        if output:
+            print(output, end="" if output.endswith("\n") else "\n")
+        return 0
     loader = _loader(config)
     formula = _load_formula(args.formula, loader)
     try:
