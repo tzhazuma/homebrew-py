@@ -219,6 +219,27 @@ resource via the regular cache, verifies sha256, stages it under the build root,
 and installs the file into the keg. Zip resources use the same path with
 path-traversal checks.
 
+## Real Linux via OrbStack
+
+OrbStack's running Ubuntu arm64 machine was used for a real Linux run (shared
+workspace path, passwordless sudo). patchelf 0.18.0 was installed with apt.
+
+```console
+$ orb -m ubuntu bash -lc 'cd /Users/azuma/Documents/deepseek-harness/default-workspace/homebrew-py && /usr/bin/python3 scripts/linux_verify.py --clean'
+PASS: 2 real Linux bottle(s) verified (libslirp, tree)
+```
+
+- `libslirp 4.9.6`, tag `arm64_linux`, ghcr.io, SHA-256 verified
+- `tree 2.3.2`, tag `arm64_linux`, ghcr.io, SHA-256 verified
+- `readelf -d` / `patchelf --print-rpath` showed the final prefix with no
+  `@@HOMEBREW` placeholders; the relocated `tree --version` actually ran.
+
+This run found and fixed a real bug: ELF **PT_INTERP** still pointed at
+`@@HOMEBREW_PREFIX@@/lib/ld.so`, making executables unrunnable. `_relocate_elf`
+now uses `patchelf --print-interpreter/--set-interpreter` as well as RPATH.
+`tests/test_linux_real.py` covers this opt-in (`PYBREW_LINUX_REAL=1`; skipped by
+default), and `scripts/linux_verify.py` is the reproducible verifier.
+
 ## Meson build flow
 
 A fake `meson` executable on PATH handles `setup`/`compile`/`install`, records the

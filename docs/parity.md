@@ -40,7 +40,7 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 | --- | --- | --- |
 | Formula DSL metadata | Full Ruby evaluation + DSL | Literal-only parser, tolerates unknown calls |
 | Dependency resolution | Full, options/requirements | Runtime/build/test/optional/recommended + uses_from_macos |
-| Bottle install | All platforms, OCI + legacy mirrors | ghcr.io OCI + plain root_url + local file; SHA-256; text relocation + Mach-O install_name_tool + optional ELF patchelf |
+| Bottle install | All platforms, OCI + legacy mirrors | ghcr.io OCI + plain root_url + local file; SHA-256; text relocation + Mach-O install_name_tool + ELF patchelf (RPATH + PT_INTERP, real OrbStack test) |
 | Source install | Any build system / formula Ruby | Declarative subset plus opt-in arbitrary-Ruby bridge; autotools/CMake/Cargo tested; meson fake + manual real; unsupported Ruby fails explicitly unless bridge enabled |
 | Cellar / keg / receipts | Yes | Yes, compatible layout |
 | opt / linking | Yes | Yes, conflict-aware, --overwrite |

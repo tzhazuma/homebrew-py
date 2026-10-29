@@ -90,7 +90,8 @@ Bottles contain text and binary placeholders such as `@@HOMEBREW_PREFIX@@` and
 macOS, Mach-O load commands and LC_ID_DYLIB entries are rewritten with
 `install_name_tool` (which can grow load commands) and ad-hoc signed with
 `codesign -s -`. On ELF, `patchelf --print-rpath/--set-rpath` rewrites placeholder
-RPATH entries when the tool is available (restoring pristine bytes on failure);
+RPATH entries and `--print-interpreter/--set-interpreter` rewrites PT_INTERP
+when the tool is available (restoring pristine bytes on failure);
 otherwise byte rewriting is used only when the replacement fits, else the binary
 is reported as skipped rather than corrupted.
 
