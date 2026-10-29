@@ -558,9 +558,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `b827bda` (DevelopmentTools and CLT Ruby API)
-- CI run for `b827bda`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40944567089>
+- Latest feature commit: `f8c00eb` (cask manpages and ENV compiler flag helpers)
+- CI run for `f8c00eb`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40945326475>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
