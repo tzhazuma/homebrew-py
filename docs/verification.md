@@ -707,9 +707,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `5360be4` (Formula service name and path helpers)
-- CI run for `5360be4`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40962736620>
+- Latest feature commit: `473c918` (enforce cask arch dependency)
+- CI run for `473c918`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40963501212>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
