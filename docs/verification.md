@@ -653,9 +653,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `5685a9c` (cask uninstall login_item action)
-- CI run for `5685a9c`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40955739935>
+- Latest feature commit: `c328978` (Formula versioned helpers)
+- CI run for `c328978`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40956501899>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
