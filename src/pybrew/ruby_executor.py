@@ -2210,6 +2210,72 @@ class PybrewPatchRef
   end
 end
 
+class PybrewServiceRef
+  def initialize(info)
+    @info = info || {}
+  end
+
+  def source
+    @info["source"].to_s
+  end
+
+  def run
+    Array(@info["run"])
+  end
+
+  def working_dir
+    @info["working_dir"]
+  end
+
+  def log_path
+    @info["log_path"]
+  end
+
+  def error_log_path
+    @info["error_log_path"]
+  end
+
+  def keep_alive
+    @info["keep_alive"]
+  end
+
+  def interval
+    @info["interval"]
+  end
+
+  def process_type
+    @info["process_type"]
+  end
+
+  def environment_variables
+    @info["environment_variables"] || {}
+  end
+
+  def require_root?
+    !!@info["require_root"]
+  end
+
+  def launch_only_once?
+    !!@info["launch_only_once"]
+  end
+
+  def macos_legacy_timers?
+    !!@info["macos_legacy_timers"]
+  end
+
+  def throttle_interval
+    @info["throttle_interval"]
+  end
+
+  def sockets
+    @info["sockets"] || {}
+  end
+
+  def to_s
+    source
+  end
+end
+
 class PybrewFormulaRef
   attr_reader :name
 
@@ -2937,6 +3003,11 @@ class PybrewFormulaRef
 
   def option?(name)
     options.include?(name.to_s)
+  end
+
+  def service
+    data = @info["service"]
+    data.nil? ? nil : PybrewServiceRef.new(data)
   end
 
   def service?
@@ -3682,6 +3753,41 @@ def _receipt_dependency_metadata(keg: Path) -> list[dict[str, Any]]:
     return entries
 
 
+def _service_metadata(formula: Formula, config: Config) -> Optional[dict[str, Any]]:
+    source = None
+    if isinstance(formula.service, dict):
+        source = formula.service.get("source")
+    if not source:
+        return None
+    raw = source.strip()
+    if raw.startswith("service do"):
+        raw = raw[len("service do"):].strip()
+    if raw.endswith("end"):
+        raw = raw[:-3].strip()
+    try:
+        from .services import parse_service_block
+
+        spec = parse_service_block(formula, config, raw)
+    except Exception:
+        return None
+    return {
+        "source": source,
+        "run": list(spec.run),
+        "working_dir": spec.working_dir,
+        "log_path": spec.log_path,
+        "error_log_path": spec.error_log_path,
+        "keep_alive": spec.keep_alive,
+        "interval": spec.interval,
+        "process_type": spec.process_type,
+        "environment_variables": dict(spec.environment_variables),
+        "require_root": spec.require_root,
+        "launch_only_once": spec.launch_only_once,
+        "macos_legacy_timers": spec.macos_legacy_timers,
+        "throttle_interval": spec.throttle_interval,
+        "sockets": dict(spec.sockets),
+    }
+
+
 def _formula_reference_map(
     formula: Formula, config: Config, keg: Path
 ) -> dict[str, dict[str, Any]]:
@@ -3759,6 +3865,7 @@ def _formula_reference_map(
         "cellar": str(config.cellar),
         "head_version": "HEAD" if getattr(formula.head, "url", None) else None,
         "post_install?": bool(formula.post_install_source),
+        "service": _service_metadata(formula, config),
         "service?": bool(
             isinstance(formula.service, dict) and formula.service.get("source")
         ),

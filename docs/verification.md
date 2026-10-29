@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-516 passed, 5 skipped in 90.38s
+517 passed, 5 skipped in 90.74s
 ```
 
 Breakdown of the feature slices:
@@ -37,7 +37,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
-92 passed      # declarative + opt-in Ruby bridge/API + metadata helpers
+93 passed      # declarative + opt-in Ruby bridge/API + service ref
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_patches.py tests/test_post_install.py
 47 passed      # patch url/file/:DATA application + post_install
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py tests/test_service_ruby.py
@@ -623,6 +623,15 @@ local remote, commits a change, and confirms the CLI updates it.
 - Added `tap_path`, `reloadable_ref`, alias/installed-name helpers,
   `migration_needed?`, `new_formula_available?`, `latest_formula` and
   `old_installed_formulae` no-op/metadata methods.
+
+## Formula service ref
+
+- `Formula#service` returns a `PybrewServiceRef` with run/working_dir/log paths,
+  keep_alive, interval, environment variables, root/once/timer flags, sockets
+  and the raw source.
+- The service block is parsed through the existing literal service parser; an
+  unparseable block leaves `service` nil but `service?` still reflects the
+  declared source.
 
 ## Final parallel batch
 

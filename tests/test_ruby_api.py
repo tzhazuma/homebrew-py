@@ -2091,3 +2091,34 @@ def test_formula_metadata_compatibility_helpers(
         "true",
         "0",
     ]
+
+
+def test_formula_service_ref(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-service-ref",
+        "1.0",
+        (
+            '  ref = Formula["ruby-service-ref"]\n'
+            '  (prefix/"serviceref").write [\n'
+            '    ref.service?.to_s,\n'
+            '    ref.service.run.join(","),\n'
+            '    ref.service.environment_variables["FOO"].to_s,\n'
+            '    ref.service.source.include?("service do").to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.service = {
+        "source": (
+            "service do\n"
+            "  run \"ruby-service-ref\", \"--foreground\"\n"
+            "  environment_variables FOO: \"bar\"\n"
+            "end\n"
+        )
+    }
+    keg = _build(tmp_path, formula)
+    lines = (keg / "serviceref").read_text().splitlines()
+    assert lines[0] == "true"
+    assert lines[1] == "ruby-service-ref"
+    assert lines[2] == "bar"
+    assert lines[3] == "true"
