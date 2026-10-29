@@ -1811,3 +1811,29 @@ def test_formula_bottle_tags_api(
     assert lines[0] == "sonoma"
     assert lines[1] == "a" * 64
     assert lines[2].endswith("/ruby-bottle-tags/blobs/sha256:" + "a" * 64)
+
+
+def test_formula_versioned_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-versioned@1.0",
+        "1.0",
+        (
+            '  ref = Formula["ruby-versioned@1.0"]\n'
+            '  (prefix/"versioned").write [\n'
+            '    ref.versioned_formula?.to_s,\n'
+            '    ref.unversioned_formula_name,\n'
+            '    ref.versioned_formulae_names.join(",")\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    config = _config(tmp_path)
+    rack = config.cellar / "ruby-versioned@2.0"
+    rack.mkdir(parents=True)
+    keg = _build(tmp_path, formula)
+    lines = (keg / "versioned").read_text().splitlines()
+    assert lines[0] == "true"
+    assert lines[1] == "ruby-versioned"
+    assert "ruby-versioned@2.0" in lines[2]

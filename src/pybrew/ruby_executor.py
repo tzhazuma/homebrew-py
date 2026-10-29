@@ -2561,6 +2561,24 @@ class PybrewFormulaRef
     name.include?("@")
   end
 
+  def unversioned_formula_name
+    name.split("@", 2).first
+  end
+
+  def versioned_formulae_names
+    base = unversioned_formula_name
+    rack = Pathname.new(self.class.cellar)
+    return [] unless rack.directory?
+
+    rack.children.select do |child|
+      child.directory? && child.basename.to_s.start_with?("#{base}@")
+    end.map { |child| child.basename.to_s }.sort
+  end
+
+  def versioned_formulae
+    versioned_formulae_names.map { |formula_name| PybrewFormulaRef.new(formula_name) }
+  end
+
   def linked_keg
     link = opt_prefix
     return nil unless link.symlink?
