@@ -678,6 +678,7 @@ class CaskInstaller:
         self._system_pkg_before_ids = None
         self._script_results = {}
         self._check_arch_dependency(cask)
+        self._check_named_dependencies(cask)
         if cask.disabled:
             detail = f" ({cask.disable_reason})" if cask.disable_reason else ""
             raise CaskError(f"{cask.token} is disabled{detail}")
@@ -1006,6 +1007,35 @@ class CaskInstaller:
                 f"{cask.token} requires arch {', '.join(sorted(allowed))} "
                 f"but this machine is {current}"
             )
+
+    @staticmethod
+    def _dependency_names(value: Any) -> list[str]:
+        if value is None:
+            return []
+        values = value if isinstance(value, list) else [value]
+        return [str(item) for item in values if str(item)]
+
+    def _check_named_dependencies(self, cask: Cask) -> None:
+        for formula_name in self._dependency_names(cask.depends_on.get("formula")):
+            if not (self.config.cellar / formula_name).is_dir():
+                raise CaskError(
+                    f"{cask.token} requires formula {formula_name!r} to be installed"
+                )
+        for dependency in self._dependency_names(cask.depends_on.get("cask")):
+            if not (self.config.caskroom / dependency).is_dir():
+                raise CaskError(
+                    f"{cask.token} requires cask {dependency!r} to be installed"
+                )
+        for formula_name in self._dependency_names(cask.conflicts_with.get("formula")):
+            if (self.config.cellar / formula_name).is_dir():
+                raise CaskError(
+                    f"{cask.token} conflicts with installed formula {formula_name!r}"
+                )
+        for conflict in self._dependency_names(cask.conflicts_with.get("cask")):
+            if (self.config.caskroom / conflict).is_dir():
+                raise CaskError(
+                    f"{cask.token} conflicts with installed cask {conflict!r}"
+                )
 
     def _install_manpage_artifact(
         self,

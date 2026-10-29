@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-510 passed, 5 skipped in 82.75s
+511 passed, 5 skipped in 85.33s
 ```
 
 Breakdown of the feature slices:
@@ -33,7 +33,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_ruby.py
-64 passed      # cask base + Ruby evaluator + artifacts + uninstall actions + disable + arch
+65 passed      # cask base + Ruby evaluator + artifacts + uninstall actions + deps
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
@@ -590,6 +590,13 @@ local remote, commits a change, and confirms the CLI updates it.
 
 - `depends_on arch:` is now enforced before install; a mismatch raises a clear
   `CaskError` with the requested and current architecture.
+
+## Cask named dependencies/conflicts
+
+- `depends_on formula:` / `depends_on cask:` now verify the named formula/cask is
+  installed before installing.
+- `conflicts_with formula:` / `conflicts_with cask:` reject installation when
+  the conflicting item is installed.
 
 ## Final parallel batch
 
