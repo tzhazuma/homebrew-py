@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -785,3 +786,14 @@ end
     assert cask.preflight is not None
     assert "preflight body" in cask.preflight
     assert "preflight" in cask.extra.get("ruby_merged_scripts", [])
+
+
+def test_cask_ruby_os_stanza(allow_ruby: None) -> None:
+    source = _source(
+        '  version "1.0"\n'
+        '  os macos: ">= :sonoma"\n'
+        '  app "Osy.app"\n'
+    )
+    cask = evaluate_cask_source(source)
+    key = "macos" if sys.platform.startswith("darwin") else "linux"
+    assert cask.os[key] == ">= :sonoma"

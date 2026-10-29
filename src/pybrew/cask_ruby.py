@@ -393,6 +393,11 @@ def _cask_from_result(
         cask.disabled = True
         cask.disable_reason = str(data.get("disable_reason") or "") or None
 
+    os_value = data.get("os")
+    if os_value is not None and str(os_value).strip():
+        platform_key = "macos" if sys.platform.startswith("darwin") else "linux"
+        cask.os[platform_key] = str(os_value)
+
     container = data.get("container")
     if container is not None and str(container).strip():
         cask.container = str(container).strip()

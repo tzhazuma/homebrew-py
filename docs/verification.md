@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-527 passed, 5 skipped in 75.59s
+528 passed, 5 skipped in 65.76s
 ```
 
 Breakdown of the feature slices:
@@ -33,7 +33,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_ruby.py
-70 passed      # cask base + Ruby evaluator + artifacts + uninstall actions + os
+71 passed      # cask base + Ruby evaluator + artifacts + uninstall actions + os
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
@@ -693,6 +693,11 @@ local remote, commits a change, and confirms the CLI updates it.
   `supports_macos?`, `supports_linux?`, `valid_platform?`,
   `network_access_allowed?`, `autobump?`, `test_defined?`,
   `livecheck_defined?`, dependency/linkage/cleanup helpers and metadata hashes.
+
+## Cask evaluator os mapping
+
+- The arbitrary-Ruby cask evaluator now maps `os` to `Cask.os` so the same
+  platform enforcement applies in both parser modes.
 
 ## Final parallel batch
 
