@@ -782,9 +782,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `3cacec2` (Formula livecheck presence)
-- CI run for `3cacec2`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40971814640>
+- Latest feature commit: `866d80d` (service cron support)
+- CI run for `866d80d`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40972432010>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
