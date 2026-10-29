@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-508 passed, 5 skipped in 87.79s
+509 passed, 5 skipped in 75.38s
 ```
 
 Breakdown of the feature slices:
@@ -37,7 +37,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
-88 passed      # declarative + opt-in Ruby bridge/API + head/installed prefixes
+89 passed      # declarative + opt-in Ruby bridge/API + service names/paths
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_patches.py tests/test_post_install.py
 47 passed      # patch url/file/:DATA application + post_install
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py tests/test_service_ruby.py
@@ -579,6 +579,12 @@ local remote, commits a change, and confirms the CLI updates it.
 
 - Added `Formula#latest_head_version`, `#latest_head_prefix` and
   `#installed_prefixes`.
+
+## Service names and paths
+
+- Added `plist_name`/`plist_names`, `service_name`/`service_names`,
+  `launchd_service_path(s)`, `systemd_service_path(s)` and
+  `systemd_timer_path(s)`.
 
 ## Final parallel batch
 

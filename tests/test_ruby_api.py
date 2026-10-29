@@ -1996,3 +1996,29 @@ def test_formula_head_and_installed_prefix_helpers(
     assert lines[0] == "HEAD"
     assert lines[1] == str(config.cellar / "ruby-headpaths" / "HEAD")
     assert lines[2] == "1.0,HEAD"
+
+
+def test_formula_service_name_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-service-paths",
+        "1.0",
+        (
+            '  ref = Formula["ruby-service-paths"]\n'
+            '  (prefix/"servicepaths").write [\n'
+            '    ref.plist_name, ref.service_name,\n'
+            '    ref.launchd_service_path.to_s,\n'
+            '    ref.systemd_service_path.to_s,\n'
+            '    ref.systemd_timer_path.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    lines = (keg / "servicepaths").read_text().splitlines()
+    assert lines[0] == "sh.brew.ruby-service-paths"
+    assert lines[1] == "sh.brew.ruby-service-paths"
+    assert lines[2].endswith("sh.brew.ruby-service-paths.plist")
+    assert lines[3].endswith("sh.brew.ruby-service-paths.service")
+    assert lines[4].endswith("sh.brew.ruby-service-paths.timer")

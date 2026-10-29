@@ -2272,6 +2272,49 @@ class PybrewFormulaRef
     version.nil? ? nil : Pathname.new(self.class.cellar) + name + version.to_s
   end
 
+  def plist_name
+    "sh.brew.#{name}"
+  end
+
+  def plist_names
+    [plist_name, "sh.brew.#{name}", "homebrew.mxcl.#{name}"].uniq
+  end
+
+  def service_name
+    "sh.brew.#{name}"
+  end
+
+  def service_names
+    [service_name, "sh.brew.#{name}", "homebrew.#{name}"].uniq
+  end
+
+  def launchd_service_paths
+    base = any_installed_prefix || opt_prefix
+    plist_names.map { |entry| base + "#{entry}.plist" }
+  end
+
+  def launchd_service_path
+    launchd_service_paths.first
+  end
+
+  def systemd_service_paths
+    base = any_installed_prefix || opt_prefix
+    service_names.map { |entry| base + "#{entry}.service" }
+  end
+
+  def systemd_service_path
+    systemd_service_paths.first
+  end
+
+  def systemd_timer_paths
+    base = any_installed_prefix || opt_prefix
+    service_names.map { |entry| base + "#{entry}.timer" }
+  end
+
+  def systemd_timer_path
+    systemd_timer_paths.first
+  end
+
   def latest_installed_keg
     kegs = installed_kegs
     return nil if kegs.empty?
