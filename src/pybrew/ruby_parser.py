@@ -972,6 +972,8 @@ class RubyFormulaParser:
                     self.formula.test_source = raw
                 elif name == "post_install":
                     self.formula.post_install_source = raw
+                elif name == "livecheck":
+                    self.formula.livecheck_source = raw
             return
         if name == "descriptions" or name == "deprecate_args":
             if block is not None:

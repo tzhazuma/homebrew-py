@@ -215,3 +215,21 @@ end
     )
     assert formula.fetch_source is not None
     assert "system" in formula.fetch_source
+
+
+def test_livecheck_definition_is_captured() -> None:
+    formula = parse_formula_source(
+        '''class Livey < Formula
+  url "https://example.com/livey-1.0.tar.gz"
+  sha256 "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+  livecheck do
+    url :stable
+    regex(/^v?(\\d+(?:\\.\\d+)+)$/i)
+  end
+end
+''',
+        name="livey",
+    )
+    assert formula.livecheck_source
+    assert "regex" in formula.livecheck_source

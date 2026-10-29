@@ -256,6 +256,7 @@ class Formula:
     test_source: str = ""
     post_install_source: str = ""
     fetch_source: str = ""
+    livecheck_source: str = ""
     resources: dict[str, SourceSpec] = field(default_factory=dict)
     patches: list[PatchSpec] = field(default_factory=list)
 

@@ -3043,6 +3043,10 @@ class PybrewFormulaRef
     !!@info["caveats?"]
   end
 
+  def livecheck?
+    !!@info["livecheck?"]
+  end
+
   def test?
     !!@info["test?"]
   end
@@ -3896,6 +3900,7 @@ def _formula_reference_map(
         "head_version": "HEAD" if getattr(formula.head, "url", None) else None,
         "post_install?": bool(formula.post_install_source),
         "fetch?": bool(formula.fetch_source),
+        "livecheck?": bool(formula.livecheck_source),
         "service": _service_metadata(formula, config),
         "service?": bool(
             isinstance(formula.service, dict) and formula.service.get("source")
