@@ -429,9 +429,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `c374867` (system pkg rollback, expanded Ruby shims, x86_64 Linux)
-- CI run for `c374867`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40826406011>
+- Latest feature commit: `af0efc4` (expanded Homebrew Ruby API shim and formula test DSL)
+- CI run for `af0efc4`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40837746973>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
