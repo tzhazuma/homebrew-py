@@ -820,9 +820,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `57bc111` (cask evaluator os mapping fix)
-- CI run for `57bc111`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40976442300>
+- Latest feature commit: `0326638` (service run argument fix)
+- CI run for `0326638`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40976863199>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
