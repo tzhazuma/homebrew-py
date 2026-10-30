@@ -3441,3 +3441,34 @@ def test_formula_sandbox_env(
         f"{home}/.config",
         f"{home}/.gitconfig",
     ]
+
+
+def test_formula_service_ref_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-service-names",
+        "1.0",
+        (
+            '  service = Formula["ruby-service-names"].service\n'
+            '  (prefix/"servicenames.txt").write [\n'
+            '    service.plist_name,\n'
+            '    service.canonical_plist_name,\n'
+            '    service.legacy_plist_name,\n'
+            '    service.plist_names.join(","),\n'
+            '    service.service_name,\n'
+            '    service.service_names.join(",")\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.service = {"source": 'service do\n  run [opt_bin/"svc"]\nend\n'}
+    keg = _build(tmp_path, formula)
+    assert (keg / "servicenames.txt").read_text().splitlines() == [
+        "sh.brew.ruby-service-names",
+        "sh.brew.ruby-service-names",
+        "homebrew.mxcl.ruby-service-names",
+        "sh.brew.ruby-service-names,homebrew.mxcl.ruby-service-names",
+        "sh.brew.ruby-service-names",
+        "sh.brew.ruby-service-names,homebrew.ruby-service-names",
+    ]

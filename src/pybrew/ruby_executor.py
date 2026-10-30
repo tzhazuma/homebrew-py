@@ -2359,6 +2359,42 @@ class PybrewServiceRef
     @info.dup
   end
 
+  def formula_name
+    @info["name"].to_s
+  end
+
+  def plist_name
+    "sh.brew.#{formula_name}"
+  end
+
+  def canonical_plist_name
+    plist_name
+  end
+
+  def legacy_plist_name
+    "homebrew.mxcl.#{formula_name}"
+  end
+
+  def plist_names
+    [plist_name, canonical_plist_name, legacy_plist_name].uniq
+  end
+
+  def service_name
+    "sh.brew.#{formula_name}"
+  end
+
+  def canonical_service_name
+    service_name
+  end
+
+  def legacy_service_name
+    "homebrew.#{formula_name}"
+  end
+
+  def service_names
+    [service_name, canonical_service_name, legacy_service_name].uniq
+  end
+
   def run
     Array(@info["run"])
   end
@@ -6023,6 +6059,7 @@ def _service_metadata(formula: Formula, config: Config) -> Optional[dict[str, An
         return None
     return {
         "source": source,
+        "name": formula.name,
         "run": list(spec.run),
         "working_dir": spec.working_dir,
         "log_path": spec.log_path,
