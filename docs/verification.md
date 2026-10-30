@@ -881,9 +881,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `72429d2` (SystemConfig)
-- CI run for `72429d2`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40993495160>
+- Latest feature commit: `ba3f16e` (Formulary rack helpers)
+- CI run for `ba3f16e`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40994108261>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
