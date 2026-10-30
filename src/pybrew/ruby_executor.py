@@ -244,6 +244,7 @@ require "json"
 require "pathname"
 require "rbconfig"
 require "shellwords"
+require "stringio"
 
 $stdout.sync = true
 $stderr.sync = true
@@ -871,6 +872,11 @@ module DevelopmentTools
   def clang_version
     output = Utils.popen_read("clang", "--version", safe: true) rescue ""
     output[/clang version\s+(\S+)/, 1]
+  end
+
+  def clang_build_version
+    output = Utils.popen_read("clang", "--version", safe: true) rescue ""
+    output[%r{clang(?:-| version [^ ]+ \(tags/RELEASE_)(\d{2,})}, 1]
   end
 
   def default_compiler
@@ -3779,6 +3785,82 @@ class Tab
 
   def inspect
     "#<Tab #{@data.inspect}>"
+  end
+end
+
+module SystemConfig
+  class << self
+    def clang
+      value = DevelopmentTools.clang_version
+      value.nil? || value.to_s.empty? ? nil : PybrewVersion.new(value.to_s)
+    end
+
+    def clang_build
+      value = DevelopmentTools.clang_build_version
+      value.nil? || value.to_s.empty? ? nil : PybrewVersion.new(value.to_s)
+    end
+
+    def describe_clang
+      return "N/A" if clang.nil?
+      return clang.to_s if clang_build.nil?
+
+      "#{clang} build #{clang_build}"
+    end
+
+    def describe_homebrew_ruby
+      "#{RUBY_VERSION} => #{RbConfig.ruby}"
+    end
+
+    def hardware
+      return nil if Hardware::CPU.type == :dunno
+
+      "CPU: #{Hardware::CPU.cores}-core #{Hardware::CPU.bits}-bit #{Hardware::CPU.family}"
+    end
+
+    def kernel
+      Etc.uname[:machine].to_s
+    end
+
+    def branch
+      "(none)"
+    end
+
+    def head
+      "(none)"
+    end
+
+    def last_commit
+      "never"
+    end
+
+    def origin
+      "(none)"
+    end
+
+    def describe_git
+      return "N/A" unless Utils::Git.available?
+
+      output = Utils.popen_read("git", "--version").to_s
+      version = output[/\d+(?:\.\d+)+/, 0]
+      "#{version || "git"} => #{Utils.which("git")}"
+    end
+
+    def describe_curl
+      output = Utils.popen_read("curl", "--version").to_s
+      version = output[/^curl ([\d.]+)/, 1]
+      version.nil? ? "N/A" : "#{version} => #{Utils.which("curl")}"
+    end
+
+    def dump_verbose_config(out = $stdout)
+      out.puts "Homebrew Ruby: #{describe_homebrew_ruby}"
+      out.puts "Clang: #{describe_clang}"
+      out.puts "Git: #{describe_git}"
+      out.puts "Curl: #{describe_curl}"
+      hardware_text = hardware
+      out.puts hardware_text unless hardware_text.nil?
+      out
+    end
+    alias dump dump_verbose_config
   end
 end
 

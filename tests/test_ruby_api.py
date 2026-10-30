@@ -2469,3 +2469,29 @@ def test_formula_installed_kegs_are_keg_objects(
     assert lines[4] == "2.0"
     assert lines[5] == "1.0,2.0"
     assert lines[6] == "false"
+
+
+def test_system_config_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-systemconfig",
+        "1.0",
+        (
+            '  io = StringIO.new\n'
+            '  SystemConfig.dump_verbose_config(io)\n'
+            '  (prefix/"config.txt").write [\n'
+            '    ["NilClass", "PybrewVersion"].include?(SystemConfig.clang.class.name).to_s,\n'
+            '    (!SystemConfig.describe_clang.to_s.empty?).to_s,\n'
+            '    SystemConfig.describe_homebrew_ruby.include?("=>").to_s,\n'
+            '    (!SystemConfig.kernel.to_s.empty?).to_s,\n'
+            '    (!SystemConfig.describe_git.to_s.empty?).to_s,\n'
+            '    (!SystemConfig.describe_curl.to_s.empty?).to_s,\n'
+            '    io.string.include?("Homebrew Ruby:").to_s,\n'
+            '    io.string.include?("Clang:").to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "config.txt").read_text().splitlines() == ["true"] * 8
