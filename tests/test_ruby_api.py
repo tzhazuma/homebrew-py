@@ -2730,3 +2730,41 @@ def test_formula_post_install_method(
         "true",
         "post install ran",
     ]
+
+
+def test_tab_receipt_options_and_bottle_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-tab-options",
+        "1.0",
+        (
+            '  keg_path = Pathname.new(ENV["HOMEBREW_CELLAR"])/"ruby-tab-options/1.0"\n'
+            '  keg_path.mkpath\n'
+            '  (keg_path/"INSTALL_RECEIPT.json").write JSON.generate({\n'
+            '    "used_options" => ["--with-x"],\n'
+            '    "built_as_bottle" => true,\n'
+            '    "installed_as_dependency" => true,\n'
+            '    "time" => 456\n'
+            '  })\n'
+            '  tab = Keg.new(keg_path).tab\n'
+            '  (prefix/"tab.txt").write [\n'
+            '    tab.used_options.join(","),\n'
+            '    tab.unused_options.empty?.to_s,\n'
+            '    tab.built_as_bottle?.to_s,\n'
+            '    tab.installed_as_dependency?.to_s,\n'
+            '    tab.installed_on_request?.to_s,\n'
+            '    tab.installed_on_request.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "tab.txt").read_text().splitlines() == [
+        "--with-x",
+        "true",
+        "true",
+        "true",
+        "false",
+        "false",
+    ]

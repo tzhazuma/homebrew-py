@@ -3414,6 +3414,8 @@ class PybrewFormulaRef
         tab = keg.tab
         {
           "version" => keg.version.to_s,
+          "used_options" => tab.used_options,
+          "built_as_bottle" => tab.built_as_bottle?,
           "poured_from_bottle" => tab.poured_from_bottle?,
           "time" => tab.time,
           "runtime_dependencies" => tab.runtime_dependencies,
@@ -3962,11 +3964,37 @@ class Tab
 
   def installed_on_request?
     value = @data["installed_on_request"]
-    value.nil? ? true : !!value
+    return !!value unless value.nil?
+
+    dependency = @data["installed_as_dependency"]
+    dependency.nil? ? true : !dependency
   end
 
   def installed_as_dependency?
+    value = @data["installed_as_dependency"]
+    return !!value unless value.nil?
+
     !installed_on_request?
+  end
+
+  def installed_on_request
+    installed_on_request?
+  end
+
+  def installed_as_dependency
+    installed_as_dependency?
+  end
+
+  def used_options
+    Array(@data["used_options"])
+  end
+
+  def unused_options
+    Array(@data["unused_options"])
+  end
+
+  def built_as_bottle?
+    !!@data["built_as_bottle"]
   end
 
   def poured_from_bottle?
