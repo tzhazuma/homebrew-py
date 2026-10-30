@@ -2791,3 +2791,31 @@ def test_formula_test_execution(
     )
     keg = _build(tmp_path, formula)
     assert (keg / "test.txt").read_text() == "ok"
+
+
+def test_formula_fetch_and_buildpath(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-fetch",
+        "1.0",
+        (
+            '  ref = Formula["ruby-fetch"]\n'
+            '  ref.fetch\n'
+            '  (prefix/"fetch-check.txt").write [\n'
+            '    ref.fetch?.to_s,\n'
+            '    ref.buildpath.basename.to_s,\n'
+            '    (ref.buildpath/"fetch.txt").read,\n'
+            '    (ref.staged_path == prefix).to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.fetch_source = '(buildpath/"fetch.txt").write "fetched"'
+    keg = _build(tmp_path, formula)
+    assert (keg / "fetch-check.txt").read_text().splitlines() == [
+        "true",
+        "build",
+        "fetched",
+        "true",
+    ]

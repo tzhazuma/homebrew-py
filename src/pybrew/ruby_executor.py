@@ -2908,6 +2908,39 @@ class PybrewFormulaRef
     PybrewTestContext.new(config, self).instance_eval(source, "test", 1)
   end
 
+  def buildpath
+    raw = @info["buildpath"]
+    raw.nil? || raw.to_s.empty? ? prefix : Pathname.new(raw.to_s)
+  end
+
+  def staged_path
+    raw = @info["staged_path"]
+    raw.nil? || raw.to_s.empty? ? prefix : Pathname.new(raw.to_s)
+  end
+
+  def fetch
+    source = @info["fetch_source"].to_s
+    return nil if source.empty?
+
+    paths = {
+      "prefix" => prefix.to_s,
+      "buildpath" => buildpath.to_s,
+      "staged_path" => staged_path.to_s,
+    }
+    PybrewInstallContext::PATH_METHODS.each do |method_name|
+      next if paths.key?(method_name)
+      next unless respond_to?(method_name)
+
+      paths[method_name] = public_send(method_name).to_s
+    end
+    context = PybrewInstallContext.new(
+      "paths" => paths,
+      "formula" => { "name" => name, "version" => version.to_s },
+      "verbose" => false
+    )
+    context.instance_eval(source, "fetch", 1)
+  end
+
   def fetch?
     !!@info["fetch?"]
   end
@@ -5569,6 +5602,8 @@ def execute_install_body(
         only=_referenced_resource_names(body),
     )
     formulae = _formula_reference_map(formula, config, keg)
+    formulae[formula.name]["buildpath"] = str(build_root)
+    formulae[formula.name]["staged_path"] = str(keg)
     formulae[formula.name]["resources"] = resources
     payload = {
         "formula": {
