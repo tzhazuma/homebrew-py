@@ -978,9 +978,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `67db666` (MacOS::Xcode module)
-- CI run for `67db666`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41005827460>
+- Latest feature commit: `7d56919` (Formula stage and brew helpers)
+- CI run for `7d56919`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41006361118>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
