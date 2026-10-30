@@ -3472,3 +3472,33 @@ def test_formula_service_ref_names(
         "sh.brew.ruby-service-names",
         "sh.brew.ruby-service-names,homebrew.ruby-service-names",
     ]
+
+
+def test_formula_and_formulary_surface_methods(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-surface",
+        "1.0",
+        (
+            '  ref = Formula["ruby-surface"]\n'
+            '  (prefix/"surface.txt").write [\n'
+            '    ref.respond_to?(:depends_on).to_s,\n'
+            '    ref.respond_to?(:option).to_s,\n'
+            '    ref.respond_to?(:patch).to_s,\n'
+            '    ref.depends_on("foo").nil?.to_s,\n'
+            '    Formulary.load_formula_from_path("ruby-surface", "/x").name,\n'
+            '    Formulary.load_formula_from_struct!("ruby-surface").name\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "surface.txt").read_text().splitlines() == [
+        "true",
+        "true",
+        "true",
+        "true",
+        "ruby-surface",
+        "ruby-surface",
+    ]

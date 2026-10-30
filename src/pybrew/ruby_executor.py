@@ -4002,6 +4002,18 @@ class PybrewFormulaRef
     nil
   end
 
+  def depends_on(*_args)
+    nil
+  end
+
+  def option(*_args)
+    nil
+  end
+
+  def patch(*_args, &_block)
+    nil
+  end
+
   def with_logging(*_args, &block)
     block.call if block
   end
@@ -5160,6 +5172,14 @@ module Formulary
   end
 
   def load_formula(name, _path = nil, _contents = nil, _namespace = nil)
+    Formula[name]
+  end
+
+  def load_formula_from_path(name, *_args, **_kwargs)
+    Formula[name]
+  end
+
+  def load_formula_from_struct!(name, *_args, **_kwargs)
     Formula[name]
   end
 
