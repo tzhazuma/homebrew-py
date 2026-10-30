@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-627 passed, 4 skipped in 233.98s
+637 passed, 4 skipped in 198.32s
 ```
 
 Breakdown of the feature slices:
@@ -723,6 +723,15 @@ local remote, commits a change, and confirms the CLI updates it.
 - Added `socket_path`/`socket_text`/`write_socket` and wired socket services to
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
+
+## Third parallel batch
+
+- Cask evaluator captures `preflight`/`postflight`/`uninstall_*` block sources
+  best-effort, merges literal-parser bodies as authoritative and keeps default
+  installs inert. `tests/test_cask*.py`: 100 passed.
+- Formula test DSL can execute dependency `Formula["dep"].test` bodies loaded
+  from local taps, including nested dependencies; failure/skip semantics
+  propagate. `tests/test_formula_test.py` + CLI: 74 passed.
 
 ## Second parallel batch
 
