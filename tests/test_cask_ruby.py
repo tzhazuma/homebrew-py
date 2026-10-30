@@ -796,3 +796,23 @@ def test_cask_ruby_os_stanza(allow_ruby: None) -> None:
     )
     cask = evaluate_cask_source(source)
     assert cask.os["macos"] == ">= :sonoma"
+
+
+@requires_ruby
+def test_cask_metadata_helpers(allow_ruby: None) -> None:
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  sha256 "' + "a" * 64 + '"\n'
+            '  url "https://example.com/tiny.zip"\n'
+            '  name "Tiny"\n'
+            '  desc "tiny fixture"\n'
+            '  homepage "https://example.com/tiny"\n'
+            '  os macos: "13"\n'
+            '  depends_on formula: "foo"\n'
+            '  no_autobump! because: "test"\n'
+            '  on_macos { }\n'
+            '  caveats "autobump=#{autobump?} nobump=#{no_autobump_defined?} os=#{on_os_blocks_exist?} deps=#{depends_on_set_in_block?} sys=#{on_system_blocks_exist?}"\n'
+        )
+    )
+    assert cask.caveats == "autobump=false nobump=true os=true deps=true sys=true"

@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-569 passed, 4 skipped in 83.60s
+570 passed, 4 skipped in 101.61s
 ```
 
 Breakdown of the feature slices:
@@ -723,6 +723,13 @@ local remote, commits a change, and confirms the CLI updates it.
 - Added `socket_path`/`socket_text`/`write_socket` and wired socket services to
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
+
+## Cask DSL metadata helpers
+
+- Added the Ruby evaluator helpers `autobump?`, `no_autobump_defined?`,
+  `on_system_blocks_exist?`, `on_os_blocks_exist?`,
+  `depends_on_set_in_block?` and `caveats_object`; `on_macos`/`on_linux`
+  record that a system block was seen.
 
 ## Utils::Git / Curl
 

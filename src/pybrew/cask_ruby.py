@@ -585,6 +585,7 @@ class PybrewCaskDSL
       "disabled" => false,
       "os_map" => {},
       "no_autobump" => false,
+      "on_system_blocks" => false,
       "no_autobump_reason" => nil,
       "disable_reason" => nil,
       "warnings" => [],
@@ -754,10 +755,12 @@ class PybrewCaskDSL
   # -- platform blocks --------------------------------------------------
 
   def on_macos(&block)
+    @data["on_system_blocks"] = true
     evaluate_block(block) if host_platform == "darwin"
   end
 
   def on_linux(&block)
+    @data["on_system_blocks"] = true
     evaluate_block(block) if host_platform == "linux"
   end
 
@@ -923,6 +926,30 @@ class PybrewCaskDSL
     reason = kwargs["because"] || kwargs[:because]
     @data["no_autobump_reason"] = reason.to_s unless reason.nil?
     nil
+  end
+
+  def autobump?
+    !@data["no_autobump"]
+  end
+
+  def no_autobump_defined?
+    !!@data["no_autobump"]
+  end
+
+  def on_system_blocks_exist?
+    !!@data["on_system_blocks"]
+  end
+
+  def on_os_blocks_exist?
+    !(@data["os_map"] || {}).empty?
+  end
+
+  def depends_on_set_in_block?
+    !(@data["depends_on"] || {}).empty?
+  end
+
+  def caveats_object
+    @data["caveats"]
   end
 
   def livecheck(*_args, &_block)
