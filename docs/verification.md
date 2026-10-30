@@ -825,9 +825,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `0326638` (service run argument fix)
-- CI run for `0326638`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40976863199>
+- Latest feature commit: `560cee5` (Formula broad compatibility helpers)
+- CI run for `560cee5`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40978111690>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
