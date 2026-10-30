@@ -2819,3 +2819,53 @@ def test_formula_fetch_and_buildpath(
         "fetched",
         "true",
     ]
+
+
+def test_formula_misc_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-misc",
+        "1.0",
+        (
+            '  ref = Formula["ruby-misc"]\n'
+            '  inside = nil\n'
+            '  after = nil\n'
+            '  ref.mktemp("ruby-misc") do |dir|\n'
+            '    inside = dir.directory?.to_s\n'
+            '  end\n'
+            '  home = prefix/"home"\n'
+            '  ref.setup_home(home)\n'
+            '  ref.run_test\n'
+            '  ref.run_post_install\n'
+            '  (prefix/"misc.txt").write [\n'
+            '    inside, home.join(".bazelrc").file?.to_s,\n'
+            '    ref.post_install_steps.empty?.to_s,\n'
+            '    ref.validate_attributes!.to_s,\n'
+            '    ref.determine_active_spec(:stable).url.to_s,\n'
+            '    ref.update_head_version.nil?.to_s,\n'
+            '    ref.install_etc_var.nil?.to_s,\n'
+            '    ref.python_major_minor_version.to_s.match?(/\\d+\\.\\d+/).to_s,\n'
+            '    ref.lock.to_s, ref.unlock.nil?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.test_source = '(prefix/"test-ran.txt").write "test"'
+    formula.post_install_source = '(prefix/"post-ran.txt").write "post"'
+    formula.stable = SourceSpec(url="https://example.com/ruby-misc.tar.gz")
+    keg = _build(tmp_path, formula)
+    assert (keg / "test-ran.txt").read_text() == "test"
+    assert (keg / "post-ran.txt").read_text() == "post"
+    assert (keg / "misc.txt").read_text().splitlines() == [
+        "true",
+        "true",
+        "true",
+        "true",
+        "https://example.com/ruby-misc.tar.gz",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+    ]

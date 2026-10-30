@@ -246,6 +246,7 @@ require "rbconfig"
 require "shellwords"
 require "stringio"
 require "open3"
+require "tmpdir"
 
 $stdout.sync = true
 $stderr.sync = true
@@ -2939,6 +2940,85 @@ class PybrewFormulaRef
       "verbose" => false
     )
     context.instance_eval(source, "fetch", 1)
+  end
+
+  def caveats_with_placeholders
+    caveats
+  end
+
+  def mktemp(prefix = name, retain: false, retain_in_cache: false, &block)
+    directory = Pathname.new(Dir.mktmpdir("#{prefix}-"))
+    return directory if block.nil?
+
+    begin
+      block.call(directory)
+    ensure
+      FileUtils.remove_entry(directory) unless retain || retain_in_cache
+    end
+  end
+
+  def lock
+    true
+  end
+
+  def unlock
+    nil
+  end
+
+  def run_test(keep_tmp: false)
+    test
+  end
+
+  def run_post_install
+    post_install
+  end
+
+  def post_install_steps
+    []
+  end
+
+  def python_major_minor_version
+    output = `python3 --version 2>&1`.to_s
+    output[/Python (\d+\.\d+)/, 1] || "3.0"
+  end
+
+  def xcodebuild(*args)
+    PybrewSystem.run!(["xcodebuild", *args], {})
+  end
+
+  def exec_cmd(cmd, args, _out = nil, _log_filename = nil)
+    PybrewSystem.run!([cmd.to_s, *Array(args)], {})
+  end
+
+  def validate_attributes!
+    if name.to_s.empty? || name.to_s.match?(/\s/) || !Utils.safe_filename?(name)
+      raise "Invalid formula name: #{name.inspect}"
+    end
+    true
+  end
+
+  def determine_active_spec(requested)
+    send(requested) || stable || head
+  end
+
+  def update_head_version
+    nil
+  end
+
+  def setup_home(home)
+    home = Pathname.new(home.to_s)
+    home.mkpath
+    (home/".bazelrc").write "startup --output_user_root=#{home}/_bazel"
+  end
+
+  def ensure_installed!(**_options)
+    raise "#{full_name} is not installed" unless installed?
+
+    true
+  end
+
+  def install_etc_var
+    nil
   end
 
   def fetch?
