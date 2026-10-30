@@ -2373,7 +2373,9 @@ class PybrewFormulaRef
     rack = Pathname.new(File.join(self.class.cellar, name))
     return [] unless rack.directory?
 
-    rack.children.select { |child| child.directory? }.map { |child| Keg.new(child) }
+    rack.children.select { |child| child.directory? }
+        .map { |child| Keg.new(child) }
+        .sort_by { |keg| self.class.version_key(keg.basename.to_s) }
   end
 
   def installed_prefixes
