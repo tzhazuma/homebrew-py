@@ -997,9 +997,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `3c2e087` (Formula shell and source helpers)
-- CI run for `3c2e087`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41007246137>
+- Latest feature commit: `e3f5df6` (Keg record and class helpers)
+- CI run for `e3f5df6`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41007690407>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
