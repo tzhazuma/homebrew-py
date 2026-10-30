@@ -1082,9 +1082,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `a978550` (service ref plist and service names)
-- CI run for `a978550`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41022135145>
+- Latest feature commit: `74ff4c7` (cask livecheck_defined helper)
+- CI run for `74ff4c7`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41022855169>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
