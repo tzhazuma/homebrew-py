@@ -3294,3 +3294,26 @@ def test_superenv_module(
         "true",
         "false",
     ]
+
+
+def test_system_config_sections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-sysconfig-sections",
+        "1.0",
+        (
+            '  io = StringIO.new\n'
+            '  SystemConfig.homebrew_config(io)\n'
+            '  io2 = StringIO.new\n'
+            '  returned = SystemConfig.dump_tap_config(nil, io2)\n'
+            '  (prefix/"config-sections.txt").write [\n'
+            '    SystemConfig.config_sections.include?(:homebrew_config).to_s,\n'
+            '    io.string.include?("HOMEBREW_PREFIX:").to_s,\n'
+            '    returned.equal?(io2).to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "config-sections.txt").read_text().splitlines() == ["true"] * 3

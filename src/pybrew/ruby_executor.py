@@ -4825,13 +4825,44 @@ module SystemConfig
       version.nil? ? "N/A" : "#{version} => #{Utils.which("curl")}"
     end
 
-    def dump_verbose_config(out = $stdout)
+    def config_sections
+      [:homebrew_config, :homebrew_env_config, :hardware_config, :host_software_config]
+    end
+
+    def homebrew_config(out = $stdout)
+      out.puts "HOMEBREW_PREFIX: #{HOMEBREW_PREFIX}"
+      out.puts "HOMEBREW_CELLAR: #{HOMEBREW_CELLAR}"
+      out
+    end
+
+    def homebrew_env_config(out = $stdout)
       out.puts "Homebrew Ruby: #{describe_homebrew_ruby}"
+      out
+    end
+
+    def hardware_config(out = $stdout)
+      hardware_text = hardware
+      out.puts hardware_text unless hardware_text.nil?
+      out
+    end
+
+    def host_software_config(out = $stdout)
       out.puts "Clang: #{describe_clang}"
       out.puts "Git: #{describe_git}"
       out.puts "Curl: #{describe_curl}"
-      hardware_text = hardware
-      out.puts hardware_text unless hardware_text.nil?
+      out
+    end
+
+    def dump_tap_config(_tap = nil, out = $stdout)
+      out
+    end
+
+    def core_tap_config(out = $stdout)
+      out
+    end
+
+    def dump_verbose_config(out = $stdout)
+      config_sections.each { |section| public_send(section, out) }
       out
     end
     alias dump dump_verbose_config
