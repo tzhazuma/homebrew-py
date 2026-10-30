@@ -2355,7 +2355,96 @@ class PybrewServiceRef
   end
 end
 
+module PybrewStdArgs
+  def std_configure_args(prefix: self.prefix, libdir: "lib")
+    [
+      "--disable-debug",
+      "--disable-dependency-tracking",
+      "--prefix=#{prefix}",
+      "--libdir=#{prefix}/#{libdir}",
+    ]
+  end
+
+  def std_cmake_args(install_prefix: prefix, install_libdir: "lib", find_framework: "LAST")
+    [
+      "-DCMAKE_INSTALL_PREFIX=#{install_prefix}",
+      "-DCMAKE_INSTALL_LIBDIR=#{install_libdir}",
+      "-DCMAKE_BUILD_TYPE=Release",
+      "-DCMAKE_FIND_FRAMEWORK=#{find_framework}",
+      "-DCMAKE_VERBOSE_MAKEFILE=ON",
+      "-Wno-dev",
+    ]
+  end
+
+  def std_meson_args(prefix: self.prefix, libdir: "lib")
+    ["--prefix=#{prefix}", "--libdir=#{libdir}", "--buildtype=release", "--wrap-mode=nofallback"]
+  end
+
+  def std_cargo_args(root: prefix, path: ".", features: nil)
+    args = ["--jobs", ENV.make_jobs.to_s, "--locked", "--root=#{root}", "--path=#{path}"]
+    args << "--features=#{Array(features).join(",")}" if features
+    args
+  end
+
+  def std_cargo_fetch_args
+    ["--locked", "--target", "host-tuple"]
+  end
+
+  def std_go_args(output: bin/name, ldflags: nil, gcflags: nil, tags: nil)
+    args = ["-o=#{output}"]
+    args << "-ldflags=#{ldflags}" unless ldflags.nil?
+    args << "-gcflags=#{gcflags}" unless gcflags.nil?
+    args << "-tags=#{Array(tags).join(",")}" unless tags.nil?
+    args
+  end
+
+  def std_pip_args(prefix: self.prefix, build_isolation: false)
+    args = ["--verbose", "--no-deps", "--no-binary=:all:", "--ignore-installed", "--no-compile"]
+    args << "--prefix=#{prefix}" if prefix
+    args << "--no-build-isolation" unless build_isolation
+    args
+  end
+
+  def std_npm_args(prefix: libexec, ignore_scripts: true)
+    args = ["--prefix=#{prefix}"]
+    args << "--ignore-scripts" if ignore_scripts
+    args
+  end
+
+  def std_shards_args
+    ["--production", "--release", "--no-debug"]
+  end
+
+  def std_swift_args
+    ["--configuration", "release", "--jobs", ENV.make_jobs.to_s]
+  end
+
+  def std_cabal_v2_args(installdir: bin)
+    args = ["--jobs=#{ENV.make_jobs}", "--max-backjumps=100000"]
+    args += ["--install-method=copy", "--installdir=#{installdir}"] if installdir
+    args
+  end
+
+  def std_zig_args(prefix: self.prefix, release_mode: :fast, cpu: nil)
+    mode = release_mode.to_s.downcase
+    unless %w[safe fast small].include?(mode)
+      raise ArgumentError, "Invalid Zig release mode: #{release_mode}"
+    end
+
+    cpu ||= Hardware::CPU.arch.to_s
+    [
+      "--prefix", prefix.to_s,
+      "--release=#{mode}",
+      "-Doptimize=Release#{mode.capitalize}",
+      "--summary", "all",
+      "-Dcpu=#{cpu}",
+    ]
+  end
+end
+
 class PybrewFormulaRef
+  include PybrewStdArgs
+
   attr_reader :name
 
   def initialize(name)

@@ -3243,3 +3243,31 @@ def test_formulary_placeholder_and_cache_helpers(
         "false",
         "true",
     ]
+
+
+def test_formula_std_build_args(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-stdargs",
+        "1.0",
+        (
+            '  ref = Formula["ruby-stdargs"]\n'
+            '  (prefix/"stdargs.txt").write [\n'
+            '    ref.std_configure_args.include?("--prefix=#{prefix}").to_s,\n'
+            '    ref.std_cmake_args.include?("-DCMAKE_INSTALL_PREFIX=#{prefix}").to_s,\n'
+            '    ref.std_go_args.first,\n'
+            '    ref.std_zig_args.include?("-Dcpu=#{Hardware::CPU.arch}").to_s,\n'
+            '    ref.std_cargo_fetch_args.include?("--locked").to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "stdargs.txt").read_text().splitlines() == [
+        "true",
+        "true",
+        f"-o={keg}/bin/ruby-stdargs",
+        "true",
+        "true",
+    ]
