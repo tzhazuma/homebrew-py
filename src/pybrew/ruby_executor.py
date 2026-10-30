@@ -3980,6 +3980,10 @@ class Keg
     homebrew_prefix/"opt"/name
   end
 
+  def opt_record
+    optlink
+  end
+
   def installed?
     @path.directory?
   end
@@ -4064,6 +4068,25 @@ class Keg
       removed = true
     end
     removed
+  end
+
+  def link_dir(relative_dir, verbose: false, dry_run: false, overwrite: false, &_block)
+    directory = relative_dir.to_s
+    root = @path/directory
+    return false unless root.directory?
+
+    base = homebrew_prefix/directory
+    links = desired_links.select { |target, _source| target.to_s.start_with?("#{base}/") }
+    links.each do |target, source|
+      if target.exist? || target.symlink?
+        next if target.symlink? && same_file?(target, source)
+        return false unless overwrite
+
+        FileUtils.rm_f(target.to_s)
+      end
+      target.make_relative_symlink(source) unless dry_run
+    end
+    true
   end
 
   def desired_links

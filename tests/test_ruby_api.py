@@ -3097,3 +3097,37 @@ def test_formula_stage_and_brew(
         "fetched",
         "true",
     ]
+
+
+def test_keg_link_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-linkdir",
+        "1.0",
+        (
+            '  keg_path = Pathname.new(ENV["HOMEBREW_CELLAR"])/"ruby-linkdir/1.0"\n'
+            '  (keg_path/"bin").mkpath\n'
+            '  (keg_path/"bin"/"ruby-linkdir").write "#!/bin/sh\\n"\n'
+            '  (keg_path/"share/doc").mkpath\n'
+            '  (keg_path/"share/doc"/"readme").write "readme"\n'
+            '  keg = Keg.new(keg_path)\n'
+            '  prefix_path = Pathname.new(ENV["HOMEBREW_PREFIX"])\n'
+            '  linked = keg.link_dir("bin")\n'
+            '  (prefix/"linkdir.txt").write [\n'
+            '    linked.to_s,\n'
+            '    (prefix_path/"bin/ruby-linkdir").symlink?.to_s,\n'
+            '    (prefix_path/"share/doc/readme").exist?.to_s,\n'
+            '    (keg.opt_record == keg.optlink).to_s\n'
+            '  ].join("\\n")\n'
+            '  keg.unlink\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "linkdir.txt").read_text().splitlines() == [
+        "true",
+        "true",
+        "false",
+        "true",
+    ]
