@@ -2373,11 +2373,15 @@ class PybrewFormulaRef
     rack = Pathname.new(File.join(self.class.cellar, name))
     return [] unless rack.directory?
 
-    rack.children.select { |child| child.directory? }
+    rack.children.select { |child| child.directory? }.map { |child| Keg.new(child) }
   end
 
   def installed_prefixes
-    installed_kegs.sort_by { |path| path.basename.to_s }
+    installed_kegs.map { |keg| keg.prefix }.sort_by { |path| path.basename.to_s }
+  end
+
+  def tab
+    Tab.for_name(name)
   end
 
   def latest_head_version
@@ -2627,7 +2631,7 @@ class PybrewFormulaRef
     return nil if target.nil?
 
     match = installed_kegs.find { |keg| keg.basename.to_s == target.to_s }
-    return match unless match.nil?
+    return match.prefix unless match.nil?
 
     raw = @info["prefix"]
     return nil if raw.nil? || raw.to_s.empty?
@@ -3650,6 +3654,14 @@ class Keg
 
   def to_s
     @path.to_s
+  end
+
+  def to_path
+    @path.to_s
+  end
+
+  def basename
+    @path.basename
   end
 
   def inspect

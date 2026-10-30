@@ -2432,3 +2432,40 @@ def test_formula_caveats_renders(
     assert lines[3] == f"global={tmp_path / 'prefix'}"
     expected = "mac" if is_macos() else "linux"
     assert lines[4] == expected
+
+
+def test_formula_installed_kegs_are_keg_objects(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-kegs",
+        "1.0",
+        (
+            '  ref = Formula["ruby-kegs"]\n'
+            '  (prefix/"kegs.txt").write [\n'
+            '    ref.installed_kegs.map { |keg| keg.class.name }.join(","),\n'
+            '    ref.installed_kegs.map { |keg| keg.version }.join(","),\n'
+            '    ref.installed_prefix.to_s,\n'
+            '    ref.latest_installed_keg.version.to_s,\n'
+            '    ref.any_installed_keg.version.to_s,\n'
+            '    ref.installed_prefixes.map { |path| path.basename.to_s }.join(","),\n'
+            '    ref.tab.installed_on_request?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    config = _config(tmp_path)
+    for version in ("1.0", "2.0"):
+        (config.cellar / "ruby-kegs" / version).mkdir(parents=True)
+    (config.cellar / "ruby-kegs" / "2.0" / "INSTALL_RECEIPT.json").write_text(
+        json.dumps({"installed_on_request": False})
+    )
+    keg = _build(tmp_path, formula)
+    lines = (keg / "kegs.txt").read_text().splitlines()
+    assert lines[0] == "Keg,Keg"
+    assert lines[1] == "1.0,2.0"
+    assert lines[2] == str(config.cellar / "ruby-kegs" / "1.0")
+    assert lines[3] == "2.0"
+    assert lines[4] == "2.0"
+    assert lines[5] == "1.0,2.0"
+    assert lines[6] == "false"
