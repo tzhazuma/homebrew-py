@@ -716,18 +716,56 @@ class PybrewCaskDSL
 
   def caveats(*args, &block)
     if block
-      record_unsupported(
-        "caveats", [], true,
-        "cask `caveats` block is not captured by the opt-in Ruby evaluator; " \
-        "only literal caveats strings are preserved"
-      )
-      return nil
+      @caveats_output = +""
+      value = instance_eval(&block)
+      text = value.is_a?(String) ? value : ""
+      @data["caveats"] = @caveats_output + text
+      @caveats_output = nil
+      return @data["caveats"]
     end
     positional, = PybrewCaskJSON.split_args(args)
     unless positional.empty?
       @data["caveats"] = positional.map(&:to_s).join("\n")
     end
     @data["caveats"]
+  end
+
+  def puts(*messages)
+    if @caveats_output
+      if messages.empty?
+        @caveats_output << "\n"
+      else
+        messages.each { |message| @caveats_output << message.to_s << "\n" }
+      end
+      return nil
+    end
+    Kernel.puts(*messages)
+    nil
+  end
+
+  def print(*messages)
+    if @caveats_output
+      messages.each { |message| @caveats_output << message.to_s }
+      return nil
+    end
+    Kernel.print(*messages)
+    nil
+  end
+
+  def ohai(*messages)
+    if @caveats_output
+      messages.each { |message| @caveats_output << "==> " << message.to_s << "\n" }
+      return nil
+    end
+    nil
+  end
+
+  def opoo(*messages)
+    if @caveats_output
+      messages.each { |message| @caveats_output << "Warning: " << message.to_s << "\n" }
+      return nil
+    end
+    nil
   end
 
   # -- arch / os helpers ------------------------------------------------

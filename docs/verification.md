@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-576 passed, 4 skipped in 208.63s
+577 passed, 4 skipped in 119.90s
 ```
 
 Breakdown of the feature slices:
@@ -723,6 +723,12 @@ local remote, commits a change, and confirms the CLI updates it.
 - Added `socket_path`/`socket_text`/`write_socket` and wired socket services to
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
+
+## Cask caveats blocks
+
+- The opt-in cask Ruby evaluator now executes `caveats do ... end` and captures
+  `puts`/`print`/`ohai`/`opoo` plus a returned string; the cask script test no
+  longer expects caveats to be skipped.
 
 ## Formula/Formulary surface methods
 

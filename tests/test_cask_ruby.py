@@ -521,9 +521,6 @@ def test_scripts_are_not_executed_and_are_reported(
         '  uninstall_postflight do\n'
         '    raise "uninstall postflight must not run"\n'
         '  end\n'
-        '  caveats do\n'
-        '    raise "caveats must not run"\n'
-        '  end\n'
         '  app "Tiny.app"\n'
     )
 
@@ -539,7 +536,6 @@ def test_scripts_are_not_executed_and_are_reported(
         "postflight",
         "uninstall_preflight",
         "uninstall_postflight",
-        "caveats",
     ):
         assert any(stanza in warning for warning in warnings)
     assert [entry["stanza"] for entry in cask.extra["ruby_unsupported"]] == [
@@ -547,7 +543,6 @@ def test_scripts_are_not_executed_and_are_reported(
         "postflight",
         "uninstall_preflight",
         "uninstall_postflight",
-        "caveats",
     ]
 
 
@@ -880,3 +875,22 @@ def test_cask_livecheck_defined_helper(allow_ruby: None) -> None:
         )
     )
     assert cask.caveats == "livecheck=true"
+
+
+@requires_ruby
+def test_cask_caveats_block_capture(allow_ruby: None) -> None:
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  sha256 "' + "a" * 64 + '"\n'
+            '  url "https://example.com/tiny.zip"\n'
+            '  name "Tiny"\n'
+            '  desc "tiny fixture"\n'
+            '  homepage "https://example.com/tiny"\n'
+            '  caveats do\n'
+            '    puts "hello"\n'
+            '    puts "world"\n'
+            '  end\n'
+        )
+    )
+    assert cask.caveats == "hello\nworld\n"
