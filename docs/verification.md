@@ -894,9 +894,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `de88cc4` (Formula#livecheck object)
-- CI run for `de88cc4`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40994649495>
+- Latest feature commit: `b7a6839` (Formula metadata hash APIs)
+- CI run for `b7a6839`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40996080670>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
