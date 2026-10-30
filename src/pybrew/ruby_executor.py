@@ -1236,6 +1236,46 @@ module Utils
 end
 
 module Utils
+  module Path
+    def self.rmdir_if_possible(path)
+      path = Pathname.new(path.to_s)
+      path.rmdir if path.directory? && path.children.empty?
+      nil
+    rescue StandardError
+      nil
+    end
+
+    def self.resolved_path(path)
+      Pathname.new(path.to_s).realpath
+    rescue StandardError
+      Pathname.new(path.to_s)
+    end
+
+    def self.resolved_path_exists?(path)
+      resolved_path(path).exist?
+    end
+
+    def self.formula_installed_prefixes(formula_names)
+      Array(formula_names).flat_map do |name|
+        rack = Pathname.new(HOMEBREW_CELLAR)/name.to_s
+        next [] unless rack.directory?
+
+        rack.children.select { |child| child.directory? }
+      end.sort_by { |path| path.basename.to_s }
+    end
+
+    def self.formula_opt_bin_path(formula_name, *paths)
+      base = HOMEBREW_PREFIX/"opt"/formula_name.to_s/"bin"
+      paths.empty? ? base : base/File.join(*paths.map(&:to_s))
+    end
+
+    def self.formula_opt_bin_env(formula_name, *paths)
+      "#{formula_opt_bin_path(formula_name, *paths)}#{File::PATH_SEPARATOR}#{ENV.fetch("PATH", "")}"
+    end
+  end
+end
+
+module Utils
   module Git
     def self.git(*args)
       Utils.git(*args)

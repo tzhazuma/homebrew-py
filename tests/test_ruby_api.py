@@ -3357,3 +3357,36 @@ def test_sandbox_module(
         "ok",
         "ran",
     ]
+
+
+def test_utils_path_module(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-utilspath",
+        "1.0",
+        (
+            '  cellar = Pathname.new(ENV["HOMEBREW_CELLAR"])/"ruby-utilspath"\n'
+            '  (cellar/"1.0").mkpath\n'
+            '  (cellar/"2.0").mkpath\n'
+            '  empty = prefix/"empty"\n'
+            '  empty.mkpath\n'
+            '  Utils::Path.rmdir_if_possible(empty)\n'
+            '  (prefix/"utilspath.txt").write [\n'
+            '    Utils::Path.formula_installed_prefixes(["ruby-utilspath"]).map { |path| path.basename.to_s }.join(","),\n'
+            '    (Utils::Path.resolved_path(prefix) == prefix.realpath).to_s,\n'
+            '    Utils::Path.formula_opt_bin_path("foo", "svc").to_s,\n'
+            '    Utils::Path.formula_opt_bin_env("foo").include?("opt/foo/bin").to_s,\n'
+            '    empty.exist?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "utilspath.txt").read_text().splitlines() == [
+        "1.0,2.0",
+        "true",
+        str(tmp_path / "prefix" / "opt" / "foo" / "bin" / "svc"),
+        "true",
+        "false",
+    ]
