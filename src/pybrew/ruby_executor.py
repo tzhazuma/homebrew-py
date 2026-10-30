@@ -3846,6 +3846,26 @@ class Keg
 
   attr_reader :path
 
+  def self.for(path)
+    original = Pathname.new(path.to_s)
+    raise Errno::ENOENT, original.to_s unless original.exist?
+
+    current = original.realpath
+    cellar = Pathname.new(HOMEBREW_CELLAR).realpath
+    until current.root?
+      return new(current) if current.parent.parent == cellar
+
+      current = current.parent.realpath
+    end
+    raise "#{original} is not inside a keg"
+  rescue Errno::ENOENT
+    raise
+  rescue StandardError => error
+    raise error if error.is_a?(RuntimeError) && error.message.include?("not inside a keg")
+
+    raise "#{original} is not inside a keg"
+  end
+
   def self.from_rack(rack)
     rack = Pathname.new(rack.to_s)
     return nil unless rack.directory?
@@ -3855,6 +3875,16 @@ class Keg
 
     kegs.find(&:linked?) || kegs.find(&:optlinked?) ||
       kegs.max_by { |keg| PybrewFormulaRef.version_key(keg.basename.to_s) }
+  end
+
+  def self.all
+    cellar = Pathname.new(HOMEBREW_CELLAR)
+    return [] unless cellar.directory?
+
+    cellar.children.select { |rack| rack.directory? }
+          .flat_map { |rack| rack.children.select { |child| child.directory? } }
+          .map { |child| new(child) }
+          .sort_by { |keg| [keg.name, PybrewFormulaRef.version_key(keg.basename.to_s)] }
   end
 
   def initialize(path)
@@ -4004,6 +4034,59 @@ class Keg
 
   def tab
     Tab.for_keg(self)
+  end
+
+  def version_scheme
+    tab.version_scheme
+  end
+
+  def scheme_and_version
+    [version_scheme, version]
+  end
+
+  def to_formula
+    Formula[name]
+  end
+
+  def runtime_dependencies
+    tab.runtime_dependencies
+  end
+
+  def aliases
+    tab.aliases
+  end
+
+  def empty_installation?
+    @path.directory? && @path.children.empty?
+  end
+
+  def require_relocation?
+    false
+  end
+
+  def lock
+    yield if block_given?
+    nil
+  end
+
+  def elisp_installed?
+    elisp.directory? && Dir.glob("#{elisp}/*.el*").any?
+  end
+
+  def apps
+    @path.children.select { |child| child.directory? && child.extname == ".app" }
+  end
+
+  def plist_installed?
+    Dir.glob("#{@path}/*.plist").any?
+  end
+
+  def completion_installed?(_shell = nil)
+    completion.directory?
+  end
+
+  def functions_installed?(_shell = nil)
+    false
   end
 
   def bin
@@ -4237,6 +4320,14 @@ class Tab
 
   def runtime_dependencies
     Array(@data["runtime_dependencies"])
+  end
+
+  def version_scheme
+    (@data["version_scheme"] || 0).to_i
+  end
+
+  def aliases
+    Array(@data["aliases"])
   end
 
   def build_dependencies

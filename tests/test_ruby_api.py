@@ -2926,3 +2926,46 @@ def test_keg_links_files_and_unlinks(
     keg = _build(tmp_path, formula)
     assert (keg / "link.txt").read_text().splitlines() == ["true", "true"]
     assert (keg / "unlink.txt").read_text() == "false"
+
+
+def test_keg_introspection_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-kegapi",
+        "1.0",
+        (
+            '  keg_path = Pathname.new(ENV["HOMEBREW_CELLAR"])/"ruby-kegapi/1.0"\n'
+            '  (keg_path/"bin").mkpath\n'
+            '  (keg_path/"bin"/"ruby-kegapi").write "#!/bin/sh\\n"\n'
+            '  (keg_path/"INSTALL_RECEIPT.json").write JSON.generate({\n'
+            '    "version_scheme" => 2, "aliases" => ["ruby-kegapi-alias"]\n'
+            '  })\n'
+            '  keg = Keg.new(keg_path)\n'
+            '  found = Keg.for(keg_path/"bin"/"ruby-kegapi")\n'
+            '  (prefix/"kegapi.txt").write [\n'
+            '    Keg.all.map(&:name).include?("ruby-kegapi").to_s,\n'
+            '    found.name,\n'
+            '    keg.version_scheme.to_s,\n'
+            '    keg.scheme_and_version[0].to_s,\n'
+            '    keg.to_formula.name,\n'
+            '    keg.aliases.join(","),\n'
+            '    keg.runtime_dependencies.empty?.to_s,\n'
+            '    keg.empty_installation?.to_s,\n'
+            '    keg.require_relocation?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "kegapi.txt").read_text().splitlines() == [
+        "true",
+        "ruby-kegapi",
+        "2",
+        "2",
+        "ruby-kegapi",
+        "ruby-kegapi-alias",
+        "true",
+        "false",
+        "false",
+    ]
