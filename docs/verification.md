@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-570 passed, 4 skipped in 101.61s
+571 passed, 4 skipped in 98.21s
 ```
 
 Breakdown of the feature slices:
@@ -723,6 +723,11 @@ local remote, commits a change, and confirms the CLI updates it.
 - Added `socket_path`/`socket_text`/`write_socket` and wired socket services to
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
+
+## Cask path/os helpers
+
+- Added `caskroom_path`, `staged_path`, `os_version` and a minimal
+  `MacOS.version` to the opt-in cask Ruby evaluator.
 
 ## Cask DSL metadata helpers
 

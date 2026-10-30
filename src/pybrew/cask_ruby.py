@@ -532,6 +532,12 @@ module PybrewCaskRuntime
   end
 end
 
+module MacOS
+  def self.version
+    PybrewCaskVersion.new((PYBREW_CASK_CONFIG["macos_version"] || "0").to_s)
+  end
+end
+
 class PybrewCaskDSL
   MACOS_RELEASES = {
     "big_sur" => 11,
@@ -613,6 +619,19 @@ class PybrewCaskDSL
 
   def token
     @token
+  end
+
+  def caskroom_path
+    Pathname.new(ENV.fetch("HOMEBREW_PREFIX", "/usr/local"))/"Caskroom"/token.to_s
+  end
+
+  def staged_path
+    value = version
+    caskroom_path/(value.nil? ? "0" : value.to_s)
+  end
+
+  def os_version
+    MacOS.version
   end
 
   def appdir

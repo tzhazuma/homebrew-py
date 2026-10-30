@@ -816,3 +816,26 @@ def test_cask_metadata_helpers(allow_ruby: None) -> None:
         )
     )
     assert cask.caveats == "autobump=false nobump=true os=true deps=true sys=true"
+
+
+@requires_ruby
+def test_cask_path_and_os_helpers(
+    allow_ruby: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    prefix = tmp_path / "prefix"
+    monkeypatch.setenv("HOMEBREW_PREFIX", str(prefix))
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  sha256 "' + "a" * 64 + '"\n'
+            '  url "https://example.com/tiny.zip"\n'
+            '  name "Tiny"\n'
+            '  desc "tiny fixture"\n'
+            '  homepage "https://example.com/tiny"\n'
+            '  caveats "caskroom=#{caskroom_path} staged=#{staged_path} os=#{os_version} token=#{token}"\n'
+        )
+    )
+    assert cask.caveats.startswith(
+        f"caskroom={prefix}/Caskroom/tiny staged={prefix}/Caskroom/tiny/1.0 os="
+    )
+    assert cask.caveats.endswith(" token=tiny")
