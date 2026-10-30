@@ -3131,3 +3131,42 @@ def test_keg_link_dir(
         "false",
         "true",
     ]
+
+
+def test_formula_shell_and_source_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-shell",
+        "1.0",
+        (
+            '  ref = Formula["ruby-shell"]\n'
+            '  (prefix/"file").write "old"\n'
+            '  ref.inreplace(prefix/"file", "old", "new")\n'
+            '  ref.mkdir(prefix/"made")\n'
+            '  ref.system("true")\n'
+            '  (prefix/"shell.txt").write [\n'
+            '    ref.url,\n'
+            '    ref.sha256,\n'
+            '    ref.mirror.first,\n'
+            '    (prefix/"file").read,\n'
+            '    (prefix/"made").directory?.to_s,\n'
+            '    ref.install.nil?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.stable = SourceSpec(
+        url="https://example.com/ruby-shell.tar.gz",
+        sha256="c" * 64,
+        mirrors=["https://mirror.example.com/ruby-shell.tar.gz"],
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "shell.txt").read_text().splitlines() == [
+        "https://example.com/ruby-shell.tar.gz",
+        "c" * 64,
+        "https://mirror.example.com/ruby-shell.tar.gz",
+        "new",
+        "true",
+        "true",
+    ]

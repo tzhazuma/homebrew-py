@@ -3667,6 +3667,62 @@ class PybrewFormulaRef
     false
   end
 
+  def url
+    stable.url
+  end
+
+  def sha256
+    stable.sha256
+  end
+
+  def mirror
+    stable.mirrors
+  end
+
+  def system(cmd, *args)
+    PybrewSystem.run!([cmd.to_s, *args], {})
+  end
+
+  def mkdir(name)
+    path = Pathname.new(name.to_s)
+    FileUtils.mkdir_p(path.to_s)
+    if block_given?
+      Dir.chdir(path.to_s) { yield(path) }
+    end
+    nil
+  end
+
+  def inreplace(paths, before = nil, after = nil, audit_result: true, global: true, &block)
+    Array(paths).flatten.each do |pattern|
+      matches = Dir.glob(pattern.to_s)
+      matches = [pattern.to_s] if matches.empty?
+      matches.each do |file|
+        path = Pathname.new(file)
+        raise "inreplace: file not found: #{file}" unless path.file?
+
+        helper = PybrewInreplace.new(path.read)
+        if before.nil? && after.nil?
+          raise ArgumentError, "inreplace: must supply a block or before/after params" if block.nil?
+
+          block.call(helper)
+        elsif global
+          helper.gsub!(before, after, audit_result: audit_result)
+        else
+          helper.sub!(before, after, audit_result: audit_result)
+        end
+        unless helper.errors.empty?
+          raise "inreplace failed for #{file}: #{helper.errors.join('; ')}"
+        end
+        path.write(helper.inreplace_string)
+      end
+    end
+    nil
+  end
+
+  def install
+    nil
+  end
+
   def with_logging(*_args, &block)
     block.call if block
   end
