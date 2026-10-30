@@ -3005,6 +3005,33 @@ class PybrewFormulaRef
     post_install
   end
 
+  def run_post_install_steps
+    post_install
+  end
+
+  def print_tap_action(*_args)
+    nil
+  end
+
+  def stage(interactive: false, debug_symbols: false, staging_path: nil, staged: false, &block)
+    path = staging_path.nil? ? buildpath : Pathname.new(staging_path.to_s)
+    return path if block.nil?
+
+    block.call(path)
+  end
+
+  def brew(fetch: true, keep_tmp: false, debug_symbols: false, interactive: false,
+           staging_path: nil, staged: false, &block)
+    self.fetch if fetch
+    stage(
+      interactive: interactive,
+      debug_symbols: debug_symbols,
+      staging_path: staging_path,
+      staged: staged,
+      &block
+    )
+  end
+
   def post_install_steps
     []
   end

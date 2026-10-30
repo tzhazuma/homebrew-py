@@ -3067,3 +3067,33 @@ def test_macos_xcode_module(
     lines = (keg / "xcode.txt").read_text().splitlines()
     assert lines[0] in {"true", "false"}
     assert lines[1:] == ["true", "true", "true"]
+
+
+def test_formula_stage_and_brew(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-brew",
+        "1.0",
+        (
+            '  ref = Formula["ruby-brew"]\n'
+            '  direct = ref.stage\n'
+            '  yielded = nil\n'
+            '  ref.brew { |path| yielded = path }\n'
+            '  (prefix/"brew.txt").write [\n'
+            '    direct.basename.to_s,\n'
+            '    yielded.basename.to_s,\n'
+            '    (yielded/"fetch.txt").read,\n'
+            '    ref.run_post_install_steps.nil?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.fetch_source = '(buildpath/"fetch.txt").write "fetched"'
+    keg = _build(tmp_path, formula)
+    assert (keg / "brew.txt").read_text().splitlines() == [
+        "build",
+        "build",
+        "fetched",
+        "true",
+    ]
