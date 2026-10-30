@@ -875,9 +875,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `f1b812b` (Keg objects from `installed_kegs`)
-- CI run for `f1b812b`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40992881095>
+- Latest feature commit: `72429d2` (SystemConfig)
+- CI run for `72429d2`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40993495160>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
