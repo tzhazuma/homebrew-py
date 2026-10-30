@@ -209,6 +209,7 @@ def test_fake_ruby_json_is_converted_to_service_spec(
         "run_at_load": False,
         "interval": 300,
         "process_type": "background",
+        "run_type": "cron",
         "environment_variables": {"PATH": "/opt/svc/bin", "FOO": "bar", "NUM": 7},
         "require_root": True,
         "throttle_interval": 20,
@@ -230,6 +231,7 @@ def test_fake_ruby_json_is_converted_to_service_spec(
     assert spec.run_at_load is False
     assert spec.interval == 300
     assert spec.process_type == "background"
+    assert spec.run_type == "cron"
     assert spec.environment_variables == {
         "PATH": "/opt/svc/bin",
         "FOO": "bar",
@@ -369,6 +371,7 @@ def test_basic_fields_and_directives(
             error_log_path var/"log/svc.err.log"
             keep_alive network_state: true, successful_exit: false, interval: 45
             process_type :background
+            run_type :cron
             interval 300
             environment_variables PATH: std_service_path_env, FOO: "bar", NUM: 7
             require_root true
@@ -394,6 +397,7 @@ def test_basic_fields_and_directives(
         "interval": 45,
     }
     assert spec.process_type == "background"
+    assert spec.run_type == "cron"
     assert spec.interval == 300
     assert spec.run_at_load is False
     assert spec.require_root is True

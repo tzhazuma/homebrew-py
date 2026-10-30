@@ -269,6 +269,7 @@ log_path var/"log/svc.log"
 error_log_path var/"log/svc.err.log"
 keep_alive network_state: true, successful_exit: false, path: var/"run/svc.pid", interval: 45
 process_type :background
+run_type :interval
 interval 300
 environment_variables PATH: std_service_path_env, FOO: "bar", NUM: 7
 require_root true
@@ -292,6 +293,7 @@ def test_parse_extended_service_dsl(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         "interval": 45,
     }
     assert spec.process_type == "background"
+    assert spec.run_type == "interval"
     assert spec.interval == 300
     assert spec.run_at_load is False
     assert spec.require_root is True
@@ -649,3 +651,16 @@ def test_systemd_socket_unit(
     path = manager.write_socket(formula, spec)
     assert path == manager.socket_path(formula)
     assert path.is_file()
+
+
+def test_service_run_type_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    spec = parse_service_block(
+        _formula_with_service('run_type :cron\ncron "0 0 * * *"'), config
+    )
+    assert spec.run_type == "cron"
+
+    with pytest.raises(ServiceError, match="run_type"):
+        parse_service_block(_formula_with_service("run_type :bogus"), config)

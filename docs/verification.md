@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-562 passed, 5 skipped in 126.45s
+563 passed, 5 skipped in 100.59s
 ```
 
 Breakdown of the feature slices:
@@ -723,6 +723,12 @@ local remote, commits a change, and confirms the CLI updates it.
 - Added `socket_path`/`socket_text`/`write_socket` and wired socket services to
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
+
+## Service run_type
+
+- Added the `run_type` service directive (`immediate`/`interval`/`cron`) to
+  the literal parser, opt-in Ruby evaluator, `ServiceSpec`, `PybrewServiceRef`
+  and payload; invalid values raise `ServiceError`.
 
 ## Formula std build args
 

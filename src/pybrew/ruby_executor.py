@@ -2302,6 +2302,10 @@ class PybrewServiceRef
     @info["process_type"]
   end
 
+  def run_type
+    @info["run_type"] || "immediate"
+  end
+
   def environment_variables
     @info["environment_variables"] || {}
   end
@@ -5833,6 +5837,7 @@ def _service_metadata(formula: Formula, config: Config) -> Optional[dict[str, An
         "keep_alive": spec.keep_alive,
         "interval": spec.interval,
         "process_type": spec.process_type,
+        "run_type": spec.run_type,
         "environment_variables": dict(spec.environment_variables),
         "require_root": spec.require_root,
         "launch_only_once": spec.launch_only_once,

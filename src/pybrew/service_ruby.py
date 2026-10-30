@@ -86,6 +86,7 @@ _SERVICE_FIELDS = (
     "run_at_load",
     "interval",
     "process_type",
+    "run_type",
     "environment_variables",
     "require_root",
     "throttle_interval",
@@ -481,6 +482,7 @@ end
 class PybrewServiceDSL
   # Directives whose value is a single scalar/path argument.
   SCALAR_FIELDS = %w[
+    run_type
     working_dir log_path error_log_path interval process_type run_at_load
     require_root throttle_interval launch_only_once macos_legacy_timers nice
     restart_delay stop_timeout root_dir input_path cron
@@ -499,6 +501,7 @@ class PybrewServiceDSL
       "run_at_load" => true,
       "interval" => nil,
       "process_type" => nil,
+      "run_type" => "immediate",
       "environment_variables" => {},
       "require_root" => false,
       "throttle_interval" => nil,

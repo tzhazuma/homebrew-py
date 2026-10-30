@@ -44,6 +44,7 @@ KEEP_ALIVE_KEYS = (
 
 #: Values accepted by ``process_type`` (the launchd spelling is capitalised).
 PROCESS_TYPES = ("background", "standard", "interactive", "adaptive")
+RUN_TYPES = ("immediate", "interval", "cron")
 
 #: Socket protocols understood by launchd's ``Sockets`` dictionary.
 SOCKET_TYPES = ("tcp", "udp")
@@ -59,6 +60,7 @@ class ServiceSpec:
     run_at_load: bool = True
     interval: Optional[int] = None
     process_type: Optional[str] = None
+    run_type: str = "immediate"
     environment_variables: dict[str, str] = field(default_factory=dict)
     require_root: bool = False
     throttle_interval: Optional[int] = None
@@ -455,6 +457,13 @@ def _apply_service_directive(spec: ServiceSpec, name: str, args: list[Any]) -> N
         spec.run_at_load = _service_bool(args[0], "run_at_load")
     elif name == "interval" and args:
         spec.interval = _service_int(args[0], "interval", minimum=0)
+    elif name == "run_type" and args:
+        run_type = str(args[0]).lstrip(":").strip().lower()
+        if run_type not in RUN_TYPES:
+            raise ServiceError(
+                f"run_type must be one of {', '.join(RUN_TYPES)}, got {args[0]!r}"
+            )
+        spec.run_type = run_type
     elif name == "process_type" and args:
         process_type = str(args[0]).lstrip(":").strip().lower()
         if process_type not in PROCESS_TYPES:
