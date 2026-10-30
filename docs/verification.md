@@ -1064,9 +1064,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `bc55241` (cask path and os helpers)
-- CI run for `bc55241`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41020162262>
+- Latest feature commit: `9f24c4d` (cask language helpers)
+- CI run for `9f24c4d`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41020777311>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
