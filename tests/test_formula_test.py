@@ -21,7 +21,7 @@ from pybrew.formula_test import (
     run_formula_test,
     run_test,
 )
-from pybrew.models import Formula
+from pybrew.models import Dependency, Formula
 from pybrew.paths import Config
 
 _REAL_RUBY = "/usr/bin/ruby"
@@ -528,3 +528,310 @@ end''',
     )
     result = run_formula_test(formula, config, ruby=_REAL_RUBY)
     assert result.success is True
+
+
+# ---------------------------------------------------------------------------
+# dependency / Formula lookup in the test context (real Ruby)
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_formula_lookup_resolves_declared_dependencies(tmp_path: Path) -> None:
+    source = """do
+  dep = Formula["dep-lib"]
+  assert_equal "dep-lib", dep.name
+  assert_equal "dep-lib", dep.full_name
+  assert_equal "2.0", dep.version
+  assert_equal (cellar/"dep-lib"/"2.0").to_s, dep.prefix.to_s
+  assert_equal (homebrew_prefix/"opt"/"dep-lib").to_s, dep.opt_prefix.to_s
+  assert_equal (dep.prefix/"bin").to_s, dep.bin.to_s
+  assert_equal (dep.prefix/"lib").to_s, dep.lib.to_s
+  assert dep.installed?
+  assert dep.any_version_installed?
+  assert dep.latest_version_installed?
+  assert_equal ["dep-lib"], Formula["hello-test"].deps.map(&:name)
+  assert_equal "dep-lib", Formula.factory("dep-lib").name
+  assert_equal Formula["dep-lib"], dep
+  assert Formula["hello-test"].test_defined?
+  refute Formula["dep-lib"].test_defined?
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    formula.dependencies = [Dependency(name="dep-lib")]
+    dependency_keg = config.keg_path("dep-lib", "2.0")
+    (dependency_keg / "bin").mkdir(parents=True)
+    (dependency_keg / "lib").mkdir()
+
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_formula_lookup_for_uninstalled_dependency_is_explicit(tmp_path: Path) -> None:
+    source = """do
+  dep = Formula["dep-missing"]
+  refute dep.installed?
+  assert_equal (homebrew_prefix/"opt"/"dep-missing").to_s, dep.opt_prefix.to_s
+  error = begin
+    dep.prefix
+  rescue StandardError => error
+    error
+  end
+  assert_match(/not installed/, error.message)
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    formula.dependencies = [Dependency(name="dep-missing")]
+
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_formula_test_entry_rejects_reentrant_call(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  Formula["hello-test"].test\nend'
+    )
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert "cannot be called from inside its own test block" in excinfo.value.stderr
+
+
+@requires_ruby
+def test_formula_test_entry_does_not_load_dependency_tests(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  Formula["dep-lib"].test\nend'
+    )
+    formula.dependencies = [Dependency(name="dep-lib")]
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert "does not load dependency test blocks" in excinfo.value.stderr
+
+
+@requires_ruby
+def test_extra_formula_paths_are_available(tmp_path: Path) -> None:
+    source = """do
+  assert_equal (homebrew_prefix/"etc"/"hello-test").to_s, pkgetc.to_s
+  assert_equal (prefix/"share"/"man"/"man1").to_s, man1.to_s
+  assert_equal (prefix/"share"/"doc"/"hello-test").to_s, doc.to_s
+  assert_equal (prefix/"share"/"info").to_s, info.to_s
+  assert_equal (opt_prefix/"lib").to_s, opt_lib.to_s
+  ref = Formula["hello-test"]
+  assert_equal pkgetc.to_s, ref.pkgetc.to_s
+  assert_equal doc.to_s, ref.doc.to_s
+  assert_equal man1.to_s, ref.man1.to_s
+  assert_equal opt_lib.to_s, ref.opt_lib.to_s
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+# ---------------------------------------------------------------------------
+# path/type assertions (real Ruby)
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_extended_path_type_assertions_pass(tmp_path: Path) -> None:
+    source = """do
+  (testpath/"data.txt").write "data"
+  (testpath/"empty.txt").write ""
+  (testpath/"sub").mkpath
+  (testpath/"link").make_symlink("data.txt")
+  (testpath/"tool").write "#!/bin/sh\\nexit 0\\n"
+  File.chmod(0755, (testpath/"tool").to_s)
+  assert_file testpath/"data.txt"
+  refute_file testpath/"sub"
+  assert_directory testpath/"sub"
+  refute_directory testpath/"data.txt"
+  assert_symlink testpath/"link"
+  refute_symlink testpath/"data.txt"
+  assert_executable testpath/"tool"
+  refute_executable testpath/"data.txt"
+  assert_path_exists testpath/"empty.txt"
+  assert_empty File.read(testpath/"empty.txt")
+  refute_empty File.read(testpath/"data.txt")
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_refute_file_failure_names_the_path(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path,
+        'do\n  (testpath/"plain").write "x"\n  refute_file testpath/"plain"\nend',
+    )
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert "plain" in excinfo.value.stderr
+    assert "to not be a file" in excinfo.value.stderr
+
+
+@requires_ruby
+def test_assert_executable_failure_names_the_path(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path,
+        'do\n  (testpath/"plain").write "x"\n  assert_executable testpath/"plain"\nend',
+    )
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert "plain" in excinfo.value.stderr
+    assert "to be executable" in excinfo.value.stderr
+
+
+# ---------------------------------------------------------------------------
+# shell_output / pipe_output edge behaviour (real Ruby)
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_pipe_output_expected_status_and_ignored_status(tmp_path: Path) -> None:
+    source = """do
+  assert_equal "ok", pipe_output("cat", "ok", 0)
+  assert_equal "out", pipe_output("printf out; exit 3", nil, 3)
+  assert_equal "out", pipe_output("printf out; exit 3", nil)
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_pipe_output_expected_status_failure_is_reported(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  pipe_output("printf boom >&2; exit 5", nil, 0)\nend'
+    )
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert "pipe_output failed with exit status 5" in excinfo.value.stderr
+    assert "boom" in excinfo.value.stderr
+
+
+@requires_ruby
+def test_shell_helpers_accept_pathname_commands(tmp_path: Path) -> None:
+    source = """do
+  tool = testpath/"tool"
+  tool.write "#!/bin/sh\\nprintf pathname-ok\\n"
+  File.chmod(0755, tool.to_s)
+  assert_equal "pathname-ok", shell_output(tool)
+  assert_equal "pathname-ok", pipe_output(tool, nil, 0)
+  missing = testpath/"missing-tool"
+  error = begin
+    shell_output(missing)
+  rescue StandardError => error
+    error
+  end
+  assert_match(/does not exist/, error.message)
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+# ---------------------------------------------------------------------------
+# Minitest block forms and extra assertions (real Ruby)
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_assert_output_block_forms_and_capture_io(tmp_path: Path) -> None:
+    source = """do
+  assert_output(/hel+o/) { puts "hello" }
+  assert_output("out\\n", "err\\n") { puts "out"; $stderr.puts "err" }
+  assert_output(nil, /warn/) { $stderr.puts "warning" }
+  assert_output("") { }
+  assert_output(nil) { puts "ignored" }
+  refute_output("other") { puts "actual" }
+  out, err = capture_io do
+    puts "captured"
+    $stderr.puts "captured-err"
+  end
+  assert_equal "captured\\n", out
+  assert_equal "captured-err\\n", err
+  sub_out, sub_err = capture_subprocess_io do
+    system("printf child-out")
+    system("printf child-err >&2")
+  end
+  assert_equal "child-out", sub_out
+  assert_equal "child-err", sub_err
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_assert_output_block_failure_reports_stdout(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  assert_output("expected") { puts "actual" }\nend'
+    )
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    stderr = excinfo.value.stderr
+    assert "Expected stdout" in stderr
+    assert "expected" in stderr
+    assert "actual" in stderr
+
+
+@requires_ruby
+def test_minitest_block_and_numeric_assertions(tmp_path: Path) -> None:
+    source = '''do
+  assert_in_delta 1.0, 1.05, 0.1
+  refute_in_delta 1.0, 1.5, 0.1
+  assert_in_epsilon 100.0, 100.05
+  refute_in_epsilon 100.0, 120.0
+  value = "same"
+  other = "same"
+  assert_same value, value
+  refute_same value, other
+  refute_instance_of Integer, "text"
+  refute_kind_of Integer, "text"
+  refute_respond_to "text", :not_a_method
+  assert_throws(:done) { throw :done }
+  assert pass
+  error = assert_raises { raise "default error" }
+  assert_equal RuntimeError, error.class
+  error2 = assert_raises(RuntimeError, "custom context") { raise "boom" }
+  assert_equal "boom", error2.message
+end'''
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_flunk_failure_is_reported(tmp_path: Path) -> None:
+    formula, config = _installed_formula(tmp_path, 'do\n  flunk "nope"\nend')
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert "nope" in excinfo.value.stderr
+
+
+@requires_ruby
+def test_assert_raises_reports_unexpected_exception(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path,
+        'do\n  assert_raises(ArgumentError) { raise RuntimeError, "wrong" }\nend',
+    )
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    stderr = excinfo.value.stderr
+    assert "Expected [ArgumentError] to be raised" in stderr
+    assert "RuntimeError" in stderr
+    assert "wrong" in stderr
