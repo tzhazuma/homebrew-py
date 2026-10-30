@@ -261,6 +261,9 @@ HOMEBREW_CELLAR = Pathname.new(
   PYBREW_CONFIG["cellar"] || ENV["HOMEBREW_CELLAR"] || (HOMEBREW_PREFIX/"Cellar").to_s
 )
 HOMEBREW_PINNED_KEGS = HOMEBREW_PREFIX/"var/homebrew/pinned"
+HOMEBREW_PREFIX_PLACEHOLDER = "$HOMEBREW_PREFIX"
+HOMEBREW_CELLAR_PLACEHOLDER = "$HOMEBREW_CELLAR"
+HOMEBREW_HOME_PLACEHOLDER = "$HOMEBREW_HOME"
 
 module OS
   def self.mac?
@@ -4855,6 +4858,37 @@ module Formulary
     factory(Pathname.new(rack.to_s).basename.to_s).keg_only?
   rescue StandardError
     false
+  end
+
+  def formula_class_defined_from_path?(_path)
+    false
+  end
+
+  def formula_class_defined_from_api?(_name)
+    false
+  end
+
+  def formula_class_get_from_path(_path)
+    raise "formula classes are not loaded by the pybrew Ruby shim"
+  end
+
+  def formula_class_get_from_api(_name)
+    raise "formula classes are not loaded by the pybrew Ruby shim"
+  end
+
+  def namespace_key(identifier)
+    Digest::SHA2.hexdigest("#{OS.mac? ? "macos" : "linux"}:#{identifier}")
+  end
+
+  def replace_placeholders(string)
+    string.to_s
+          .gsub(HOMEBREW_PREFIX_PLACEHOLDER, HOMEBREW_PREFIX.to_s)
+          .gsub(HOMEBREW_CELLAR_PLACEHOLDER, HOMEBREW_CELLAR.to_s)
+          .gsub(HOMEBREW_HOME_PLACEHOLDER, Dir.home)
+  end
+
+  def ensure_utf8_encoding(io)
+    io
   end
 
   def clear_cache

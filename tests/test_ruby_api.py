@@ -3215,3 +3215,31 @@ def test_keg_record_and_class_helpers(
         "true",
         "false",
     ]
+
+
+def test_formulary_placeholder_and_cache_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-formulary2",
+        "1.0",
+        (
+            '  io = StringIO.new("x")\n'
+            '  (prefix/"formulary2.txt").write [\n'
+            '    Formulary.replace_placeholders("$HOMEBREW_PREFIX/bin"),\n'
+            '    Formulary.namespace_key("x").length.to_s,\n'
+            '    Formulary.formula_class_defined_from_path?("/x").to_s,\n'
+            '    Formulary.formula_class_defined_from_api?("x").to_s,\n'
+            '    Formulary.ensure_utf8_encoding(io).equal?(io).to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "formulary2.txt").read_text().splitlines() == [
+        f"{tmp_path / 'prefix'}/bin",
+        "64",
+        "false",
+        "false",
+        "true",
+    ]
