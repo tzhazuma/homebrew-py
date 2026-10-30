@@ -3842,6 +3842,8 @@ class PybrewLivecheck
 end
 
 class Keg
+  LINK_DIRS = %w[bin etc include lib sbin share var].freeze
+
   attr_reader :path
 
   def self.from_rack(rack)
@@ -3899,6 +3901,18 @@ class Keg
   def link
     raise "Keg does not exist: #{@path}" unless installed?
 
+    desired = desired_links
+    conflicts = desired.select do |target, source|
+      next false unless target.exist? || target.symlink?
+      next false if target.symlink? && same_file?(target, source)
+
+      true
+    end
+    unless conflicts.empty?
+      listing = conflicts.first(10).map { |target, _source| "  #{target}" }.join("\n")
+      raise "cannot link #{name}: #{conflicts.length} conflict(s):\n#{listing}"
+    end
+
     FileUtils.mkdir_p(optlink.dirname.to_s)
     if File.symlink?(optlink.to_s) && !File.identical?(optlink.to_s, @path.to_s)
       FileUtils.rm_f(optlink.to_s)
@@ -3906,17 +3920,82 @@ class Keg
     if optlink.exist? && !File.identical?(optlink.to_s, @path.to_s)
       return false
     end
-
     FileUtils.ln_s(@path.to_s, optlink.to_s) unless optlink.exist?
+
+    desired.each do |target, source|
+      next if target.exist? || target.symlink?
+
+      target.make_relative_symlink(source)
+    end
     true
   end
 
   def unlink
-    return false unless File.symlink?(optlink.to_s)
-    return false unless File.identical?(optlink.to_s, @path.to_s)
+    removed = false
+    LINK_DIRS.each do |directory|
+      root = homebrew_prefix/directory
+      next unless root.directory?
 
-    FileUtils.rm_f(optlink.to_s)
-    true
+      entries = Dir.glob("#{root}/**/*", File::FNM_DOTMATCH)
+      entries.sort_by { |entry| -entry.length }.each do |entry|
+        target = Pathname.new(entry)
+        next unless target.symlink?
+        next unless same_file?(target, @path) || link_targets_keg?(target)
+
+        target.unlink
+        removed = true
+        prune_empty_parents(target.dirname, root)
+      end
+    end
+
+    if File.symlink?(optlink.to_s) && File.identical?(optlink.to_s, @path.to_s)
+      FileUtils.rm_f(optlink.to_s)
+      removed = true
+    end
+    removed
+  end
+
+  def desired_links
+    result = []
+    LINK_DIRS.each do |directory|
+      root = @path/directory
+      next unless root.directory?
+
+      Dir.glob("#{root}/**/*", File::FNM_DOTMATCH).each do |entry|
+        source = Pathname.new(entry)
+        next unless source.file? || source.symlink?
+
+        relative = source.relative_path_from(root)
+        next if relative.to_s.empty?
+
+        result << [homebrew_prefix/directory/relative, source]
+      end
+    end
+    result
+  end
+
+  def same_file?(left, right)
+    File.identical?(left.to_s, right.to_s)
+  rescue StandardError
+    false
+  end
+
+  def link_targets_keg?(target)
+    resolved = target.realpath.to_s
+    keg_root = @path.realpath.to_s
+    resolved == keg_root || resolved.start_with?("#{keg_root}/")
+  rescue StandardError
+    false
+  end
+
+  def prune_empty_parents(directory, root)
+    current = directory
+    while current != root && current.directory? && current.children.empty?
+      current.rmdir
+      current = current.dirname
+    end
+  rescue StandardError
+    nil
   end
 
   def formula

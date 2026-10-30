@@ -2899,3 +2899,30 @@ def test_formula_bottle_accessors(
         "a" * 64,
         "true",
     ]
+
+
+def test_keg_links_files_and_unlinks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-keglink",
+        "1.0",
+        (
+            '  keg_path = Pathname.new(ENV["HOMEBREW_CELLAR"])/"ruby-keglink/1.0"\n'
+            '  (keg_path/"bin").mkpath\n'
+            '  (keg_path/"bin"/"ruby-keglink").write "#!/bin/sh\\n"\n'
+            '  keg = Keg.new(keg_path)\n'
+            '  keg.link\n'
+            '  target = Pathname.new(ENV["HOMEBREW_PREFIX"])/"bin/ruby-keglink"\n'
+            '  (prefix/"link.txt").write [\n'
+            '    target.symlink?.to_s,\n'
+            '    (target.realpath == (keg_path/"bin"/"ruby-keglink").realpath).to_s\n'
+            '  ].join("\\n")\n'
+            '  keg.unlink\n'
+            '  (prefix/"unlink.txt").write [(target.symlink? || target.exist?).to_s].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "link.txt").read_text().splitlines() == ["true", "true"]
+    assert (keg / "unlink.txt").read_text() == "false"
