@@ -3045,3 +3045,25 @@ def test_tab_class_methods(
         "homebrew/core",
         "false",
     ]
+
+
+def test_macos_xcode_module(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-xcode",
+        "1.0",
+        (
+            '  (prefix/"xcode.txt").write [\n'
+            '    MacOS::Xcode.installed?.to_s,\n'
+            '    (MacOS::Xcode.version.nil? || MacOS::Xcode.version.is_a?(PybrewVersion)).to_s,\n'
+            '    (MacOS::Xcode.prefix.nil? || MacOS::Xcode.prefix.directory?).to_s,\n'
+            '    MacOS::Xcode.default_developer_dir.include?("Xcode.app").to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    lines = (keg / "xcode.txt").read_text().splitlines()
+    assert lines[0] in {"true", "false"}
+    assert lines[1:] == ["true", "true", "true"]

@@ -863,6 +863,38 @@ module MacOS
       MacOS.sdk_path
     end
   end
+
+  module Xcode
+    def self.installed?
+      return false unless OS.mac?
+
+      !active_developer_dir.to_s.empty? && File.directory?(active_developer_dir.to_s)
+    rescue StandardError
+      false
+    end
+
+    def self.version
+      return nil unless installed?
+
+      output = `/usr/bin/xcodebuild -version 2>/dev/null`.to_s
+      match = output[/Xcode\s+(\S+)/, 1]
+      match.nil? || match.empty? ? nil : PybrewVersion.new(match)
+    rescue StandardError
+      nil
+    end
+
+    def self.prefix
+      installed? ? Pathname.new(active_developer_dir.to_s) : nil
+    end
+
+    def self.sdk_path
+      MacOS.sdk_path
+    end
+
+    def self.default_developer_dir
+      "/Applications/Xcode.app/Contents/Developer"
+    end
+  end
 end
 
 module DevelopmentTools
