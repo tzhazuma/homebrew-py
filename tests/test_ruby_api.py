@@ -3271,3 +3271,26 @@ def test_formula_std_build_args(
         "true",
         "true",
     ]
+
+
+def test_superenv_module(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-superenv",
+        "1.0",
+        (
+            '  (prefix/"superenv.txt").write [\n'
+            '    Superenv.shims_path.to_s,\n'
+            '    (Superenv.bin == Superenv.shims_path).to_s,\n'
+            '    Superenv.enabled_for?(ENV).to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "superenv.txt").read_text().splitlines() == [
+        f"{tmp_path / 'prefix'}/shims",
+        "true",
+        "false",
+    ]

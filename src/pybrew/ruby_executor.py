@@ -2359,6 +2359,20 @@ class PybrewServiceRef
   end
 end
 
+module Superenv
+  def self.shims_path
+    HOMEBREW_PREFIX/"shims"
+  end
+
+  def self.bin
+    shims_path
+  end
+
+  def self.enabled_for?(_env = nil)
+    false
+  end
+end
+
 module PybrewStdArgs
   def std_configure_args(prefix: self.prefix, libdir: "lib")
     [
