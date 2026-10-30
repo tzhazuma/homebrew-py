@@ -2706,3 +2706,27 @@ def test_formula_pin_and_unpin(
     ]
     assert (keg / "pin-unpin.txt").read_text() == "false"
     assert not pin_path.exists()
+
+
+def test_formula_post_install_method(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-postinstall",
+        "1.0",
+        (
+            '  ref = Formula["ruby-postinstall"]\n'
+            '  ref.post_install\n'
+            '  (prefix/"postinstall.txt").write [\n'
+            '    ref.post_install?.to_s,\n'
+            '    (prefix/"post.txt").read\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.post_install_source = '(prefix/"post.txt").write "post install ran"'
+    keg = _build(tmp_path, formula)
+    assert (keg / "postinstall.txt").read_text().splitlines() == [
+        "true",
+        "post install ran",
+    ]

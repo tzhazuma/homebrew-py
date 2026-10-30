@@ -2871,6 +2871,24 @@ class PybrewFormulaRef
     !!@info["post_install?"]
   end
 
+  def post_install
+    source = @info["post_install_source"].to_s
+    return nil if source.empty?
+
+    paths = {}
+    PybrewInstallContext::PATH_METHODS.each do |method_name|
+      next unless respond_to?(method_name)
+
+      paths[method_name] = public_send(method_name).to_s
+    end
+    context = PybrewInstallContext.new(
+      "paths" => paths,
+      "formula" => { "name" => name, "version" => version.to_s },
+      "verbose" => false
+    )
+    context.instance_eval(source, "post_install", 1)
+  end
+
   def fetch?
     !!@info["fetch?"]
   end
