@@ -2869,3 +2869,33 @@ def test_formula_misc_helpers(
         "true",
         "true",
     ]
+
+
+def test_formula_bottle_accessors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-bottle-access",
+        "1.0",
+        (
+            '  ref = Formula["ruby-bottle-access"]\n'
+            '  (prefix/"bottle.txt").write [\n'
+            '    ref.bottled?.to_s,\n'
+            '    ref.bottle_tags.join(","),\n'
+            '    ref.bottle_for_tag("sonoma").sha256,\n'
+            '    ref.bottle_url("sonoma").include?("bottles").to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.bottle.root_url = "https://example.com/bottles"
+    formula.bottle.files["sonoma"] = BottleFile(
+        tag="sonoma", sha256="a" * 64, cellar=":any"
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "bottle.txt").read_text().splitlines() == [
+        "true",
+        "sonoma",
+        "a" * 64,
+        "true",
+    ]

@@ -3337,6 +3337,29 @@ class PybrewFormulaRef
     value.is_a?(Hash) && !(value["files"] || {}).empty?
   end
 
+  def bottled?
+    bottle?
+  end
+
+  def bottle_tags
+    spec = bottle
+    spec.nil? ? [] : spec.bottle_tags
+  end
+
+  def bottle_for_tag(tag = nil)
+    spec = bottle
+    return nil if spec.nil?
+
+    tag.nil? ? spec : spec.bottle_for_tag(tag)
+  end
+
+  def bottle_url(tag = nil)
+    spec = bottle
+    return nil if spec.nil?
+
+    spec.bottle_url(tag.nil? ? spec.current_tag : tag)
+  end
+
   def specified_name
     name
   end
