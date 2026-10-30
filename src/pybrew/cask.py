@@ -54,6 +54,14 @@ class Cask:
     caveats: Optional[str] = None
     caveats_source: Optional[str] = None
     livecheck_source: Optional[str] = None
+    #: True when the cask declares a ``livecheck`` stanza.  The default parser
+    #: records the raw block source; the opt-in Ruby evaluator additionally
+    #: fills :attr:`livecheck` with the metadata collected from the block.
+    livecheck_defined: bool = False
+    livecheck: dict[str, Any] = field(default_factory=dict)
+    #: True when the cask uses ``on_macos``/``on_linux`` blocks.  Mirrors the
+    #: Homebrew DSL helper ``on_system_blocks_exist?``.
+    on_system_blocks: bool = False
     no_autobump: bool = False
     no_autobump_reason: Optional[str] = None
     deprecated: bool = False
@@ -81,6 +89,16 @@ class Cask:
             for name in _SCRIPT_STANZAS
             if (body := getattr(self, name, None))
         }
+
+    @property
+    def on_system_blocks_exist(self) -> bool:
+        """Mirror Homebrew's ``on_system_blocks_exist?`` DSL helper."""
+        return self.on_system_blocks
+
+    @property
+    def autobump(self) -> bool:
+        """Mirror Homebrew's ``autobump?``: false after ``no_autobump!``."""
+        return not self.no_autobump
 
     def resolved_version(self) -> str:
         return self.version or "latest"
@@ -312,6 +330,7 @@ class CaskParser:
                 self.cask.caveats_source = self._consume_block_body(opener, capture=True)
             elif name == "livecheck" and block:
                 self.cask.livecheck_source = self._consume_block_body(opener, capture=True)
+                self.cask.livecheck_defined = True
             elif block:
                 self._skip_block_body(opener)
             else:
@@ -330,6 +349,8 @@ class CaskParser:
         self._skip_block_body(opener)
 
     def _parse_conditional(self, name: str, args: list[Any], opener: Optional[Token] = None) -> None:
+        if name in ("on_macos", "on_linux"):
+            self.cask.on_system_blocks = True
         active = self._conditional_active(name, args)
         if active:
             self._parse_block()
@@ -611,7 +632,7 @@ class CaskParser:
             if reason is not None:
                 cask.disable_reason = str(reason)
         elif name == "livecheck":
-            pass
+            self.cask.livecheck_defined = True
         elif name == "no_autobump!":
             cask.no_autobump = True
             reason = kwargs.get("because") or (args[0] if args else None)

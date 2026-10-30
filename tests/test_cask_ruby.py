@@ -894,3 +894,195 @@ def test_cask_caveats_block_capture(allow_ruby: None) -> None:
         )
     )
     assert cask.caveats == "hello\nworld\n"
+
+
+# ---------------------------------------------------------------------------
+# MacOS helpers (version/full_version/version_symbol/sdk/sdk_path)
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_cask_macos_version_helpers(
+    allow_ruby: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    sdk = tmp_path / "MacOSX14.0.sdk"
+    sdk.mkdir()
+    monkeypatch.setenv("PYBREW_TARGET_OS", "darwin")
+    monkeypatch.setenv("HOMEBREW_MACOS_VERSION", "14.5")
+    monkeypatch.setenv("PYBREW_MACOS_SDK_PATH", str(sdk))
+
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  caveats "version=#{MacOS.version} full=#{MacOS.full_version} '
+            'symbol=#{MacOS.version_symbol} sdk=#{MacOS.sdk_path} '
+            'sdk_version=#{MacOS.sdk.version} '
+            'at_least_sonoma=#{MacOS.version >= :sonoma} '
+            'before_sequoia=#{MacOS.version < :sequoia}"\n'
+        )
+    )
+
+    assert cask.caveats == (
+        f"version=14.5 full=14.5 symbol=sonoma sdk={sdk} "
+        "sdk_version=14.0 at_least_sonoma=true before_sequoia=true"
+    )
+
+
+@requires_ruby
+def test_cask_macos_sdk_selection_from_local_roots(
+    allow_ruby: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("PYBREW_MACOS_SDK_PATH", raising=False)
+    monkeypatch.setenv("PYBREW_TARGET_OS", "darwin")
+    monkeypatch.setenv("HOMEBREW_MACOS_VERSION", "15.1")
+    monkeypatch.setattr("pybrew.cask_ruby._MACOS_SDK_ROOTS", (tmp_path,))
+    (tmp_path / "MacOSX14.5.sdk").mkdir()
+    (tmp_path / "MacOSX15.0.sdk").mkdir()
+
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  caveats "default=#{MacOS.sdk.version} '
+            'by_major=#{MacOS.sdk("15").version} '
+            'by_symbol=#{MacOS.sdk(:sonoma).version} '
+            'missing=#{MacOS.sdk("13").inspect}"\n'
+        )
+    )
+    assert cask.caveats == (
+        "default=15.0 by_major=15.0 by_symbol=14.5 missing=nil"
+    )
+
+    # SDKs are only reported for macOS targets; Linux casks see nil even when
+    # an SDK path override is configured.
+    monkeypatch.setenv("PYBREW_TARGET_OS", "linux")
+    monkeypatch.setenv("PYBREW_MACOS_SDK_PATH", str(tmp_path / "MacOSX14.5.sdk"))
+    linux = evaluate_cask_source(
+        _source('  version "1.0"\n  caveats "sdk=#{MacOS.sdk_path.inspect}"\n')
+    )
+    assert linux.caveats == "sdk=nil"
+
+
+# ---------------------------------------------------------------------------
+# livecheck metadata and source capture
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_cask_livecheck_metadata_and_source(allow_ruby: None) -> None:
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  livecheck do\n'
+            '    url "https://example.com/download"\n'
+            '    regex(/demo-(\\d+(?:\\.\\d+)*)\\.zip/i)\n'
+            '    strategy :page_match\n'
+            '    throttle 2, days: 5\n'
+            '  end\n'
+            '  caveats "defined=#{livecheck_defined?}"\n'
+        )
+    )
+
+    assert cask.livecheck_defined is True
+    assert cask.livecheck["url"] == "https://example.com/download"
+    assert cask.livecheck["regex"] == r"demo-(\d+(?:\.\d+)*)\.zip"
+    assert cask.livecheck["strategy"] == ":page_match"
+    assert cask.livecheck["skip"] is False
+    assert cask.livecheck["throttle"] == 2
+    assert cask.livecheck["throttle_days"] == 5
+    assert cask.caveats == "defined=true"
+    assert cask.livecheck_source is not None
+    assert 'url "https://example.com/download"' in cask.livecheck_source
+    assert "regex(" in cask.livecheck_source
+    assert "strategy :page_match" in cask.livecheck_source
+
+
+@requires_ruby
+def test_cask_livecheck_skip_and_reference_metadata(allow_ruby: None) -> None:
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  livecheck do\n'
+            '    skip "no longer maintained"\n'
+            '    formula :parent\n'
+            '  end\n'
+        )
+    )
+
+    assert cask.livecheck_defined is True
+    assert cask.livecheck["skip"] is True
+    assert cask.livecheck["skip_msg"] == "no longer maintained"
+    assert cask.livecheck["formula"] == ":parent"
+
+
+def test_extract_livecheck_source_handles_do_and_brace_blocks() -> None:
+    from pybrew.cask_ruby import _extract_livecheck_source
+
+    do_source = (
+        'cask "tiny" do\n'
+        '  livecheck do\n'
+        '    regex(/tiny/)\n'
+        '  end\n'
+        'end\n'
+    )
+    do_line = do_source.splitlines().index("  livecheck do") + 1
+    assert _extract_livecheck_source(do_source, ["cask.rb", do_line]) == (
+        "regex(/tiny/)"
+    )
+
+    brace_source = 'cask "tiny" do\n  livecheck { regex(/tiny/) }\nend\n'
+    brace_line = brace_source.splitlines().index(
+        "  livecheck { regex(/tiny/) }"
+    ) + 1
+    assert _extract_livecheck_source(brace_source, ["cask.rb", brace_line]) == (
+        "regex(/tiny/)"
+    )
+
+    assert _extract_livecheck_source(do_source, ["cask.rb", 1]) is None
+    assert _extract_livecheck_source(do_source, None) is None
+
+
+@requires_ruby
+def test_livecheck_source_recovery_failure_is_documented(
+    allow_ruby: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "pybrew.cask_ruby._extract_livecheck_source",
+        lambda *_args, **_kwargs: None,
+    )
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  livecheck do\n'
+            '    regex(/tiny/)\n'
+            '  end\n'
+        )
+    )
+
+    assert cask.livecheck_defined is True
+    assert cask.livecheck_source is None
+    warnings = cask.extra["ruby_warnings"]
+    assert any(
+        "livecheck" in warning and "source" in warning for warning in warnings
+    )
+
+
+# ---------------------------------------------------------------------------
+# metadata helpers exposed on the Python Cask model
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_evaluator_metadata_helpers_on_cask_model(allow_ruby: None) -> None:
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  on_macos { }\n'
+            '  no_autobump! because: "test"\n'
+        )
+    )
+
+    assert cask.on_system_blocks is True
+    assert cask.on_system_blocks_exist is True
+    assert cask.autobump is False
+    assert cask.livecheck_defined is False
+    assert cask.livecheck == {}

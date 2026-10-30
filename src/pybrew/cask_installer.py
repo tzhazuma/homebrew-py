@@ -143,6 +143,22 @@ require "shellwords"
 # example Shellwords.escape or FileUtils.rm_rf) in addition to the helpers
 # defined below.
 
+# Minimal stand-in for Homebrew's MacOS::SDK.  pybrew only reports SDKs that
+# are already installed on disk (or named by PYBREW_MACOS_SDK_PATH); it never
+# invokes Xcode tooling or the network.
+class PybrewMacOSSDK
+  attr_reader :path, :version
+
+  def initialize(path, version)
+    @path = Pathname.new(path.to_s)
+    @version = MacOS::Version.new(version.to_s)
+  end
+
+  def to_s
+    @path.to_s
+  end
+end
+
 # Host platform helpers available to opt-in cask scripts.  They mirror the
 # small subset of Homebrew's MacOS/OS/Hardware helpers that casks commonly
 # use; none of this runs unless the caller enabled ``run_scripts``.
@@ -226,6 +242,65 @@ module MacOS
     parts = full_version.split(".")
     key = parts[0].to_i == 10 ? "10.#{parts[1]}" : parts[0].to_s
     VERSION_SYMBOLS.fetch(key, :unknown)
+  end
+
+  #: Directories searched for an installed macOS SDK (local filesystem only).
+  SDK_ROOTS = [
+    "/Library/Developer/CommandLineTools/SDKs",
+    "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs",
+  ].freeze
+
+  def self.sdk_paths
+    @sdk_paths ||= begin
+      paths = {}
+      override = ENV["PYBREW_MACOS_SDK_PATH"].to_s
+      if override.empty?
+        SDK_ROOTS.each do |root|
+          Dir.glob(File.join(root, "MacOSX*.sdk")).sort.each do |candidate|
+            match = File.basename(candidate).match(/\AMacOSX(\d+(?:\.\d+)*)\.sdk\z/)
+            paths[match[1]] = candidate unless match.nil?
+          end
+        end
+      else
+        match = File.basename(override).match(/\AMacOSX(\d+(?:\.\d+)*)\.sdk\z/)
+        paths[match.nil? ? full_version : match[1]] = override
+      end
+      paths
+    end
+  end
+
+  # Best-effort SDK lookup: prefer the SDK matching the running macOS release,
+  # otherwise the newest installed SDK.  Returns nil when none is available.
+  def self.sdk(version = nil)
+    return nil unless OS.mac?
+
+    paths = sdk_paths
+    return nil if paths.empty?
+
+    key = if version.nil?
+            host = version_parts(full_version).first
+            matching = paths.keys.select do |candidate|
+              version_parts(candidate).first == host
+            end
+            (matching.empty? ? paths.keys : matching).max_by do |candidate|
+              version_parts(candidate)
+            end
+          else
+            requested = version_string(version)
+            found = paths.keys.find { |candidate| candidate == requested }
+            found ||= paths.keys.find do |candidate|
+              version_parts(candidate).first == version_parts(requested).first
+            end
+            found
+          end
+    return nil if key.nil?
+
+    PybrewMacOSSDK.new(paths[key], key)
+  end
+
+  def self.sdk_path(version = nil)
+    sdk = self.sdk(version)
+    sdk.nil? ? nil : sdk.path
   end
 end
 
@@ -322,19 +397,58 @@ module Utils
   rescue StandardError
     false
   end
+
+  # Non-interactive stdout capture.  Matches the parts of Homebrew's
+  # ``Utils.popen_read`` that cask scripts commonly rely on.
+  def popen_read(*args, **options)
+    return "" if args.empty?
+
+    environment, command, spawn_options =
+      PybrewCaskSystem.normalize(args, options, "Utils.popen_read")
+    stdout, _stderr, _status = Open3.capture3(environment, *command, **spawn_options)
+    stdout
+  end
+
+  # Locate an executable on PATH, like Homebrew's ``Utils.which``.
+  def which(command)
+    return nil if command.nil?
+
+    candidate = command.to_s
+    return candidate if candidate.include?(File::SEPARATOR) && File.executable?(candidate)
+
+    ENV["PATH"].to_s.split(File::PATH_SEPARATOR).each do |directory|
+      path = File.join(directory, candidate)
+      return path if File.file?(path) && File.executable?(path)
+    end
+    nil
+  end
 end
 
 class PybrewCaskScriptResult
-  attr_reader :stdout, :stderr, :exit_status
+  attr_reader :stdout, :stderr, :exit_status, :command
 
-  def initialize(stdout:, stderr:, exit_status:)
+  def initialize(stdout:, stderr:, exit_status:, command: nil)
     @stdout = stdout
     @stderr = stderr
     @exit_status = exit_status
+    @command = command
   end
 
   def success?
     @exit_status.zero?
+  end
+
+  # Homebrew's SystemCommand::Result exposes the combined output; cask scripts
+  # sometimes parse it instead of ``stdout``.
+  def merged_output
+    "#{@stdout}#{@stderr}"
+  end
+
+  def assert_success!
+    return self if success?
+
+    label = @command.nil? || @command.empty? ? "command" : @command.join(" ")
+    raise "command failed (exit #{@exit_status}): #{label}"
   end
 
   def to_s
@@ -376,6 +490,9 @@ class PybrewCaskScriptContext
     args_option = options.delete(:args)
     print_stdout = options.delete(:print_stdout)
     print_stderr = options.key?(:print_stderr) ? options.delete(:print_stderr) : true
+    # Homebrew's cask ``system_command`` is SystemCommand.run! and raises on a
+    # non-zero exit.  ``must_succeed: false`` requests the non-raising form.
+    must_succeed = options.key?(:must_succeed) ? options.delete(:must_succeed) : true
     if options.delete(:sudo) || options.delete(:sudo_as_root)
       raise ArgumentError, "system_command: sudo is not supported by pybrew cask scripts"
     end
@@ -385,8 +502,11 @@ class PybrewCaskScriptContext
     stdout, stderr, status = Open3.capture3(environment, *argv, **spawn_options)
     $stdout.print(stdout) if print_stdout && !stdout.empty?
     $stderr.print(stderr) if print_stderr && !stderr.empty?
-    PybrewCaskScriptResult.new(stdout: stdout, stderr: stderr,
-                               exit_status: status.exitstatus || 1)
+    result = PybrewCaskScriptResult.new(stdout: stdout, stderr: stderr,
+                                        exit_status: status.exitstatus || 1,
+                                        command: argv)
+    result.assert_success! if must_succeed
+    result
   end
 
   def system_command!(*args, **options)
@@ -399,11 +519,19 @@ class PybrewCaskScriptContext
 
   # Same call styles as ``system_command`` (minus the captured-output
   # options); returns true/false and raises when no command is given.
+  # ``must_succeed: true`` raises on failure, matching Utils.safe_system.
   def system(*args, **options)
     options = options.dup
+    must_succeed = options.key?(:must_succeed) ? options.delete(:must_succeed) : false
     command = options.delete(:command)
     args = [command, *Array(options.delete(:args)), *args] unless command.nil?
-    PybrewCaskSystem.run(args, options, "system") ? true : false
+    success = PybrewCaskSystem.run(args, options, "system") ? true : false
+    if must_succeed && !success
+      status = $?
+      code = status.respond_to?(:exitstatus) ? status.exitstatus : 1
+      raise "command failed (exit #{code}): #{args.flatten.compact.join(' ')}"
+    end
+    success
   end
 
   def shell_command(command, **options)

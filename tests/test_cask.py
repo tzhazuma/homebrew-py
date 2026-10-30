@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 import sys
 import zipfile
 from pathlib import Path
@@ -14,6 +16,12 @@ from pybrew.paths import Config
 from pybrew.taps import discover_taps
 
 FIXTURES = Path(__file__).parent / "fixtures" / "casks"
+
+_RUBY = os.environ.get("PYBREW_RUBY") or "/usr/bin/ruby"
+requires_ruby = pytest.mark.skipif(
+    shutil.which(_RUBY) is None and not Path(_RUBY).is_file(),
+    reason="Ruby interpreter not installed; cask script shim tests skipped",
+)
 
 
 def test_parse_rectangle_cask() -> None:
@@ -881,3 +889,193 @@ end
     monkeypatch.setenv("PYBREW_MACOS_VERSION", "14.0")
     with pytest.raises(CaskError, match="requires macOS"):
         installer.install(CaskLoader(discover_taps([tap])).load("osver"))
+
+
+# ---------------------------------------------------------------------------
+# Cask model metadata helpers (default parser)
+# ---------------------------------------------------------------------------
+
+
+def test_default_parser_marks_livecheck_defined() -> None:
+    cask = parse_cask_source(
+        'cask "lc" do\n'
+        '  version "1.0"\n'
+        '  livecheck do\n'
+        '    regex(/tiny/)\n'
+        '  end\n'
+        '  app "Tiny.app"\n'
+        'end\n'
+    )
+    assert cask.livecheck_defined is True
+    assert cask.livecheck_source is not None
+    assert "regex" in cask.livecheck_source
+    # The literal parser does not evaluate livecheck metadata.
+    assert cask.livecheck == {}
+    assert cask.autobump is True
+
+    plain = parse_cask_source('cask "plain" do\n  version "1.0"\nend\n')
+    assert plain.livecheck_defined is False
+    assert plain.livecheck == {}
+
+
+def test_default_parser_tracks_on_system_blocks() -> None:
+    cask = parse_cask_source(
+        'cask "sys" do\n'
+        '  on_macos do\n'
+        '    version "1.0"\n'
+        '  end\n'
+        'end\n'
+    )
+    assert cask.on_system_blocks is True
+    assert cask.on_system_blocks_exist is True
+
+    plain = parse_cask_source('cask "plain" do\n  version "1.0"\nend\n')
+    assert plain.on_system_blocks is False
+
+
+# ---------------------------------------------------------------------------
+# opt-in cask script shim: MacOS SDK and command/Utils helpers
+# ---------------------------------------------------------------------------
+
+
+def test_cask_script_shim_exposes_macos_sdk_and_command_helpers() -> None:
+    from pybrew.cask_installer import _CASK_SCRIPT_SHIM
+
+    for snippet in (
+        "class PybrewMacOSSDK",
+        "def self.sdk_paths",
+        "def self.sdk(version = nil)",
+        "def self.sdk_path(version = nil)",
+        "def merged_output",
+        "def assert_success!",
+        "must_succeed",
+        "def popen_read(*args, **options)",
+        "def which(command)",
+    ):
+        assert snippet in _CASK_SCRIPT_SHIM
+
+
+@requires_ruby
+def test_cask_script_shim_macos_and_command_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sdk = tmp_path / "MacOSX14.0.sdk"
+    sdk.mkdir()
+    monkeypatch.setenv("PYBREW_MACOS_VERSION", "14.5")
+    monkeypatch.setenv("PYBREW_MACOS_SDK_PATH", str(sdk))
+
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "s" / "shimmy.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        '''cask "shimmy" do
+  version "1.0"
+  stage_only true
+  preflight do
+    if MacOS.version.to_s != "14.5"
+      raise "bad version"
+    end
+    if MacOS.version_symbol != :sonoma
+      raise "bad version symbol"
+    end
+    if OS.mac?
+      if MacOS.sdk_path.to_s != ENV["PYBREW_MACOS_SDK_PATH"]
+        raise "bad sdk path"
+      end
+      if MacOS.sdk.version.to_s != "14.0"
+        raise "bad sdk version"
+      end
+    end
+    result = system_command "/bin/echo", args: ["hello"],
+                                            print_stdout: false, print_stderr: false
+    if result.stdout.strip != "hello"
+      raise "bad stdout"
+    end
+    if !result.merged_output.include?("hello")
+      raise "bad merged_output"
+    end
+    begin
+      system_command "/usr/bin/false", print_stderr: false
+      raise "system_command should have raised"
+    rescue RuntimeError => error
+      if !error.message.include?("command failed")
+        raise "unexpected error"
+      end
+    end
+    failed = system_command "/usr/bin/false", print_stderr: false,
+                                               must_succeed: false
+    if failed.success?
+      raise "must_succeed false did not return a result"
+    end
+    if Utils.popen_read("/bin/echo", "world").strip != "world"
+      raise "bad popen_read"
+    end
+    if !Utils.which("echo")
+      raise "bad which"
+    end
+    if !Utils.safe_system("/usr/bin/true")
+      raise "bad safe_system"
+    end
+    if Utils.quiet_system("/usr/bin/false")
+      raise "bad quiet_system"
+    end
+    if !system("/usr/bin/true")
+      raise "bad system"
+    end
+    begin
+      system "/usr/bin/false", must_succeed: true
+      raise "system should have raised"
+    rescue RuntimeError
+    end
+  end
+end
+''',
+        encoding="utf-8",
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+        run_scripts=True,
+    )
+    installer.install(CaskLoader(discover_taps([tap])).load("shimmy"))
+
+
+def test_cask_scripts_stay_inert_without_run_scripts(tmp_path: Path) -> None:
+    marker = tmp_path / "preflight-ran"
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "i" / "inertly.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        f'''cask "inertly" do
+  version "1.0"
+  stage_only true
+  preflight do
+    File.write("{marker}", "ran")
+  end
+end
+''',
+        encoding="utf-8",
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    installer.install(CaskLoader(discover_taps([tap])).load("inertly"))
+
+    assert not marker.exists()
+    receipt = json.loads(
+        (tmp_path / "prefix" / "Caskroom" / "inertly" / "1.0" / ".metadata"
+         / "receipt.json").read_text()
+    )
+    assert receipt["scripts_requested"] is False
+    assert receipt["script_results"] == {}

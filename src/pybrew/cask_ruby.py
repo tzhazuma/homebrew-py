@@ -27,10 +27,14 @@ Captured DSL (in addition to arbitrary Ruby control flow):
 * artifact stanzas (``app``, ``binary``, ``suite``, ``pkg``, ``font``, ...);
 * ``stage_only``, ``auto_updates``, ``uninstall``, ``zap trash:``,
   ``depends_on``, ``conflicts_with``, ``arch``/``arch_map``, ``language``;
+* ``livecheck`` metadata (``url``/``regex``/``strategy``/``skip``/``throttle``)
+  plus a best-effort copy of the raw block source;
 * ``on_macos``/``on_linux``/``on_arm``/``on_intel`` and the
   ``on_<macos release>`` blocks (with ``:or_older``/``:or_newer``);
 * the ``on_arch_conditional``/``on_system_conditional`` helpers used by older
-  casks, and the ``os`` stanza used by newer multi-OS casks.
+  casks, and the ``os`` stanza used by newer multi-OS casks;
+* the ``MacOS`` helpers ``version``/``full_version``/``version_symbol`` and
+  ``sdk``/``sdk_path`` (best effort: local SDK directories only, no network).
 
 Semantics worth knowing:
 
@@ -71,7 +75,8 @@ import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
-from .cask import Artifact, Cask, CaskError, _ARTIFACT_KINDS
+from .cask import Artifact, Cask, CaskError, CaskParser, _ARTIFACT_KINDS
+from .errors import FormulaParseError
 
 #: Environment variable that opts a caller into arbitrary-Ruby cask parsing.
 ALLOW_ENV = "PYBREW_ALLOW_CASK_RUBY"
@@ -189,6 +194,161 @@ def _target_macos_version() -> str:
     return ""
 
 
+#: Directories searched for an installed macOS SDK.  pybrew only reads the
+#: local filesystem: it never runs ``xcrun``/``xcodebuild`` and never touches
+#: the network.  Tests monkeypatch this tuple to use synthetic SDK trees.
+_MACOS_SDK_ROOTS = (
+    Path("/Library/Developer/CommandLineTools/SDKs"),
+    Path(
+        "/Applications/Xcode.app/Contents/Developer/Platforms/"
+        "MacOSX.platform/Developer/SDKs"
+    ),
+)
+
+_MACOS_SDK_NAME = re.compile(r"MacOSX(\d+(?:\.\d+)*)\.sdk\Z")
+
+
+def _version_key(value: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in re.findall(r"\d+", value))
+
+
+def _macos_sdk_version_from_path(path: Path) -> Optional[str]:
+    match = _MACOS_SDK_NAME.search(path.name)
+    return match.group(1) if match is not None else None
+
+
+def _macos_sdk_paths() -> dict[str, str]:
+    """Return a best-effort ``version -> SDK path`` map for this host.
+
+    ``PYBREW_MACOS_SDK_PATH`` overrides the search so callers (and tests) can
+    point the shim at a synthetic SDK.  Otherwise only SDKs already installed
+    under the well-known CLT/Xcode directories are reported.
+    """
+
+    override = (os.environ.get("PYBREW_MACOS_SDK_PATH") or "").strip()
+    if override:
+        path = Path(os.path.expanduser(override))
+        version = _macos_sdk_version_from_path(path)
+        if version is None:
+            version = _target_macos_version() or "0"
+        return {version: str(path)}
+    if _target_os() != "darwin":
+        return {}
+    paths: dict[str, tuple[tuple[int, ...], Path]] = {}
+    for root in _MACOS_SDK_ROOTS:
+        try:
+            entries = sorted(Path(root).glob("MacOSX*.sdk"))
+        except OSError:  # pragma: no cover - unreadable SDK directory
+            continue
+        for entry in entries:
+            version = _macos_sdk_version_from_path(entry)
+            if version is None or not entry.is_dir():
+                continue
+            key = _version_key(version)
+            existing = paths.get(version)
+            if existing is None or key > existing[0]:
+                paths[version] = (key, entry)
+    return {version: str(entry) for version, (_key, entry) in paths.items()}
+
+
+def _select_macos_sdk(
+    paths: dict[str, str]
+) -> tuple[Optional[str], Optional[str]]:
+    """Pick the SDK matching the target macOS release, else the newest one."""
+
+    if not paths:
+        return None, None
+    host_major = _version_key(_target_macos_version())[:1]
+    matching = [
+        version
+        for version in paths
+        if host_major and _version_key(version)[:1] == host_major
+    ]
+    version = max(matching or list(paths), key=_version_key)
+    return version, paths[version]
+
+
+# ---------------------------------------------------------------------------
+# livecheck source recovery
+# ---------------------------------------------------------------------------
+
+_LIVECHECK_SOURCE_WARNING = (
+    "cask `livecheck` block source could not be recovered by the opt-in Ruby "
+    "evaluator; `livecheck_defined?` and the collected livecheck metadata are "
+    "still available"
+)
+
+
+def _extract_livecheck_source(source: str, location: Any) -> Optional[str]:
+    """Best-effort recovery of a ``livecheck do ... end`` block body.
+
+    The Ruby shim reports the block's ``source_location``; this helper maps the
+    reported line back onto the original source with the same lexer the default
+    parser uses, then reuses its block scanner.  Ruby constructs the lexer does
+    not understand (for example method definitions inside the block) can defeat
+    the scan, in which case ``None`` is returned and the caller records a
+    warning instead of failing evaluation.
+    """
+
+    if not isinstance(location, (list, tuple)) or len(location) < 2:
+        return None
+    try:
+        line = int(location[1])
+    except (TypeError, ValueError):
+        return None
+    try:
+        parser = CaskParser(source)
+    except Exception:  # pragma: no cover - lexer is lenient in practice
+        return None
+    tokens = parser.tokens
+    opener_index: Optional[int] = None
+    for index, token in enumerate(tokens):
+        if token.kind != "id" or token.value != "livecheck" or token.line != line:
+            continue
+        depth = 0
+        for candidate in range(index + 1, len(tokens)):
+            current = tokens[candidate]
+            if current.kind == "nl" and depth == 0:
+                break
+            if current.kind == "punct" and current.value == "(":
+                depth += 1
+            elif current.kind == "punct" and current.value == ")":
+                depth = max(0, depth - 1)
+            elif depth == 0 and (
+                (current.kind == "kw" and current.value == "do")
+                or (current.kind == "punct" and current.value == "{")
+            ):
+                opener_index = candidate
+                break
+        if opener_index is not None:
+            break
+    if opener_index is None:
+        return None
+    parser.pos = opener_index + 1
+    try:
+        body = parser._consume_block_body(tokens[opener_index], capture=True)
+    except FormulaParseError:
+        return None
+    return body.strip() or None
+
+
+def _attach_livecheck_source(source: str, data: dict[str, Any]) -> None:
+    """Fill ``livecheck_source`` (or a warning) from a reported block location."""
+
+    if data.get("livecheck_source"):
+        return
+    location = data.get("livecheck_location")
+    if location is None:
+        return
+    extracted = _extract_livecheck_source(source, location)
+    if extracted is None:
+        warnings = data.setdefault("warnings", [])
+        if isinstance(warnings, list):
+            warnings.append(_LIVECHECK_SOURCE_WARNING)
+    else:
+        data["livecheck_source"] = extracted
+
+
 # ---------------------------------------------------------------------------
 # Ruby bridge
 # ---------------------------------------------------------------------------
@@ -247,6 +407,8 @@ def _evaluate(source: str, path: Optional[Path]) -> dict[str, Any]:
         output_path = root / "cask.json"
         artifacts = {kind: kind for kind in sorted(ARTIFACT_KINDS)}
         artifacts.update(ARTIFACT_ALIASES)
+        sdk_paths = _macos_sdk_paths()
+        sdk_version, sdk_path = _select_macos_sdk(sdk_paths)
         config: dict[str, Any] = {
             "appdir": str(Path.home() / "Applications"),
             "arch": _target_arch(),
@@ -255,6 +417,9 @@ def _evaluate(source: str, path: Optional[Path]) -> dict[str, Any]:
             "macos_version": _target_macos_version(),
             "output": str(output_path),
             "platform": _target_os(),
+            "sdk_path": sdk_path,
+            "sdk_paths": sdk_paths,
+            "sdk_version": sdk_version,
         }
         script_path.write_text(_render_script(source, config), encoding="utf-8")
         try:
@@ -307,6 +472,7 @@ def _evaluate(source: str, path: Optional[Path]) -> dict[str, Any]:
             raise CaskError(
                 f"{label}: Ruby cask evaluator returned an unexpected result"
             )
+        _attach_livecheck_source(source, data)
         return data
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -347,6 +513,14 @@ def _cask_from_result(
     cask.desc = _optional_text(data.get("desc"))
     cask.homepage = _optional_text(data.get("homepage"))
     cask.caveats = _optional_text(data.get("caveats"))
+    cask.livecheck_source = _optional_text(data.get("livecheck_source"))
+    cask.livecheck_defined = bool(data.get("livecheck_defined"))
+    livecheck = data.get("livecheck")
+    if isinstance(livecheck, dict):
+        cask.livecheck = {
+            str(key): value for key, value in livecheck.items() if value is not None
+        }
+    cask.on_system_blocks = bool(data.get("on_system_blocks"))
     cask.language = _optional_text(data.get("language"))
     cask.arch = _optional_text(data.get("arch"))
     cask.arch_map = _string_map(data.get("arch_map"), ("arm", "intel"))
@@ -462,8 +636,41 @@ PYBREW_CASK_SOURCE = Base64.strict_decode64("__PYBREW_CASK_SOURCE__")
 class PybrewCaskError < StandardError; end
 
 # Homebrew's cask version object is a String with a few helpers; cask bodies
-# commonly interpolate ``version.major_minor`` into URLs.
+# commonly interpolate ``version.major_minor`` into URLs and compare
+# ``MacOS.version`` against release symbols.
 class PybrewCaskVersion < String
+  include Comparable
+
+  # Release symbol -> macOS version.  Casks compare versions against symbols
+  # (``MacOS.version >= :sonoma``), so the comparison operators translate them.
+  SYMBOL_VERSIONS = {
+    "catalina" => "10.15",
+    "big_sur" => "11",
+    "monterey" => "12",
+    "ventura" => "13",
+    "sonoma" => "14",
+    "sequoia" => "15",
+    "tahoe" => "26",
+    "golden_gate" => "27",
+  }.freeze
+
+  def self.parts(value)
+    value.to_s.split(".").map(&:to_i)
+  end
+
+  def <=>(other)
+    other = SYMBOL_VERSIONS[other.to_s] if other.is_a?(Symbol)
+    return nil if other.nil?
+
+    PybrewCaskVersion.parts(self) <=> PybrewCaskVersion.parts(other)
+  end
+
+  def ==(other)
+    comparison = (self <=> other)
+    comparison.nil? ? super : comparison.zero?
+  end
+  alias eql? ==
+
   def major
     split(".")[0].to_s
   end
@@ -532,22 +739,187 @@ module PybrewCaskRuntime
   end
 end
 
+#: Release symbol -> macOS major version, shared by ``on_<release>`` blocks and
+#: ``MacOS.version_symbol``.
+PYBREW_MACOS_RELEASES = {
+  "big_sur" => 11,
+  "monterey" => 12,
+  "ventura" => 13,
+  "sonoma" => 14,
+  "sequoia" => 15,
+  "tahoe" => 26,
+  "golden_gate" => 27,
+}.freeze
+
+#: macOS version string -> release symbol, matching Homebrew's
+#: ``MacOS.version_symbol``.
+PYBREW_MACOS_VERSION_SYMBOLS = {
+  "10.15" => :catalina,
+  "11" => :big_sur,
+  "12" => :monterey,
+  "13" => :ventura,
+  "14" => :sonoma,
+  "15" => :sequoia,
+  "26" => :tahoe,
+  "27" => :golden_gate,
+}.freeze
+
+# A minimal stand-in for Homebrew's ``MacOS::SDK``.  pybrew only reports SDKs it
+# can see on disk; see the ``MacOS.sdk`` documentation below.
+class PybrewCaskSDK
+  attr_reader :path, :version
+
+  def initialize(path, version)
+    @path = Pathname.new(path.to_s)
+    @version = PybrewCaskVersion.new(version.to_s)
+  end
+
+  def to_s
+    @path.to_s
+  end
+end
+
 module MacOS
-  def self.version
+  Version = PybrewCaskVersion
+
+  def self.full_version
     PybrewCaskVersion.new((PYBREW_CASK_CONFIG["macos_version"] || "0").to_s)
+  end
+
+  def self.version
+    full_version
+  end
+
+  def self.version_symbol
+    parts = full_version.split(".")
+    key = parts[0].to_i == 10 ? "10.#{parts[1]}" : parts[0].to_s
+    PYBREW_MACOS_VERSION_SYMBOLS.fetch(key, :unknown)
+  end
+
+  # Best-effort SDK lookup.  pybrew only knows about SDKs the host already has
+  # on disk (or ``PYBREW_MACOS_SDK_PATH``); it never invokes Xcode tooling or
+  # the network.  Returns nil when no matching SDK is available.
+  def self.sdk(version = nil)
+    return nil unless (PYBREW_CASK_CONFIG["platform"] || "").to_s == "darwin"
+
+    paths = PYBREW_CASK_CONFIG["sdk_paths"]
+    paths = {} unless paths.is_a?(Hash)
+    requested = if version.nil?
+                  nil
+                elsif version.is_a?(Symbol)
+                  PybrewCaskVersion::SYMBOL_VERSIONS[version.to_s]
+                else
+                  version.to_s
+                end
+    if requested.nil?
+      path = PYBREW_CASK_CONFIG["sdk_path"]
+      version_string = PYBREW_CASK_CONFIG["sdk_version"]
+    else
+      key = paths.keys.find { |candidate| candidate == requested }
+      if key.nil?
+        wanted = PybrewCaskVersion.parts(requested)
+        key = paths.keys.find do |candidate|
+          PybrewCaskVersion.parts(candidate).first == wanted.first
+        end
+      end
+      return nil if key.nil?
+
+      path = paths[key]
+      version_string = key
+    end
+    return nil if path.nil? || path.to_s.empty?
+
+    PybrewCaskSDK.new(path, version_string || full_version)
+  end
+
+  def self.sdk_path(version = nil)
+    sdk = self.sdk(version)
+    sdk.nil? ? nil : sdk.path
+  end
+end
+
+# Metadata collector for cask ``livecheck`` blocks.  Homebrew evaluates these
+# in its Livecheck DSL; pybrew records the common metadata without performing
+# any network access or livecheck work.
+class PybrewCaskLivecheck
+  attr_reader :data
+
+  def initialize
+    @data = {
+      "url" => nil,
+      "regex" => nil,
+      "strategy" => nil,
+      "skip" => false,
+      "skip_msg" => nil,
+      "throttle" => nil,
+      "throttle_days" => nil,
+      "formula" => nil,
+      "cask" => nil,
+    }
+  end
+
+  def url(value = nil, **_options)
+    @data["url"] = PybrewCaskJSON.value(value) unless value.nil?
+    @data["url"]
+  end
+
+  def regex(pattern = nil)
+    if pattern.is_a?(Regexp)
+      @data["regex"] = pattern.source
+    elsif !pattern.nil?
+      @data["regex"] = pattern.to_s
+    end
+    @data["regex"]
+  end
+
+  def strategy(symbol = nil, &_block)
+    @data["strategy"] = PybrewCaskJSON.value(symbol) unless symbol.nil?
+    @data["strategy"]
+  end
+
+  def skip(message = nil)
+    @data["skip"] = true
+    @data["skip_msg"] = message.to_s unless message.nil?
+    true
+  end
+
+  def skip?
+    @data["skip"] ? true : false
+  end
+
+  def throttle(rate = nil, days: nil)
+    @data["throttle"] = rate unless rate.nil?
+    @data["throttle_days"] = days unless days.nil?
+    @data["throttle"]
+  end
+
+  def formula(name = nil)
+    @data["formula"] = PybrewCaskJSON.value(name) unless name.nil?
+    @data["formula"]
+  end
+
+  def cask(name = nil)
+    @data["cask"] = PybrewCaskJSON.value(name) unless name.nil?
+    @data["cask"]
+  end
+
+  def method_missing(name, *args, &block)
+    @data["unsupported"] ||= []
+    @data["unsupported"] << {
+      "stanza" => name.to_s,
+      "args" => PybrewCaskJSON.value(args),
+      "block" => !block.nil?,
+    }
+    nil
+  end
+
+  def respond_to_missing?(_name, _include_private = false)
+    true
   end
 end
 
 class PybrewCaskDSL
-  MACOS_RELEASES = {
-    "big_sur" => 11,
-    "monterey" => 12,
-    "ventura" => 13,
-    "sonoma" => 14,
-    "sequoia" => 15,
-    "tahoe" => 26,
-    "golden_gate" => 27,
-  }.freeze
+  MACOS_RELEASES = PYBREW_MACOS_RELEASES
 
   attr_reader :data
 
@@ -593,6 +965,8 @@ class PybrewCaskDSL
       "no_autobump" => false,
       "on_system_blocks" => false,
       "livecheck_defined" => false,
+      "livecheck" => {},
+      "livecheck_location" => nil,
       "no_autobump_reason" => nil,
       "disable_reason" => nil,
       "warnings" => [],
@@ -1023,9 +1397,24 @@ class PybrewCaskDSL
     @data["caveats"]
   end
 
-  def livecheck(*_args, &_block)
+  # Capture livecheck metadata by evaluating the block in a metadata collector.
+  # This performs no network access.  The block's ``source_location`` lets
+  # Python recover the raw source from the original cask text (best effort).
+  def livecheck(*_args, &block)
     @data["livecheck_defined"] = true
-    nil
+    return @data["livecheck"] if block.nil?
+
+    location = block.source_location
+    @data["livecheck_location"] = location unless location.nil?
+    collector = PybrewCaskLivecheck.new
+    begin
+      collector.instance_eval(&block)
+    rescue StandardError => error
+      @data["warnings"] << "cask `livecheck` block could not be fully " \
+                           "evaluated: #{error.class}: #{error.message}"
+    end
+    @data["livecheck"] = collector.data
+    @data["livecheck"]
   end
 
   def livecheck_defined?
@@ -1140,6 +1529,14 @@ def merge_captured_scripts(evaluated: Cask, parsed: Cask) -> Cask:
         merged.append("caveats_source")
     if parsed.caveats and not evaluated.caveats:
         evaluated.caveats = parsed.caveats
+    # ``livecheck`` blocks are inert metadata.  The evaluator recovers their
+    # source best-effort from the reported source location; the literal parser
+    # is authoritative when it captured the block, so prefer it as a fallback.
+    if parsed.livecheck_source and not evaluated.livecheck_source:
+        evaluated.livecheck_source = parsed.livecheck_source
+        merged.append("livecheck_source")
+    if parsed.livecheck_defined and not evaluated.livecheck_defined:
+        evaluated.livecheck_defined = True
     if merged:
         evaluated.extra.setdefault("ruby_merged_scripts", []).extend(merged)
     return evaluated
