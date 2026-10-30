@@ -3317,3 +3317,43 @@ def test_system_config_sections(
     )
     keg = _build(tmp_path, formula)
     assert (keg / "config-sections.txt").read_text().splitlines() == ["true"] * 3
+
+
+def test_sandbox_module(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-sandbox",
+        "1.0",
+        (
+            '  preserved = Sandbox.with_preserved_brew_file { "ok" }\n'
+            '  ran = Sandbox.run_or_fork { "ran" }\n'
+            '  (prefix/"sandbox.txt").write [\n'
+            '    Sandbox.available?.to_s,\n'
+            '    Sandbox.full_write_isolation?.to_s,\n'
+            '    Sandbox.nested_sandbox?.to_s,\n'
+            '    Sandbox.avoid_nested_sandboxing?.to_s,\n'
+            '    Sandbox.use_for?("x").to_s,\n'
+            '    Sandbox.inherited_sandbox?.to_s,\n'
+            '    Sandbox.state.nil?.to_s,\n'
+            '    Sandbox.failure_reason.nil?.to_s,\n'
+            '    Sandbox.reset_state!.nil?.to_s,\n'
+            '    preserved, ran\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "sandbox.txt").read_text().splitlines() == [
+        "false",
+        "true",
+        "false",
+        "false",
+        "false",
+        "false",
+        "true",
+        "true",
+        "true",
+        "ok",
+        "ran",
+    ]

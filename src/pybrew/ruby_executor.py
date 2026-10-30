@@ -2359,6 +2359,54 @@ class PybrewServiceRef
   end
 end
 
+module Sandbox
+  class << self
+    def available?
+      false
+    end
+
+    def full_write_isolation?
+      true
+    end
+
+    def nested_sandbox?
+      false
+    end
+
+    def avoid_nested_sandboxing?
+      false
+    end
+
+    def use_for?(*_args, **_kwargs)
+      false
+    end
+
+    def inherited_sandbox?
+      false
+    end
+
+    def state
+      nil
+    end
+
+    def failure_reason
+      nil
+    end
+
+    def reset_state!
+      nil
+    end
+
+    def with_preserved_brew_file
+      yield if block_given?
+    end
+
+    def run_or_fork(*_args, **_kwargs, &block)
+      block.nil? ? nil : block.call
+    end
+  end
+end
+
 module Superenv
   def self.shims_path
     HOMEBREW_PREFIX/"shims"
