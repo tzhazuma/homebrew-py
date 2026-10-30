@@ -721,6 +721,30 @@ class ServiceManager:
         lines += ["", "[Install]", "WantedBy=default.target", ""]
         return "\n".join(lines) + "\n"
 
+    def socket_path(self, formula: Formula) -> Path:
+        return self.directory / f"{self.label(formula)}.socket"
+
+    def socket_text(self, formula: Formula, spec: ServiceSpec) -> str:
+        if not spec.sockets:
+            raise ServiceError(f"{formula.name} service does not define sockets")
+        lines = [
+            "[Unit]",
+            f"Description={formula.name} (pybrew) socket",
+            "",
+            "[Socket]",
+        ]
+        for info in spec.sockets.values():
+            directive = "ListenDatagram" if info.get("type") == "udp" else "ListenStream"
+            lines.append(f"{directive}={info.get('host', '')}:{info.get('port', '')}")
+        lines += ["", "[Install]", "WantedBy=sockets.target", ""]
+        return "\n".join(lines)
+
+    def write_socket(self, formula: Formula, spec: ServiceSpec) -> Path:
+        self.directory.mkdir(parents=True, exist_ok=True)
+        path = self.socket_path(formula)
+        path.write_text(self.socket_text(formula, spec))
+        return path
+
     def timer_path(self, formula: Formula) -> Path:
         return self.directory / f"{self.label(formula)}.timer"
 
@@ -819,9 +843,13 @@ class ServiceManager:
             path = self.write_unit(formula, spec)
             if spec.cron:
                 self.write_timer(formula, spec)
+            if spec.sockets:
+                self.write_socket(formula, spec)
             self.runner.daemon_reload()
             if spec.cron:
                 self.runner.start(f"{self.label(formula)}.timer")
+            elif spec.sockets:
+                self.runner.start(f"{self.label(formula)}.socket")
             else:
                 self.runner.start(f"{self.label(formula)}.service")
         else:
@@ -837,6 +865,9 @@ class ServiceManager:
             timer = self.timer_path(formula)
             if timer.exists():
                 self.runner.stop(f"{self.label(formula)}.timer")
+            socket = self.socket_path(formula)
+            if socket.exists():
+                self.runner.stop(f"{self.label(formula)}.socket")
             self.runner.stop(f"{self.label(formula)}.service")
         else:
             self.runner.stop(self.label(formula), path)
@@ -853,6 +884,9 @@ class ServiceManager:
                 timer = self.timer_path(formula)
                 if timer.exists():
                     self.runner.stop(f"{self.label(formula)}.timer")
+                socket = self.socket_path(formula)
+                if socket.exists():
+                    self.runner.stop(f"{self.label(formula)}.socket")
                 self.runner.stop(f"{self.label(formula)}.service")
             else:
                 self.runner.stop(self.label(formula), path)
@@ -860,6 +894,9 @@ class ServiceManager:
             timer = self.timer_path(formula)
             if timer.exists():
                 timer.unlink()
+            socket = self.socket_path(formula)
+            if socket.exists():
+                socket.unlink()
 
     def status(self, formula: Formula) -> str:
         path = self.unit_path(formula) if self.backend == "systemd" else self.plist_path(formula)
@@ -882,7 +919,7 @@ class ServiceManager:
             name = path.name
             if not (
                 name.startswith("homebrew.mxcl.")
-                and name.endswith((".plist", ".service", ".timer"))
+                and name.endswith((".plist", ".service", ".timer", ".socket"))
             ):
                 continue
             formula_name = name[len("homebrew.mxcl.") :].rsplit(".", 1)[0]

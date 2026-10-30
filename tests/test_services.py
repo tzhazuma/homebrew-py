@@ -632,3 +632,20 @@ def test_systemd_cron_timer(
     path = manager.write_timer(formula, spec)
     assert path == manager.timer_path(formula)
     assert path.is_file()
+
+
+def test_systemd_socket_unit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula_with_service(
+        'run [opt_bin/"svc"]\nsockets "tcp://127.0.0.1:8080"'
+    )
+    manager, _ = _systemd_manager(tmp_path, monkeypatch, config)
+    spec = manager.spec_for(formula)
+    text = manager.socket_text(formula, spec)
+    assert "ListenStream=127.0.0.1:8080" in text
+    assert "WantedBy=sockets.target" in text
+    path = manager.write_socket(formula, spec)
+    assert path == manager.socket_path(formula)
+    assert path.is_file()
