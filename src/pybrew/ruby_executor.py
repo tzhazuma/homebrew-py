@@ -3960,6 +3960,24 @@ class Keg
     true
   end
 
+  def uninstall(raise_failures: false)
+    return false unless @path.directory?
+
+    unlink
+    FileUtils.rm_rf(@path.to_s)
+    rack = @path.parent
+    begin
+      rack.rmdir if rack.directory? && rack.children.empty?
+    rescue StandardError
+      nil
+    end
+    true
+  rescue StandardError
+    raise if raise_failures
+
+    false
+  end
+
   def unlink
     removed = false
     LINK_DIRS.each do |directory|
@@ -4279,6 +4297,24 @@ class Tab
     JSON.generate(@data, *args)
   end
 
+  def tap
+    value = @data["tap"]
+    value = @data.dig("source", "tap") if value.nil? && @data["source"].is_a?(Hash)
+    value
+  end
+
+  def tap=(value)
+    @data["tap"] = value
+  end
+
+  def write
+    return false if @tabfile.nil?
+
+    @tabfile.dirname.mkpath
+    @tabfile.write(JSON.pretty_generate(@data) + "\n")
+    true
+  end
+
   def installed_on_request?
     value = @data["installed_on_request"]
     return !!value unless value.nil?
@@ -4533,11 +4569,11 @@ end
 module Formulary
   module_function
 
-  def factory(name)
+  def factory(name, *_args, **_kwargs)
     Formula[name]
   end
 
-  def resolve(name)
+  def resolve(name, *_args, **_kwargs)
     Formula[name]
   end
 
@@ -4553,7 +4589,7 @@ module Formulary
     class_name
   end
 
-  def from_rack(rack)
+  def from_rack(rack, *_args, **_kwargs)
     keg = Keg.from_rack(rack)
     factory(keg.nil? ? Pathname.new(rack.to_s).basename.to_s : keg.name)
   end

@@ -2969,3 +2969,42 @@ def test_keg_introspection_helpers(
         "false",
         "false",
     ]
+
+
+def test_formulary_keywords_tab_write_and_keg_uninstall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-misc2",
+        "1.0",
+        (
+            '  ref = Formula["ruby-misc2"]\n'
+            '  factory = Formulary.factory("ruby-misc2", :stable, from: :api, warn: false)\n'
+            '  resolved = Formulary.resolve("ruby-misc2", :stable)\n'
+            '  tabfile = prefix/"tab.json"\n'
+            '  tab = Tab.new({"tap" => "homebrew/core", "source" => {"tap" => "ignored"}}, tabfile)\n'
+            '  tab["installed_on_request"] = true\n'
+            '  written = tab.write\n'
+            '  keg_path = Pathname.new(ENV["HOMEBREW_CELLAR"])/"ruby-misc2/0.9"\n'
+            '  (keg_path/"bin").mkpath\n'
+            '  (keg_path/"bin"/"old").write "old"\n'
+            '  removed = Keg.new(keg_path).uninstall\n'
+            '  (prefix/"misc2.txt").write [\n'
+            '    factory.name, resolved.name, tab.tap, written.to_s,\n'
+            '    tabfile.file?.to_s, JSON.parse(tabfile.read)["tap"],\n'
+            '    removed.to_s, keg_path.exist?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "misc2.txt").read_text().splitlines() == [
+        "ruby-misc2",
+        "ruby-misc2",
+        "homebrew/core",
+        "true",
+        "true",
+        "homebrew/core",
+        "true",
+        "false",
+    ]
