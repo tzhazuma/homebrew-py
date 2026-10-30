@@ -2415,7 +2415,10 @@ class PybrewFormulaRef
   end
 
   def outdated_kegs(*_args, **_kwargs)
-    []
+    current = pkg_version
+    return [] if current.nil?
+
+    installed_kegs.reject { |keg| keg.version.to_s == current.to_s }
   end
 
   def plist_name
@@ -2860,7 +2863,15 @@ class PybrewFormulaRef
   end
 
   def outdated?(*_args)
-    false
+    !outdated_kegs.empty?
+  end
+
+  def post_install?
+    !!@info["post_install?"]
+  end
+
+  def fetch?
+    !!@info["fetch?"]
   end
 
   def tap_path

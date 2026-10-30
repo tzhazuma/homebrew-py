@@ -2641,3 +2641,34 @@ def test_formula_to_hash_metadata(
     assert data["post_install_defined"] is False
     variations = json.loads((keg / "variations.json").read_text())
     assert variations["variations"] == {}
+
+
+def test_formula_outdated_kegs_and_defined_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-outdated",
+        "1.0",
+        (
+            '  ref = Formula["ruby-outdated"]\n'
+            '  (prefix/"outdated.txt").write [\n'
+            '    ref.post_install?.to_s,\n'
+            '    ref.fetch?.to_s,\n'
+            '    ref.outdated_kegs.map { |keg| keg.version }.join(","),\n'
+            '    ref.outdated?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.post_install_source = "puts 1"
+    formula.fetch_source = "system true"
+    config = _config(tmp_path)
+    (config.cellar / "ruby-outdated" / "0.9").mkdir(parents=True)
+    (config.cellar / "ruby-outdated" / "1.0").mkdir(parents=True)
+    keg = _build(tmp_path, formula)
+    assert (keg / "outdated.txt").read_text().splitlines() == [
+        "true",
+        "true",
+        "0.9",
+        "true",
+    ]
