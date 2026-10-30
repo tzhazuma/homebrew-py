@@ -3008,3 +3008,40 @@ def test_formulary_keywords_tab_write_and_keg_uninstall(
         "true",
         "false",
     ]
+
+
+def test_tab_class_methods(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-tabfile",
+        "1.0",
+        (
+            '  tabfile = prefix/"receipt.json"\n'
+            '  tabfile.write JSON.generate({\n'
+            '    "homebrew_version" => "5.0.0",\n'
+            '    "installed_on_request" => true,\n'
+            '    "source" => {"tap" => "homebrew/core"}\n'
+            '  })\n'
+            '  tab = Tab.from_file(tabfile)\n'
+            '  other = Tab.from_file_content(tabfile.read)\n'
+            '  (prefix/"tabfile.txt").write [\n'
+            '    tab.homebrew_version,\n'
+            '    tab.parsed_homebrew_version.to_s,\n'
+            '    tab.installed_on_request_present?.to_s,\n'
+            '    tab.installed_on_request?.to_s,\n'
+            '    other.tap,\n'
+            '    Formula["ruby-tabfile"].on_system_blocks_exist?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "tabfile.txt").read_text().splitlines() == [
+        "5.0.0",
+        "5.0.0",
+        "true",
+        "true",
+        "homebrew/core",
+        "false",
+    ]

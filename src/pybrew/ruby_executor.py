@@ -3604,6 +3604,10 @@ class PybrewFormulaRef
     logs
   end
 
+  def on_system_blocks_exist?
+    false
+  end
+
   def with_logging(*_args, &block)
     block.call if block
   end
@@ -4253,6 +4257,20 @@ class Tab
     new({})
   end
 
+  def self.from_file(path)
+    path = Pathname.new(path.to_s)
+    return empty unless path.file?
+
+    from_file_content(path.read, path)
+  end
+
+  def self.from_file_content(content, path = nil)
+    data = JSON.parse(content.to_s)
+    new(data, path)
+  rescue StandardError
+    new({}, path)
+  end
+
   def self.for_keg(keg)
     keg = Keg.new(keg) unless keg.is_a?(Keg)
     tabfile = keg.path/"INSTALL_RECEIPT.json"
@@ -4313,6 +4331,19 @@ class Tab
     @tabfile.dirname.mkpath
     @tabfile.write(JSON.pretty_generate(@data) + "\n")
     true
+  end
+
+  def installed_on_request_present?
+    @data.key?("installed_on_request")
+  end
+
+  def homebrew_version
+    @data["homebrew_version"]
+  end
+
+  def parsed_homebrew_version
+    value = homebrew_version
+    value.nil? ? nil : PybrewVersion.new(value.to_s)
   end
 
   def installed_on_request?
