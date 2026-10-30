@@ -2530,3 +2530,59 @@ def test_formulary_from_rack_and_class_names(
         "ruby-rack",
         "false",
     ]
+
+
+def test_formula_livecheck_object(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-livecheck",
+        "1.0",
+        (
+            '  ref = Formula["ruby-livecheck"]\n'
+            '  (prefix/"livecheck.txt").write [\n'
+            '    ref.livecheck.url,\n'
+            '    ref.livecheck.regex.source,\n'
+            '    ref.livecheck.strategy.to_s,\n'
+            '    ref.livecheck.skip?.to_s,\n'
+            '    ref.livecheck.skip_reason,\n'
+            '    ref.livecheck.to_s,\n'
+            '    ref.livecheck_source.include?("regex").to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.livecheck_source = (
+        '  url "https://example.com/downloads/"\n'
+        '  regex(/v?(\\d+(?:\\.\\d+)+)/i)\n'
+        '  strategy :page_match\n'
+        '  skip "not supported"\n'
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "livecheck.txt").read_text().splitlines() == [
+        "https://example.com/downloads/",
+        r"v?(\d+(?:\.\d+)+)",
+        "page_match",
+        "true",
+        "not supported",
+        "https://example.com/downloads/",
+        "true",
+    ]
+
+
+def test_formula_livecheck_symbol_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-livecheck-symbol",
+        "1.0",
+        (
+            '  ref = Formula["ruby-livecheck-symbol"]\n'
+            '  (prefix/"livecheck.txt").write ref.livecheck.url\n'
+        ),
+    )
+    formula.stable = SourceSpec(url="https://example.com/stable.tar.gz")
+    formula.livecheck_source = "  url :stable\n  regex(/v(\\d+)/)\n"
+    keg = _build(tmp_path, formula)
+    assert (keg / "livecheck.txt").read_text() == "https://example.com/stable.tar.gz"

@@ -3089,6 +3089,11 @@ class PybrewFormulaRef
     @info["test_source"].to_s
   end
 
+  def livecheck
+    data = @info["livecheck"]
+    data.nil? ? nil : PybrewLivecheck.new(data)
+  end
+
   def livecheck_source
     @info["livecheck_source"].to_s
   end
@@ -3474,6 +3479,38 @@ class PybrewFormulaRef
 
   def skip_clean(*args)
     @info["skip_clean"] || []
+  end
+end
+
+class PybrewLivecheck
+  attr_reader :url, :regex, :strategy
+
+  def initialize(data)
+    @data = data || {}
+    @url = @data["url"]
+    @regex = @data["regex"].nil? ? nil : Regexp.new(@data["regex"].to_s)
+    raw_strategy = @data["strategy"]
+    @strategy = raw_strategy.nil? ? nil : raw_strategy.to_sym
+  end
+
+  def skip?
+    !!@data["skip"]
+  end
+
+  def skip_reason
+    @data["skip"].is_a?(String) ? @data["skip"] : nil
+  end
+
+  def source
+    @data["source"].to_s
+  end
+
+  def to_s
+    url.nil? ? source : url.to_s
+  end
+
+  def inspect
+    "#<PybrewLivecheck #{self}>"
   end
 end
 
@@ -4731,6 +4768,52 @@ def _service_metadata(formula: Formula, config: Config) -> Optional[dict[str, An
     }
 
 
+def _livecheck_metadata(formula: Formula) -> Optional[dict[str, Any]]:
+    """Parse the common literal ``livecheck do ... end`` directives."""
+    source = formula.livecheck_source or ""
+    if not source.strip():
+        return None
+
+    data: dict[str, Any] = {
+        "source": source,
+        "url": None,
+        "regex": None,
+        "strategy": None,
+        "skip": None,
+    }
+    url_match = re.search(
+        r"^\s*url\s+(?:\"([^\"]+)\"|'([^']+)'|:(\w+))", source, re.MULTILINE
+    )
+    if url_match is not None:
+        if url_match.group(1) is not None:
+            data["url"] = url_match.group(1)
+        elif url_match.group(2) is not None:
+            data["url"] = url_match.group(2)
+        else:
+            symbol = url_match.group(3)
+            spec = formula.stable if symbol == "stable" else formula.head if symbol == "head" else None
+            data["url"] = getattr(spec, "url", None)
+
+    regex_match = re.search(
+        r"^\s*regex\s*\(?\s*/(.+?)/[a-z]*\s*\)?\s*$", source, re.MULTILINE
+    )
+    if regex_match is None:
+        regex_match = re.search(
+            r"^\s*regex\s*\(?\s*[\"'](.+?)[\"']\s*\)?", source, re.MULTILINE
+        )
+    if regex_match is not None:
+        data["regex"] = regex_match.group(1)
+
+    strategy_match = re.search(r"^\s*strategy\s+:(\w+)", source, re.MULTILINE)
+    if strategy_match is not None:
+        data["strategy"] = strategy_match.group(1)
+
+    skip_match = re.search(r"^\s*skip\b(?:\s+\"([^\"]*)\")?", source, re.MULTILINE)
+    if skip_match is not None:
+        data["skip"] = skip_match.group(1) if skip_match.group(1) is not None else True
+    return data
+
+
 def _formula_reference_map(
     formula: Formula, config: Config, keg: Path
 ) -> dict[str, dict[str, Any]]:
@@ -4812,6 +4895,7 @@ def _formula_reference_map(
         "post_install?": bool(formula.post_install_source),
         "fetch?": bool(formula.fetch_source),
         "livecheck?": bool(formula.livecheck_source),
+        "livecheck": _livecheck_metadata(formula),
         "service": _service_metadata(formula, config),
         "service?": bool(
             isinstance(formula.service, dict) and formula.service.get("source")
