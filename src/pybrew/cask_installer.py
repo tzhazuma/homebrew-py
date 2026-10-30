@@ -1030,15 +1030,19 @@ class CaskInstaller:
         return [str(item) for item in values if str(item)]
 
     def _check_os_dependency(self, cask: Cask) -> None:
-        if cask.os.get("macos") and not sys.platform.startswith("darwin"):
-            raise CaskError(f"{cask.token} is only available on macOS")
+        if cask.os.get("macos"):
+            if not sys.platform.startswith("darwin"):
+                raise CaskError(f"{cask.token} is only available on macOS")
+            self._check_macos_requirement(cask, cask.os["macos"])
         if cask.os.get("linux") and not sys.platform.startswith("linux"):
             raise CaskError(f"{cask.token} is only available on Linux")
 
     def _check_macos_dependency(self, cask: Cask) -> None:
         value = cask.depends_on.get("macos")
-        if value is None:
-            return
+        if value is not None:
+            self._check_macos_requirement(cask, value)
+
+    def _check_macos_requirement(self, cask: Cask, value: Any) -> None:
         requirements = value if isinstance(value, list) else [value]
         current = (os.environ.get("PYBREW_MACOS_VERSION") or platform.mac_ver()[0]).strip()
         if current in ("", "0"):

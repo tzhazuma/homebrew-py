@@ -852,3 +852,32 @@ end
     monkeypatch.setattr("pybrew.cask_installer.sys.platform", "linux")
     with pytest.raises(CaskError, match="only available on macOS"):
         installer.install(CaskLoader(discover_taps([tap])).load("osy"))
+
+
+def test_cask_os_macos_version_is_enforced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "o" / "osver.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        '''cask "osver" do
+  version "1.0"
+  stage_only true
+  os macos: ">= :sequoia"
+end
+'''
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    monkeypatch.setattr("pybrew.cask_installer.sys.platform", "darwin")
+    monkeypatch.setenv("PYBREW_MACOS_VERSION", "14.0")
+    with pytest.raises(CaskError, match="requires macOS"):
+        installer.install(CaskLoader(discover_taps([tap])).load("osver"))

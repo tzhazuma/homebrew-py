@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-529 passed, 5 skipped in 284.05s (one hdiutil-backed cask test was slow)
+530 passed, 5 skipped in 76.83s
 ```
 
 Breakdown of the feature slices:
@@ -33,7 +33,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_real_formulas.py
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_bottles.py
 10 passed
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test_cask_ruby.py
-71 passed      # cask base + Ruby evaluator + artifacts + uninstall actions + os
+72 passed      # cask base + Ruby evaluator + artifacts + uninstall actions + os versions
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
@@ -708,6 +708,11 @@ local remote, commits a change, and confirms the CLI updates it.
 
 - Added log/sandbox/fixture/rpath/link-overwrite/completion/spec helpers and
   several no-op metadata methods used by formula code.
+
+## Cask os macOS versions
+
+- `os macos:` now also enforces version constraints (`>= :sequoia`, etc.) when
+  running on macOS, not just the platform.
 
 ## Final parallel batch
 
