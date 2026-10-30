@@ -3170,3 +3170,48 @@ def test_formula_shell_and_source_helpers(
         "true",
         "true",
     ]
+
+
+def test_keg_record_and_class_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-kegrec",
+        "1.0",
+        (
+            '  keg_path = Pathname.new(ENV["HOMEBREW_CELLAR"])/"ruby-kegrec/1.0"\n'
+            '  (keg_path/"bin").mkpath\n'
+            '  (keg_path/"bin"/"ruby-kegrec").write "#!/bin/sh\\n"\n'
+            '  keep = Pathname.new(ENV["HOMEBREW_PREFIX"])/"keepme-target"\n'
+            '  keep.write "x"\n'
+            '  (keg_path/".keepme").write "#{keep}\\n/does/not/exist\\n"\n'
+            '  keg = Keg.new(keg_path)\n'
+            '  old_record = Pathname.new(ENV["HOMEBREW_PREFIX"])/"opt/ruby-kegrec-old"\n'
+            '  old_record.dirname.mkpath\n'
+            '  old_record.make_relative_symlink(keg_path)\n'
+            '  keg.link\n'
+            '  old_names = keg.oldname_opt_records.map { |path| path.basename.to_s }.join(",")\n'
+            '  keg.remove_oldname_opt_records\n'
+            '  removed_opt = keg.remove_opt_record\n'
+            '  (prefix/"kegrec.txt").write [\n'
+            '    Keg.keg_link_directories.include?("bin").to_s,\n'
+            '    Keg.must_exist_subdirectories.map(&:basename).map(&:to_s).include?("opt").to_s,\n'
+            '    keg.keepme_refs.length.to_s,\n'
+            '    old_names,\n'
+            '    old_record.symlink?.to_s,\n'
+            '    removed_opt.to_s,\n'
+            '    keg.optlink.symlink?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "kegrec.txt").read_text().splitlines() == [
+        "true",
+        "true",
+        "1",
+        "ruby-kegrec-old",
+        "false",
+        "true",
+        "false",
+    ]

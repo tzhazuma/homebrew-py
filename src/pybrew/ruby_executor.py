@@ -3962,8 +3962,28 @@ end
 
 class Keg
   LINK_DIRS = %w[bin etc include lib sbin share var].freeze
+  KEEPME_FILE = ".keepme"
 
   attr_reader :path
+
+  def self.keg_link_directories
+    LINK_DIRS
+  end
+
+  def self.must_exist_subdirectories
+    (LINK_DIRS - ["var"] + ["opt", "var/homebrew/linked"])
+      .map { |dir| HOMEBREW_PREFIX/dir }
+      .sort
+      .uniq
+  end
+
+  def self.must_exist_directories
+    (must_exist_subdirectories + [HOMEBREW_CELLAR]).sort.uniq
+  end
+
+  def self.must_be_writable_directories
+    must_exist_subdirectories
+  end
 
   def self.for(path)
     original = Pathname.new(path.to_s)
@@ -4124,6 +4144,74 @@ class Keg
       removed = true
     end
     removed
+  end
+
+  def keepme_refs
+    keepme = @path/KEEPME_FILE
+    return [] unless keepme.file? && keepme.readable?
+
+    keepme.readlines.map(&:strip).reject(&:empty?).select { |ref| File.exist?(ref) }
+  end
+
+  def binary_executable_or_library_files
+    []
+  end
+
+  def codesign_patched_binary(_file)
+    nil
+  end
+
+  def codesign_patched_binaries(_files)
+    nil
+  end
+
+  def remove_opt_record
+    return false unless File.symlink?(optlink.to_s)
+
+    optlink.unlink
+    begin
+      optlink.dirname.rmdir if optlink.dirname.directory? && optlink.dirname.children.empty?
+    rescue StandardError
+      nil
+    end
+    true
+  end
+
+  def remove_linked_keg_record
+    record = homebrew_prefix/"var/homebrew/linked"/name
+    return false unless File.symlink?(record.to_s)
+
+    record.unlink
+    begin
+      record.dirname.rmdir if record.dirname.directory? && record.dirname.children.empty?
+    rescue StandardError
+      nil
+    end
+    true
+  end
+
+  def oldname_opt_records
+    opt_dir = homebrew_prefix/"opt"
+    return [] unless opt_dir.directory?
+
+    opt_dir.children.select do |entry|
+      entry.symlink? && entry != optlink && entry.realpath.parent == @path.parent.realpath
+    end
+  rescue StandardError
+    []
+  end
+
+  def remove_oldname_opt_records
+    oldname_opt_records.each do |record|
+      record.unlink if record.realpath == @path.realpath
+    rescue StandardError
+      nil
+    end
+    nil
+  end
+
+  def remove_old_aliases(versioned_aliases: aliases)
+    nil
   end
 
   def link_dir(relative_dir, verbose: false, dry_run: false, overwrite: false, &_block)
