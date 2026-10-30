@@ -1040,9 +1040,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `fcf7356` (Sandbox compatibility module)
-- CI run for `fcf7356`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41014378326>
+- Latest feature commit: `979c987` (Utils::Path helpers)
+- CI run for `979c987`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41014912922>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
