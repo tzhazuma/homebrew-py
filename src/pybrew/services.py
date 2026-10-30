@@ -438,11 +438,10 @@ def _parse_cron(value: Any) -> dict[str, Any]:
 
 def _apply_service_directive(spec: ServiceSpec, name: str, args: list[Any]) -> None:
     if name == "run":
-        value = args[0] if args else []
-        if isinstance(value, list):
-            spec.run = [str(item) for item in value]
-        elif value is not None and value != "":
-            spec.run = [str(value)]
+        if len(args) == 1 and isinstance(args[0], list):
+            spec.run = [str(item) for item in args[0]]
+        elif args:
+            spec.run = [str(item) for item in args if item is not None and str(item) != ""]
     elif name == "working_dir" and args:
         spec.working_dir = str(args[0])
     elif name == "log_path" and args:

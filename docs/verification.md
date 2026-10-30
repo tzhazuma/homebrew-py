@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-528 passed, 5 skipped in 65.76s
+528 passed, 5 skipped in 75.17s
 ```
 
 Breakdown of the feature slices:
@@ -698,6 +698,11 @@ local remote, commits a change, and confirms the CLI updates it.
 
 - The arbitrary-Ruby cask evaluator now maps `os` to `Cask.os` so the same
   platform enforcement applies in both parser modes.
+
+## Service run argument fix
+
+- The literal service parser now keeps all `run` arguments (`run "x", "--flag"`)
+  instead of only the first.
 
 ## Final parallel batch
 

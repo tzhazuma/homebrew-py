@@ -2119,7 +2119,7 @@ def test_formula_service_ref(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     keg = _build(tmp_path, formula)
     lines = (keg / "serviceref").read_text().splitlines()
     assert lines[0] == "true"
-    assert lines[1] == "ruby-service-ref"
+    assert lines[1] == "ruby-service-ref,--foreground"
     assert lines[2] == "bar"
     assert lines[3] == "true"
 
