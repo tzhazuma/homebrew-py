@@ -3480,6 +3480,17 @@ end
 class Keg
   attr_reader :path
 
+  def self.from_rack(rack)
+    rack = Pathname.new(rack.to_s)
+    return nil unless rack.directory?
+
+    kegs = rack.children.select { |child| child.directory? }.map { |child| new(child) }
+    return nil if kegs.empty?
+
+    kegs.find(&:linked?) || kegs.find(&:optlinked?) ||
+      kegs.max_by { |keg| PybrewFormulaRef.version_key(keg.basename.to_s) }
+  end
+
   def initialize(path)
     @path = Pathname.new(path.to_s)
   end
@@ -3975,7 +3986,34 @@ module Formulary
   end
 
   def class_s(name)
-    name.to_s.split(/[-_.@]/).map { |part| part.capitalize }.join
+    class_name = name.to_s.capitalize
+    class_name.gsub!(/[-_.\s][a-zA-Z0-9]/) { |matched| matched.chars.fetch(-1).upcase }
+    class_name.tr!("+", "x")
+    class_name.sub!(/(.)@(\d)/, "\\1AT\\2")
+    class_name
+  end
+
+  def from_rack(rack)
+    keg = Keg.from_rack(rack)
+    factory(keg.nil? ? Pathname.new(rack.to_s).basename.to_s : keg.name)
+  end
+
+  def keg_only?(rack)
+    factory(Pathname.new(rack.to_s).basename.to_s).keg_only?
+  rescue StandardError
+    false
+  end
+
+  def clear_cache
+    nil
+  end
+
+  def factory_cached?
+    false
+  end
+
+  def enable_factory_cache!
+    nil
   end
 end
 

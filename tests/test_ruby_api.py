@@ -2495,3 +2495,38 @@ def test_system_config_helpers(
     )
     keg = _build(tmp_path, formula)
     assert (keg / "config.txt").read_text().splitlines() == ["true"] * 8
+
+
+def test_formulary_from_rack_and_class_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-rack",
+        "1.0",
+        (
+            '  rack = Pathname.new(ENV["HOMEBREW_CELLAR"])/"ruby-rack"\n'
+            '  keg = Keg.from_rack(rack)\n'
+            '  ref = Formulary.from_rack(rack)\n'
+            '  (prefix/"rack.txt").write [\n'
+            '    Formulary.class_s("foo-bar"), Formulary.class_s("foo@1.2"),\n'
+            '    Formulary.class_s("libxml2"), Formulary.class_s("c++"),\n'
+            '    keg.name, keg.version, ref.name,\n'
+            '    Formulary.keg_only?(rack).to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    config = _config(tmp_path)
+    for version in ("1.0", "2.0"):
+        (config.cellar / "ruby-rack" / version).mkdir(parents=True)
+    keg = _build(tmp_path, formula)
+    assert (keg / "rack.txt").read_text().splitlines() == [
+        "FooBar",
+        "FooAT12",
+        "Libxml2",
+        "Cxx",
+        "ruby-rack",
+        "2.0",
+        "ruby-rack",
+        "false",
+    ]
