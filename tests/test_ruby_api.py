@@ -2586,3 +2586,58 @@ def test_formula_livecheck_symbol_url(
     formula.livecheck_source = "  url :stable\n  regex(/v(\\d+)/)\n"
     keg = _build(tmp_path, formula)
     assert (keg / "livecheck.txt").read_text() == "https://example.com/stable.tar.gz"
+
+
+def test_formula_to_hash_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-hash",
+        "1.0",
+        (
+            '  ref = Formula["ruby-hash"]\n'
+            '  (prefix/"hash.json").write JSON.generate(ref.to_hash)\n'
+            '  (prefix/"variations.json").write JSON.generate(ref.to_hash_with_variations)\n'
+        ),
+    )
+    formula.desc = "Hash fixture"
+    formula.homepage = "https://example.com/ruby-hash"
+    formula.license = "MIT"
+    formula.aliases = ["ruby-hash-alias"]
+    formula.oldname = "ruby-hash-old"
+    formula.options = ["--with-x"]
+    formula.stable = SourceSpec(
+        url="https://example.com/ruby-hash-1.0.tar.gz", sha256="b" * 64
+    )
+    formula.bottle.root_url = "https://example.com/bottles"
+    formula.bottle.files["sonoma"] = BottleFile(
+        tag="sonoma", sha256="a" * 64, cellar=":any"
+    )
+    formula.caveats = '  "caveat text"\n'
+    config = _config(tmp_path)
+    installed = config.cellar / "ruby-hash" / "1.0"
+    installed.mkdir(parents=True)
+    (installed / "INSTALL_RECEIPT.json").write_text(
+        json.dumps({"installed_on_request": True, "time": 123})
+    )
+    keg = _build(tmp_path, formula)
+    data = json.loads((keg / "hash.json").read_text())
+    assert data["name"] == "ruby-hash"
+    assert data["desc"] == "Hash fixture"
+    assert data["homepage"] == "https://example.com/ruby-hash"
+    assert data["license"] == "MIT"
+    assert data["aliases"] == ["ruby-hash-alias"]
+    assert data["oldnames"] == ["ruby-hash-old"]
+    assert data["versions"]["stable"] == "1.0"
+    assert data["versions"]["bottle"] is True
+    assert data["urls"]["stable"]["url"] == "https://example.com/ruby-hash-1.0.tar.gz"
+    assert data["bottle"]["stable"]["files"]["sonoma"]["sha256"] == "a" * 64
+    assert data["options"] == ["--with-x"]
+    assert data["installed"][0]["version"] == "1.0"
+    assert data["installed"][0]["time"] == 123
+    assert data["caveats"] == "caveat text"
+    assert data["keg_only"] is False
+    assert data["post_install_defined"] is False
+    variations = json.loads((keg / "variations.json").read_text())
+    assert variations["variations"] == {}

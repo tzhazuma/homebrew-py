@@ -2232,6 +2232,10 @@ class PybrewServiceRef
     @info["source"].to_s
   end
 
+  def to_hash
+    @info.dup
+  end
+
   def run
     Array(@info["run"])
   end
@@ -3258,15 +3262,109 @@ class PybrewFormulaRef
   end
 
   def urls_hash
-    {}
+    result = {}
+    stable_info = @info["stable"] || {}
+    unless stable_info["url"].to_s.empty?
+      result["stable"] = {
+        "url" => stable_info["url"],
+        "tag" => stable_info["tag"],
+        "revision" => stable_info["revision"],
+        "checksum" => stable_info["sha256"],
+      }
+    end
+    head_info = @info["head"] || {}
+    unless head_info["url"].to_s.empty?
+      result["head"] = {
+        "url" => head_info["url"],
+        "tag" => head_info["tag"],
+        "revision" => head_info["revision"],
+        "checksum" => head_info["sha256"],
+      }
+    end
+    result
   end
 
   def bottle_hash
-    {}
+    bottle = @info["bottle"] || {}
+    files = bottle["files"] || {}
+    return {} if files.empty?
+
+    {
+      "rebuild" => bottle["rebuild"] || 0,
+      "root_url" => bottle["root_url"],
+      "files" => files.each_with_object({}) do |(tag, info), result|
+        result[tag] = {
+          "cellar" => info["cellar"],
+          "sha256" => info["sha256"],
+        }
+      end,
+    }
   end
 
   def to_hash
-    {}
+    caveats_text = begin
+      caveats
+    rescue StandardError
+      @info["caveats_source"].to_s
+    end
+    {
+      "name" => name,
+      "full_name" => full_name,
+      "tap" => tap,
+      "oldnames" => oldnames,
+      "aliases" => aliases,
+      "versioned_formulae" => versioned_formulae.map(&:name),
+      "desc" => desc,
+      "license" => license,
+      "homepage" => homepage,
+      "versions" => {
+        "stable" => stable? ? version.to_s : nil,
+        "head" => head? ? "HEAD" : nil,
+        "bottle" => bottle?,
+      },
+      "urls" => urls_hash,
+      "revision" => revision,
+      "version_scheme" => version_scheme,
+      "bottle" => { "stable" => bottle_hash },
+      "keg_only" => keg_only?,
+      "keg_only_reason" => keg_only_reason,
+      "options" => options,
+      "build_dependencies" => build_dependencies.map(&:name),
+      "dependencies" => deps.map(&:name),
+      "test_dependencies" => test_dependencies.map(&:name),
+      "recommended_dependencies" => recommended_dependencies.map(&:name),
+      "optional_dependencies" => optional_dependencies.map(&:name),
+      "uses_from_macos" => uses_from_macos.map(&:name),
+      "requirements" => requirements.map(&:name),
+      "conflicts_with" => conflicts_with,
+      "caveats" => caveats_text,
+      "installed" => installed_kegs.map do |keg|
+        tab = keg.tab
+        {
+          "version" => keg.version.to_s,
+          "poured_from_bottle" => tab.poured_from_bottle?,
+          "time" => tab.time,
+          "runtime_dependencies" => tab.runtime_dependencies,
+          "installed_on_request" => tab.installed_on_request?,
+        }
+      end,
+      "linked_keg" => linked_keg,
+      "pinned" => false,
+      "outdated" => outdated?,
+      "deprecated" => deprecated?,
+      "deprecation_reason" => deprecation_reason,
+      "disabled" => disabled?,
+      "disable_reason" => disable_reason,
+      "post_install_defined" => post_install_defined?,
+      "service" => (service.to_hash if service?),
+      "tap_git_head" => tap_git_head,
+      "ruby_source_path" => ruby_source_path,
+      "ruby_source_checksum" => {},
+    }
+  end
+
+  def to_hash_with_variations
+    to_hash.merge("variations" => {})
   end
 
   def freeze
