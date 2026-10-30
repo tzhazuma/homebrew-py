@@ -967,9 +967,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `fd1160c` (Formulary kwargs, Tab write and Keg uninstall)
-- CI run for `fd1160c`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41003029948>
+- Latest feature commit: `26c8483` (Tab class constructors and version metadata)
+- CI run for `26c8483`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41003518025>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
