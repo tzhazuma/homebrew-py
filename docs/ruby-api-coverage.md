@@ -25,10 +25,11 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
 | Superenv | `Superenv.shims_path`, `.bin`, `.enabled_for?` |
 | SystemConfig | `clang`/`clang_build`, `describe_clang`, `describe_homebrew_ruby`, `hardware`, `kernel`, git/curl descriptions, `config_sections`, `homebrew_config`, `homebrew_env_config`, `hardware_config`, `host_software_config`, `dump_tap_config`, `core_tap_config`, `dump_verbose_config`/`dump` |
 | Build helpers | Formula instance + install context: `build.head?/stable?/with?/without?`, `args`, `on_macos`/`on_linux`/`on_arm`/`on_intel`, `std_configure_args`, `std_cmake_args`, `std_meson_args`, `std_cargo_args`, `std_go_args`, `std_pip_args`, `std_npm_args`, `std_shards_args`, `std_swift_args`, `std_zig_args`, `std_cabal_v2_args`, `std_cargo_fetch_args`, `std_go_args`, `python3`, `std_service_path_env` |
-| Test DSL | `shell_output` with expected-status second arg, `pipe_output` with `stderr:`/`env:`/`chdir:` and third positional expected status, `assert_output` block/wildcard/regex forms, `capture_io`/`capture_subprocess_io`, `assert_raises`/`assert_throws`/`assert_silent`, path/file/directory/symlink/executable assertions + refute variants, `assert_equal`/`assert_match`/`assert_predicate`/`assert_empty`/`assert_includes`/`assert_nil`, numeric/same/instance-of assertions, `flunk`/`pass`, dependency `Formula[...]` lookup and expanded path helpers |
+| Test DSL | `shell_output` with expected-status second arg, `pipe_output` with `stderr:`/`env:`/`chdir:` and third positional expected status, `assert_output` block/wildcard/regex forms, `capture_io`/`capture_subprocess_io`, `assert_raises`/`assert_throws`/`assert_silent`, path/file/directory/symlink/executable assertions + refute variants, `assert_equal`/`assert_match`/`assert_predicate`/`assert_empty`/`assert_includes`/`assert_nil`, numeric/same/instance-of assertions, `refute_operator`/`assert_send`/`skip`/pattern assertions/assertion counter, `test_fixtures`, HOMEBREW constants + read-only OS/Hardware/MacOS helpers, dependency `Formula[...]` lookup and expanded path helpers |
 | Cask scripts | opt-in preflight/postflight/uninstall_preflight/uninstall_postflight; command/env/chdir forms; no sudo |
-| Cask DSL | opt-in arbitrary-Ruby evaluator (`PYBREW_ALLOW_CASK_RUBY=1` / `--ruby-cask`): fields, artifacts, platform/arch, language, uninstall/zap, os stanza (both parsers, macOS versions), depends_on (arch/macos/formula/cask enforced), conflicts_with (formula/cask), deprecate!/disable! reasons, no_autobump!, livecheck metadata/source (best-effort), MacOS version/SDK helpers, script-context `system_command` (run! semantics, `must_succeed: false`) and `Utils.popen_read`/`which`; scripts/unknown stanzas recorded, metadata helpers (`autobump?`/`no_autobump_defined?`/`on_*_blocks_exist?`/`depends_on_set_in_block?`/`caveats_object`), `caskroom_path`/`staged_path`/`os_version`/`languages`/`language_groups`/`default_language_group`/`livecheck_defined?` |
+| Cask DSL | opt-in arbitrary-Ruby evaluator (`PYBREW_ALLOW_CASK_RUBY=1` / `--ruby-cask`): fields, artifacts, platform/arch, language, uninstall/zap, os stanza (both parsers, macOS versions), depends_on (arch/macos/formula/cask enforced), conflicts_with (formula/cask), deprecate!/disable! date/reason/replacement metadata, homepage `browsed:`, no_autobump!, livecheck metadata/source (best-effort), MacOS version/SDK helpers, Linux `arm64_linux`/`x86_64_linux` sha256 keys, script-context `system_command` (run! semantics, `must_succeed: false`, `input:`/`timeout:`) and `Utils.popen_read`/`which`/`popen_write`; scripts/unknown stanzas recorded, metadata helpers (`autobump?`/`no_autobump_defined?`/`on_*_blocks_exist?`/`depends_on_set_in_block?`/`caveats_object`), `caskroom_path`/`staged_path`/`os_version`/`languages`/`language_groups`/`default_language_group`/`livecheck_defined?` |
 | Cask caveats | `caveats --cask` and opt-in Ruby `caveats do ... end` block capture: captured block/literal, token/version/appdir/paths, platform blocks |
+| FormulaInstaller | Compatibility surface (`new`, predicates, `compute_dependencies`, `finish`/`prelude`/`fetch`/`build`, `caveats`); `install` raises a clear `NotImplementedError` because pybrew installs through its Python installer |
 | Keg / Tab / Formulary | `Keg.new(path)` with name/version/rack, path helpers, `installed?`, `linked?`/`optlinked?`, `link`/`link_dir`/`unlink` (opt link + file symlinks), `opt_record`, keepme refs, oldname opt records, record removal, `formula`, `tab`, `Keg.for`/`Keg.all`/`Keg.from_rack`, version scheme/aliases/runtime deps, installation introspection, `uninstall`; `Tab.for_keg`/`for_name`/`for_formula`/`from_file`/`from_file_content`, receipt JSON fields/flags (`used_options`/`built_as_bottle?`/request flags), `tap`/`write`, `to_hash`/`to_json`; `Formulary.factory`/`resolve`/`load_formula`/`load_formula_from_path`/`load_formula_from_struct!`/`class_s`/`from_rack`/`keg_only?`/cache no-ops, placeholders/namespace helpers (tolerant of Homebrew kwargs) |
 | Caveats DSL | `pybrew caveats` and `Formula#caveats`: heredocs/strings, platform/arch blocks, paths, `ohai`/`opoo`/`puts`, ENV/Utils |
 | post_install | `post_install do ... end` after install, with paths/Formula/system/Utils/FileUtils |
@@ -41,24 +42,23 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
   with `patch -pN`; some exotic forms remain unsupported. Resource staging is
   limited to archives with `url`+`sha256` and literal `resource("name")` calls
   (dynamic resource iteration stages all).
-- Homebrew internals: full `FormulaInstaller`, compiler selection, actual
+- Homebrew internals: full `FormulaInstaller` behavior (the shim exposes a compatibility surface only), compiler selection, actual
   sandbox execution and GitHub/API/analytics internals. `Superenv`/`Sandbox`
   are compatibility stubs, not build engines.
 - Full `MacOS`/SDK/Xcode/CLT detection, `DevelopmentTools`, `SystemConfig`
   host details.
 - Services: Ruby evaluator mirrors pybrew's literal path helpers rather than
   Homebrew's global-prefix helpers; unknown directives are ignored.
-- Cask: evaluator `sha256` map records only `arm:`/`intel:` (not
-  `arm64_linux:`/`x86_64_linux:`); evaluator does not capture script bodies;
-  livecheck `strategy do ... end`/url kwargs are partial; deprecation/disable
-  dates/replacements and `homepage_browsed` are not captured; script shim has
-  no sudo, `input:`/`timeout:`, `Utils.popen_write`, or caskroom/language/arch
-  delegators.
+- Cask: evaluator does not capture script bodies; livecheck `strategy do ...
+  end`/url kwargs are partial; script shim has no sudo or
+  caskroom/language/arch delegators; date-based deprecation/disable deferral is
+  not implemented.
 - Formula test DSL: dependency test bodies cannot be loaded, arbitrary/
   uninstalled/aliased/tap-qualified Formula lookup is unavailable, version is
-  a String, revision is always 0, HOMEBREW constants and OS/Hardware/MacOS
-  modules are missing, and some Minitest surface (`refute_operator`,
-  `assert_send`, `skip`, pattern assertions) remains.
+  a String, revision is always 0; MacOS helpers omit sdk_path/release_name/
+  pretty_name and OS.version, Hardware features/flags, DevelopmentTools/Xcode;
+  `skip` is treated as a successful skip; pattern assertions depend on the host
+  Ruby version.
 - Any Ruby gem or third-party API used by formulae.
 
 Unknown methods fail loudly through `method_missing`/Ruby errors instead of
