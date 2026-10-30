@@ -2672,3 +2672,37 @@ def test_formula_outdated_kegs_and_defined_flags(
         "0.9",
         "true",
     ]
+
+
+def test_formula_pin_and_unpin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-pin",
+        "1.0",
+        (
+            '  ref = Formula["ruby-pin"]\n'
+            '  (prefix/"pin-before.txt").write [\n'
+            '    ref.pinnable?.to_s, ref.pinned?.to_s\n'
+            '  ].join("\\n")\n'
+            '  ref.pin\n'
+            '  (prefix/"pin-after.txt").write [\n'
+            '    ref.pinned?.to_s, ref.pinned_version.to_s, ref.pin_path.to_s\n'
+            '  ].join("\\n")\n'
+            '  ref.unpin\n'
+            '  (prefix/"pin-unpin.txt").write ref.pinned?.to_s\n'
+        ),
+    )
+    config = _config(tmp_path)
+    (config.cellar / "ruby-pin" / "1.0").mkdir(parents=True)
+    keg = _build(tmp_path, formula)
+    assert (keg / "pin-before.txt").read_text().splitlines() == ["true", "false"]
+    pin_path = config.prefix / "var" / "homebrew" / "pinned" / "ruby-pin"
+    assert (keg / "pin-after.txt").read_text().splitlines() == [
+        "true",
+        "1.0",
+        str(pin_path),
+    ]
+    assert (keg / "pin-unpin.txt").read_text() == "false"
+    assert not pin_path.exists()

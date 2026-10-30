@@ -258,6 +258,7 @@ HOMEBREW_PREFIX = Pathname.new(
 HOMEBREW_CELLAR = Pathname.new(
   PYBREW_CONFIG["cellar"] || ENV["HOMEBREW_CELLAR"] || (HOMEBREW_PREFIX/"Cellar").to_s
 )
+HOMEBREW_PINNED_KEGS = HOMEBREW_PREFIX/"var/homebrew/pinned"
 
 module OS
   def self.mac?
@@ -3006,6 +3007,48 @@ class PybrewFormulaRef
     nil
   end
 
+  def pinned?
+    pin_path.symlink?
+  end
+
+  def pinnable?
+    !installed_prefixes.empty?
+  end
+
+  def pin
+    return nil unless pinnable?
+
+    keg = installed_kegs.max_by { |entry| self.class.version_key(entry.basename.to_s) }
+    return nil if keg.nil?
+
+    pin_path.dirname.mkpath
+    pin_path.make_relative_symlink(keg.prefix) unless pinned?
+    pin_path
+  end
+
+  def unpin
+    pin_path.unlink if pinned?
+    begin
+      directory = pin_path.dirname
+      directory.rmdir if directory.directory? && directory.children.empty?
+    rescue StandardError
+      nil
+    end
+    nil
+  end
+
+  def pinned_version
+    return nil unless pinned?
+
+    PybrewVersion.new(pin_path.realpath.basename.to_s)
+  rescue StandardError
+    nil
+  end
+
+  def pin_path
+    HOMEBREW_PINNED_KEGS/name
+  end
+
   def optlinked?
     !linked_keg.nil?
   end
@@ -3360,7 +3403,7 @@ class PybrewFormulaRef
         }
       end,
       "linked_keg" => linked_keg,
-      "pinned" => false,
+      "pinned" => pinned?,
       "outdated" => outdated?,
       "deprecated" => deprecated?,
       "deprecation_reason" => deprecation_reason,
