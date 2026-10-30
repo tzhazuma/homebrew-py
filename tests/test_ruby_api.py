@@ -2223,7 +2223,7 @@ def test_formula_broad_compatibility_methods(
         (
             '  ref = Formula["ruby-broad"]\n'
             '  (prefix/"broad").write [\n'
-            '    ref.rpath.to_s, ref.common_sandbox_env.empty?.to_s,\n'
+            '    ref.rpath.to_s, ref.common_sandbox_env.key?(:HOME).to_s,\n'
             '    ref.test_fixtures.empty?.to_s, ref.pypi_packages.nil?.to_s,\n'
             '    ref.ruby_source_path.to_s, ref.full_formulae_names.join(","),\n'
             '    ref.specs.empty?.to_s, ref.link_overwrite_reason.nil?.to_s\n'
@@ -3411,3 +3411,33 @@ def test_utils_git_and_curl_helpers(
     )
     keg = _build(tmp_path, formula)
     assert (keg / "utilsgit.txt").read_text().splitlines() == ["true"] * 5
+
+
+def test_formula_sandbox_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-sandboxenv",
+        "1.0",
+        (
+            '  home = prefix/"home"\n'
+            '  home.mkpath\n'
+            '  ref = Formula["ruby-sandboxenv"]\n'
+            '  env = ref.common_sandbox_env(home)\n'
+            '  test_env = ref.test_sandbox_env(home)\n'
+            '  (prefix/"sandboxenv.txt").write [\n'
+            '    env[:HOME], env[:TMPDIR], env[:PIP_CONFIG_FILE],\n'
+            '    env[:XDG_CONFIG_HOME], test_env[:GIT_CONFIG_GLOBAL]\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    home = keg / "home"
+    assert (keg / "sandboxenv.txt").read_text().splitlines() == [
+        str(home),
+        os.environ.get("HOMEBREW_TEMP", "/tmp"),
+        os.devnull,
+        f"{home}/.config",
+        f"{home}/.gitconfig",
+    ]

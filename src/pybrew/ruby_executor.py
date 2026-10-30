@@ -261,6 +261,7 @@ HOMEBREW_CELLAR = Pathname.new(
   PYBREW_CONFIG["cellar"] || ENV["HOMEBREW_CELLAR"] || (HOMEBREW_PREFIX/"Cellar").to_s
 )
 HOMEBREW_PINNED_KEGS = HOMEBREW_PREFIX/"var/homebrew/pinned"
+HOMEBREW_TEMP = Pathname.new(ENV["HOMEBREW_TEMP"] || "/tmp")
 HOMEBREW_PREFIX_PLACEHOLDER = "$HOMEBREW_PREFIX"
 HOMEBREW_CELLAR_PLACEHOLDER = "$HOMEBREW_CELLAR"
 HOMEBREW_HOME_PLACEHOLDER = "$HOMEBREW_HOME"
@@ -3969,12 +3970,27 @@ class PybrewFormulaRef
     block.call if block
   end
 
-  def common_sandbox_env
-    {}
+  def common_sandbox_env(home = Pathname.new(Dir.home))
+    home = Pathname.new(home.to_s)
+    {
+      _JAVA_OPTIONS: "-Djava.io.tmpdir=#{HOMEBREW_TEMP}",
+      HOME: home.to_s,
+      TMPDIR: HOMEBREW_TEMP.to_s,
+      TEMP: HOMEBREW_TEMP.to_s,
+      TMP: HOMEBREW_TEMP.to_s,
+      GIT_TERMINAL_PROMPT: "0",
+      GOENV: "off",
+      BUNDLE_COOLDOWN: "0",
+      PIP_CONFIG_FILE: File::NULL,
+      NPM_CONFIG_USERCONFIG: File::NULL,
+      PYTHONDONTWRITEBYTECODE: "1",
+      XDG_CONFIG_HOME: "#{home}/.config",
+    }
   end
 
-  def test_sandbox_env
-    {}
+  def test_sandbox_env(testpath)
+    path = Pathname.new(testpath.to_s)
+    common_sandbox_env(path).merge(GIT_CONFIG_GLOBAL: (path/".gitconfig").to_s)
   end
 
   def test_fixtures
