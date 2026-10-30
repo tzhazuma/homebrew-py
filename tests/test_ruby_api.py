@@ -2282,3 +2282,120 @@ def test_formula_source_accessors(
     formula.fetch_source = "system true"
     keg = _build(tmp_path, formula)
     assert (keg / "sources").read_text().splitlines() == ["true"] * 5
+
+
+def test_keg_paths_and_optlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-keg",
+        "1.0",
+        (
+            '  keg_path = Pathname.new(ENV["HOMEBREW_CELLAR"])/"ruby-keg/1.0"\n'
+            '  (keg_path/"bin").mkpath\n'
+            '  keg = Keg.new(keg_path)\n'
+            '  linked_before = keg.linked?\n'
+            '  linked = keg.link\n'
+            '  (prefix/"keg.txt").write [\n'
+            '    keg.name, keg.version, keg.rack.basename.to_s,\n'
+            '    keg.bin.to_s, keg.optlink.to_s,\n'
+            '    linked_before.to_s, keg.linked?.to_s, linked.to_s,\n'
+            '    keg.installed?.to_s, (keg == Keg.new(keg_path)).to_s,\n'
+            '    keg.formula.name\n'
+            '  ].join("\\n")\n'
+            '  (prefix/"unlink.txt").write keg.unlink.to_s\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    prefix = tmp_path / "prefix"
+    cellar_keg = prefix / "Cellar" / "ruby-keg" / "1.0"
+    optlink = prefix / "opt" / "ruby-keg"
+    assert (keg / "keg.txt").read_text().splitlines() == [
+        "ruby-keg",
+        "1.0",
+        "ruby-keg",
+        str(cellar_keg / "bin"),
+        str(optlink),
+        "false",
+        "true",
+        "true",
+        "true",
+        "true",
+        "ruby-keg",
+    ]
+    assert (keg / "unlink.txt").read_text() == "true"
+    assert not optlink.exists()
+
+
+def test_tab_receipt_and_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-tab",
+        "1.0",
+        (
+            '  receipt = {\n'
+            '    "installed_on_request" => false,\n'
+            '    "poured_from_bottle" => true,\n'
+            '    "runtime_dependencies" => [{"full_name" => "foo", "version" => "1.0"}],\n'
+            '    "source" => {"path" => "/tmp/foo.rb", "tap" => "homebrew/core"},\n'
+            '    "time" => 123,\n'
+            '    "HEAD" => true\n'
+            '  }\n'
+            '  keg_path = Pathname.new(ENV["HOMEBREW_CELLAR"])/"ruby-tab/1.0"\n'
+            '  keg_path.mkpath\n'
+            '  (keg_path/"INSTALL_RECEIPT.json").write JSON.generate(receipt)\n'
+            '  keg = Keg.new(keg_path)\n'
+            '  tab = Tab.for_keg(keg)\n'
+            '  by_name = Tab.for_name("ruby-tab")\n'
+            '  by_formula = Tab.for_formula(Formula["ruby-tab"])\n'
+            '  (prefix/"tab.txt").write [\n'
+            '    tab.installed_on_request?.to_s, tab.installed_as_dependency?.to_s,\n'
+            '    tab.poured_from_bottle?.to_s, tab.runtime_dependencies.length.to_s,\n'
+            '    tab.source["tap"].to_s, tab.time.to_s, tab.head?.to_s,\n'
+            '    by_name.poured_from_bottle?.to_s, by_formula.installed_on_request?.to_s,\n'
+            '    keg.tab.runtime_dependencies.first["full_name"].to_s,\n'
+            '    tab.to_hash["time"].to_s, JSON.parse(tab.to_json)["HEAD"].to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "tab.txt").read_text().splitlines() == [
+        "false",
+        "true",
+        "true",
+        "1",
+        "homebrew/core",
+        "123",
+        "true",
+        "true",
+        "false",
+        "foo",
+        "123",
+        "true",
+    ]
+
+
+def test_formulary_factory_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-formulary",
+        "1.0",
+        (
+            '  (prefix/"formulary").write [\n'
+            '    Formulary.factory("ruby-formulary").name,\n'
+            '    Formulary.resolve("ruby-formulary").name,\n'
+            '    Formulary.class_s("foo-bar").to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "formulary").read_text().splitlines() == [
+        "ruby-formulary",
+        "ruby-formulary",
+        "FooBar",
+    ]

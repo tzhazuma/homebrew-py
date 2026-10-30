@@ -3451,6 +3451,309 @@ class PybrewFormulaRef
   end
 end
 
+class Keg
+  attr_reader :path
+
+  def initialize(path)
+    @path = Pathname.new(path.to_s)
+  end
+
+  def rack
+    @path.dirname
+  end
+
+  def name
+    rack.basename.to_s
+  end
+
+  def version
+    @path.basename.to_s
+  end
+
+  def prefix
+    @path
+  end
+
+  def homebrew_prefix
+    return rack.dirname.dirname if rack.dirname.basename.to_s == "Cellar"
+
+    Pathname.new(PybrewFormulaRef.homebrew_prefix)
+  end
+
+  def optlink
+    homebrew_prefix/"opt"/name
+  end
+
+  def installed?
+    @path.directory?
+  end
+
+  def linked?
+    return false unless File.symlink?(optlink.to_s)
+
+    File.identical?(optlink.to_s, @path.to_s)
+  end
+  alias optlinked? linked?
+
+  def link
+    raise "Keg does not exist: #{@path}" unless installed?
+
+    FileUtils.mkdir_p(optlink.dirname.to_s)
+    if File.symlink?(optlink.to_s) && !File.identical?(optlink.to_s, @path.to_s)
+      FileUtils.rm_f(optlink.to_s)
+    end
+    if optlink.exist? && !File.identical?(optlink.to_s, @path.to_s)
+      return false
+    end
+
+    FileUtils.ln_s(@path.to_s, optlink.to_s) unless optlink.exist?
+    true
+  end
+
+  def unlink
+    return false unless File.symlink?(optlink.to_s)
+    return false unless File.identical?(optlink.to_s, @path.to_s)
+
+    FileUtils.rm_f(optlink.to_s)
+    true
+  end
+
+  def formula
+    Formula[name]
+  end
+
+  def tab
+    Tab.for_keg(self)
+  end
+
+  def bin
+    @path/"bin"
+  end
+
+  def sbin
+    @path/"sbin"
+  end
+
+  def lib
+    @path/"lib"
+  end
+
+  def include
+    @path/"include"
+  end
+
+  def share
+    @path/"share"
+  end
+
+  def etc
+    @path/"etc"
+  end
+
+  def var
+    @path/"var"
+  end
+
+  def libexec
+    @path/"libexec"
+  end
+
+  def doc
+    share/"doc"/name
+  end
+
+  def info
+    share/"info"
+  end
+
+  def man
+    share/"man"
+  end
+
+  def man1
+    man/"man1"
+  end
+
+  def man2
+    man/"man2"
+  end
+
+  def man3
+    man/"man3"
+  end
+
+  def man4
+    man/"man4"
+  end
+
+  def man5
+    man/"man5"
+  end
+
+  def man6
+    man/"man6"
+  end
+
+  def man7
+    man/"man7"
+  end
+
+  def man8
+    man/"man8"
+  end
+
+  def completion
+    share/"bash-completion/completions"
+  end
+
+  def pkgconfig
+    lib/"pkgconfig"
+  end
+
+  def aclocal
+    share/"aclocal"
+  end
+
+  def cmake
+    share/"cmake"
+  end
+
+  def meson
+    share/"meson"
+  end
+
+  def elisp
+    share/"emacs/site-lisp"
+  end
+
+  def service
+    @path/"service"
+  end
+
+  def logs
+    var/"log"
+  end
+
+  def to_s
+    @path.to_s
+  end
+
+  def inspect
+    "#<Keg #{@path}>"
+  end
+
+  def ==(other)
+    other.is_a?(Keg) && other.path == @path
+  end
+  alias eql? ==
+
+  def hash
+    @path.hash
+  end
+end
+
+class Tab
+  attr_reader :tabfile
+
+  def initialize(data = {}, tabfile = nil)
+    @data = data.is_a?(Hash) ? data : {}
+    @tabfile = tabfile.nil? ? nil : Pathname.new(tabfile.to_s)
+  end
+
+  def self.empty
+    new({})
+  end
+
+  def self.for_keg(keg)
+    keg = Keg.new(keg) unless keg.is_a?(Keg)
+    tabfile = keg.path/"INSTALL_RECEIPT.json"
+    return new({}, tabfile) unless tabfile.file?
+
+    new(JSON.parse(tabfile.read), tabfile)
+  rescue StandardError
+    new({}, tabfile)
+  end
+
+  def self.for_name(name)
+    cellar = Pathname.new(PybrewFormulaRef.cellar)
+    rack = cellar/name.to_s
+    return empty unless rack.directory?
+
+    kegs = rack.children.select { |child| child.directory? }
+    return empty if kegs.empty?
+
+    for_keg(kegs.max_by { |child| child.mtime })
+  rescue StandardError
+    empty
+  end
+
+  def self.for_formula(formula)
+    name = formula.respond_to?(:name) ? formula.name : formula
+    for_name(name)
+  end
+
+  def [](key)
+    @data[key.to_s]
+  end
+
+  def []=(key, value)
+    @data[key.to_s] = value
+  end
+
+  def to_hash
+    @data.dup
+  end
+
+  def to_json(*args)
+    JSON.generate(@data, *args)
+  end
+
+  def installed_on_request?
+    value = @data["installed_on_request"]
+    value.nil? ? true : !!value
+  end
+
+  def installed_as_dependency?
+    !installed_on_request?
+  end
+
+  def poured_from_bottle?
+    !!@data["poured_from_bottle"]
+  end
+
+  def runtime_dependencies
+    Array(@data["runtime_dependencies"])
+  end
+
+  def build_dependencies
+    Array(@data["build_dependencies"])
+  end
+
+  def source
+    @data["source"] || {}
+  end
+
+  def time
+    @data["time"]
+  end
+
+  def compiler
+    @data["compiler"]
+  end
+
+  def changed_files
+    Array(@data["changed_files"])
+  end
+
+  def head?
+    !!@data["HEAD"]
+  end
+
+  def inspect
+    "#<Tab #{@data.inspect}>"
+  end
+end
+
 module Formula
   def self.[](name)
     PybrewFormulaRef.new(name)
@@ -3458,6 +3761,26 @@ module Formula
 
   def self.factory(name)
     self[name]
+  end
+end
+
+module Formulary
+  module_function
+
+  def factory(name)
+    Formula[name]
+  end
+
+  def resolve(name)
+    Formula[name]
+  end
+
+  def load_formula(name, _path = nil, _contents = nil, _namespace = nil)
+    Formula[name]
+  end
+
+  def class_s(name)
+    name.to_s.split(/[-_.@]/).map { |part| part.capitalize }.join
   end
 end
 

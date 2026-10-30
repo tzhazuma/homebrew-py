@@ -26,6 +26,7 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
 | Cask scripts | opt-in preflight/postflight/uninstall_preflight/uninstall_postflight; command/env/chdir forms; no sudo |
 | Cask DSL | opt-in arbitrary-Ruby evaluator (`PYBREW_ALLOW_CASK_RUBY=1` / `--ruby-cask`): fields, artifacts, platform/arch, language, uninstall/zap, os stanza (both parsers, macOS versions), depends_on (arch/macos/formula/cask enforced), conflicts_with (formula/cask), deprecate!/disable! reasons, no_autobump!, livecheck source; scripts/unknown stanzas recorded |
 | Cask caveats | `caveats --cask`: captured block/literal, token/version/appdir/paths, platform blocks |
+| Keg / Tab / Formulary | `Keg.new(path)` with name/version/rack, path helpers, `installed?`, `linked?`/`optlinked?`, `link`/`unlink` (opt link), `formula`, `tab`; `Tab.for_keg`/`for_name`/`for_formula`, receipt JSON fields/flags, `to_hash`/`to_json`; `Formulary.factory`/`resolve`/`load_formula`/`class_s` |
 | Caveats DSL | `pybrew caveats`: heredocs/strings, platform/arch blocks, paths, `ohai`/`opoo`/`puts`, ENV/Utils |
 | post_install | `post_install do ... end` after install, with paths/Formula/system/Utils/FileUtils |
 
@@ -37,7 +38,7 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
   with `patch -pN`; some exotic forms remain unsupported. Resource staging is
   limited to archives with `url`+`sha256` and literal `resource("name")` calls
   (dynamic resource iteration stages all).
-- Homebrew internals: `Formulary`, `FormulaInstaller`, `Keg`, `Tab`, `Superenv`,
+- Homebrew internals: `FormulaInstaller`, `Superenv`,
   compiler selection, sandbox, GitHub/API helpers, analytics internals.
 - Full `MacOS`/SDK/Xcode/CLT detection, `DevelopmentTools`, `SystemConfig`.
 - Services DSL (`service do ... end`), caveats DSL, livecheck DSL.
