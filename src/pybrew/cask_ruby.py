@@ -45,12 +45,14 @@ Semantics worth knowing:
   the default block is applied when the ``language`` helper is first read or
   at the end of the cask block.
 * Cask *scripts* (``preflight``, ``postflight``, ``uninstall_preflight``,
-  ``uninstall_postflight`` and a ``caveats do ... end`` block) are deliberately
-  not executed or captured.  They are recorded in
-  ``cask.extra["ruby_unsupported"]`` with a warning in
-  ``cask.extra["ruby_warnings"]`` instead of breaking evaluation.  Stanzas the
-  pybrew cask model does not model (``container``, ``rename``, completion
-  artifacts, ...) are recorded the same way.
+  ``uninstall_postflight``) are never executed by the evaluator.  Their raw
+  block source is recovered best-effort from Ruby's ``source_location`` and
+  stored on the cask, exactly like the default parser's inert script bodies;
+  only ``CaskInstaller(run_scripts=True)`` runs them.  When recovery fails the
+  cask keeps a warning in ``cask.extra["ruby_warnings"]`` instead of breaking
+  evaluation.  A ``caveats do ... end`` block is evaluated for its output, and
+  stanzas the pybrew cask model does not model (``container``, ``rename``,
+  completion artifacts, ...) are recorded in ``cask.extra["ruby_unsupported"]``.
 * Host platform checks can be simulated with ``PYBREW_TARGET_OS`` and
   ``PYBREW_TARGET_ARCH`` (the same overrides used elsewhere in pybrew);
   ``HOMEBREW_MACOS_VERSION`` overrides the macOS release for
@@ -97,6 +99,16 @@ ARTIFACT_KINDS = frozenset(_ARTIFACT_KINDS)
 #: Homebrew spells the AppImage stanza ``app_image``; pybrew's model uses
 #: ``appimage``.  Map the DSL method name to the model's artifact kind.
 ARTIFACT_ALIASES = {"app_image": "appimage"}
+
+#: Cask script stanzas whose raw block bodies are inert data.  The evaluator
+#: captures the source best-effort; only ``CaskInstaller(run_scripts=True)``
+#: executes it.
+CAPTURED_SCRIPT_NAMES = (
+    "preflight",
+    "postflight",
+    "uninstall_preflight",
+    "uninstall_postflight",
+)
 
 
 def cask_ruby_enabled() -> bool:
@@ -278,9 +290,17 @@ _LIVECHECK_SOURCE_WARNING = (
     "still available"
 )
 
+_SCRIPT_SOURCE_WARNING = (
+    "cask `{stanza}` script source could not be recovered by the opt-in Ruby "
+    "evaluator; the literal parser may still provide it when the cask is "
+    "loaded through CaskLoader"
+)
 
-def _extract_livecheck_source(source: str, location: Any) -> Optional[str]:
-    """Best-effort recovery of a ``livecheck do ... end`` block body.
+
+def _extract_stanza_source(
+    source: str, location: Any, stanza: str
+) -> Optional[str]:
+    """Best-effort recovery of a ``stanza do ... end`` block body.
 
     The Ruby shim reports the block's ``source_location``; this helper maps the
     reported line back onto the original source with the same lexer the default
@@ -303,7 +323,7 @@ def _extract_livecheck_source(source: str, location: Any) -> Optional[str]:
     tokens = parser.tokens
     opener_index: Optional[int] = None
     for index, token in enumerate(tokens):
-        if token.kind != "id" or token.value != "livecheck" or token.line != line:
+        if token.kind != "id" or token.value != stanza or token.line != line:
             continue
         depth = 0
         for candidate in range(index + 1, len(tokens)):
@@ -332,6 +352,12 @@ def _extract_livecheck_source(source: str, location: Any) -> Optional[str]:
     return body.strip() or None
 
 
+def _extract_livecheck_source(source: str, location: Any) -> Optional[str]:
+    """Backwards-compatible livecheck wrapper around :func:`_extract_stanza_source`."""
+
+    return _extract_stanza_source(source, location, "livecheck")
+
+
 def _attach_livecheck_source(source: str, data: dict[str, Any]) -> None:
     """Fill ``livecheck_source`` (or a warning) from a reported block location."""
 
@@ -347,6 +373,37 @@ def _attach_livecheck_source(source: str, data: dict[str, Any]) -> None:
             warnings.append(_LIVECHECK_SOURCE_WARNING)
     else:
         data["livecheck_source"] = extracted
+
+
+def _attach_script_sources(source: str, data: dict[str, Any]) -> None:
+    """Fill the ``scripts`` map (or warnings) from reported block locations.
+
+    The evaluator never executes script blocks.  It only recovers their raw
+    text so ``Cask.scripts`` (and ``CaskInstaller(run_scripts=True)``) can use
+    the same bodies the literal parser would have captured.
+    """
+
+    locations = data.get("script_locations")
+    if not isinstance(locations, dict):
+        return
+    scripts = data.get("scripts")
+    if not isinstance(scripts, dict):
+        scripts = {}
+    warnings = data.setdefault("warnings", [])
+    if not isinstance(warnings, list):
+        warnings = []
+        data["warnings"] = warnings
+    for name in CAPTURED_SCRIPT_NAMES:
+        location = locations.get(name)
+        if location is None or scripts.get(name):
+            continue
+        extracted = _extract_stanza_source(source, location, name)
+        if extracted is None:
+            warnings.append(_SCRIPT_SOURCE_WARNING.format(stanza=name))
+        else:
+            scripts[name] = extracted
+    if scripts:
+        data["scripts"] = scripts
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +530,7 @@ def _evaluate(source: str, path: Optional[Path]) -> dict[str, Any]:
                 f"{label}: Ruby cask evaluator returned an unexpected result"
             )
         _attach_livecheck_source(source, data)
+        _attach_script_sources(source, data)
         return data
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -527,6 +585,12 @@ def _cask_from_result(
     cask.on_system_block_min_os = _optional_text(
         data.get("on_system_block_min_os")
     )
+    scripts = data.get("scripts")
+    if isinstance(scripts, dict):
+        for name in CAPTURED_SCRIPT_NAMES:
+            body = scripts.get(name)
+            if body is not None and str(body).strip():
+                setattr(cask, name, str(body))
     cask.language = _optional_text(data.get("language"))
     cask.arch = _optional_text(data.get("arch"))
     cask.arch_map = _string_map(data.get("arch_map"), ("arm", "intel"))
@@ -1010,6 +1074,8 @@ class PybrewCaskDSL
       "livecheck" => {},
       "livecheck_location" => nil,
       "no_autobump_reason" => nil,
+      "script_locations" => {},
+      "scripts" => {},
       "warnings" => [],
       "unsupported" => [],
     }
@@ -1506,17 +1572,14 @@ class PybrewCaskDSL
 
   # -- cask scripts and unknown stanzas ---------------------------------
 
+  # Record the raw source location of cask script blocks.  The blocks are
+  # never evaluated here: Python recovers the text from the original cask
+  # source and stores it on the Cask, where only an explicit
+  # ``CaskInstaller(run_scripts=True)`` executes it.
   %w[preflight postflight uninstall_preflight uninstall_postflight].each do |name|
     define_method(name.to_sym) do |*_args, &block|
-      @data["unsupported"] << {
-        "stanza" => name,
-        "args" => [],
-        "kwargs" => {},
-        "block" => !block.nil?,
-      }
-      @data["warnings"] << "cask `#{name}` script is not captured by the " \
-                            "opt-in Ruby evaluator; cask install/uninstall " \
-                            "scripts are not available"
+      @data["script_locations"][name] =
+        block.nil? ? nil : block.source_location
       nil
     end
   end
@@ -1581,30 +1644,19 @@ end
 '''
 
 
-#: Script blocks captured by the default literal parser.  The Ruby evaluator
-#: deliberately does not execute or capture block bodies, so callers that want
-#: both arbitrary-Ruby fields and scripts can merge these raw bodies in.
-CAPTURED_SCRIPT_NAMES = (
-    "preflight",
-    "postflight",
-    "uninstall_preflight",
-    "uninstall_postflight",
-)
-
-
 def merge_captured_scripts(evaluated: Cask, parsed: Cask) -> Cask:
     """Copy inert script/caveats bodies from a literal parse into ``evaluated``.
 
-    The arbitrary-Ruby evaluator evaluates fields but cannot safely recover the
-    raw source of block bodies.  ``CaskLoader`` uses this helper to combine the
-    evaluator's result with the default parser's captured script bodies, so
-    opting into Ruby does not silently lose preflight/postflight hooks.
+    The evaluator recovers script bodies best-effort from ``source_location``;
+    the literal parser is authoritative, so its body replaces the evaluator's
+    copy when both captured one.  ``CaskLoader`` uses this helper so opting into
+    Ruby does not silently lose preflight/postflight hooks.
     """
 
     merged: list[str] = []
     for name in CAPTURED_SCRIPT_NAMES:
         body = getattr(parsed, name, None)
-        if body and not getattr(evaluated, name, None):
+        if body and body != getattr(evaluated, name, None):
             setattr(evaluated, name, body)
             merged.append(name)
     if parsed.caveats_source and not evaluated.caveats_source:

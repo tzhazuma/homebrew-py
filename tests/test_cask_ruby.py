@@ -503,7 +503,7 @@ def test_flags_stage_only_auto_updates_and_deprecation(allow_ruby: None) -> None
 
 
 @requires_ruby
-def test_scripts_are_not_executed_and_are_reported(
+def test_scripts_are_captured_but_not_executed(
     allow_ruby: None, tmp_path: Path
 ) -> None:
     marker = tmp_path / "postflight-ran"
@@ -527,23 +527,21 @@ def test_scripts_are_not_executed_and_are_reported(
     cask = evaluate_cask_source(source)
 
     assert [item.kind for item in cask.artifacts] == ["app"]
-    assert cask.scripts == {}
+    assert sorted(cask.scripts) == [
+        "postflight",
+        "preflight",
+        "uninstall_postflight",
+        "uninstall_preflight",
+    ]
+    assert 'raise "preflight must not run"' in cask.preflight
+    assert "File.write" in cask.postflight
+    assert 'raise "uninstall preflight must not run"' in cask.uninstall_preflight
+    assert 'raise "uninstall postflight must not run"' in cask.uninstall_postflight
     assert cask.caveats is None
     assert not marker.exists()
-    warnings = cask.extra["ruby_warnings"]
-    for stanza in (
-        "preflight",
-        "postflight",
-        "uninstall_preflight",
-        "uninstall_postflight",
-    ):
-        assert any(stanza in warning for warning in warnings)
-    assert [entry["stanza"] for entry in cask.extra["ruby_unsupported"]] == [
-        "preflight",
-        "postflight",
-        "uninstall_preflight",
-        "uninstall_postflight",
-    ]
+    # Scripts are captured as inert data, not reported as unsupported stanzas.
+    assert "ruby_unsupported" not in cask.extra
+    assert "ruby_warnings" not in cask.extra
 
 
 @requires_ruby
@@ -757,10 +755,7 @@ end
 
 
 @requires_ruby
-def test_loader_merges_scripts_from_literal_parser(
-    tmp_path: Path, allow_ruby: None
-) -> None:
-    tap = tmp_path / "tap"
+def _write_scripted_cask(tap: Path) -> None:
     path = tap / "Casks" / "r" / "ruby-script.rb"
     path.parent.mkdir(parents=True)
     path.write_text(
@@ -775,8 +770,36 @@ def test_loader_merges_scripts_from_literal_parser(
 end
 '''
     )
-    loader = CaskLoader(discover_taps([tap]))
-    cask = loader.load("ruby-script")
+
+
+@requires_ruby
+def test_loader_prefers_literal_parser_script_bodies(
+    tmp_path: Path, allow_ruby: None
+) -> None:
+    tap = tmp_path / "tap"
+    _write_scripted_cask(tap)
+    cask = CaskLoader(discover_taps([tap])).load("ruby-script")
+    assert cask.version == "3.0"
+    assert cask.preflight is not None
+    assert "preflight body" in cask.preflight
+    # The literal parser captured the body verbatim, so the loader uses it as
+    # the authoritative copy even though the evaluator recovered one too.
+    assert "preflight" in cask.extra.get("ruby_merged_scripts", [])
+
+
+@requires_ruby
+def test_loader_merges_scripts_from_literal_parser(
+    tmp_path: Path, allow_ruby: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tap = tmp_path / "tap"
+    _write_scripted_cask(tap)
+    # Force evaluator source recovery to fail; the literal parser must still
+    # provide the inert script body through the loader merge.
+    monkeypatch.setattr(
+        "pybrew.cask_ruby._extract_stanza_source",
+        lambda *_args, **_kwargs: None,
+    )
+    cask = CaskLoader(discover_taps([tap])).load("ruby-script")
     assert cask.version == "3.0"
     assert cask.preflight is not None
     assert "preflight body" in cask.preflight
@@ -1221,3 +1244,102 @@ def test_cask_on_system_block_min_os(
         )
     )
     assert linux.on_system_block_min_os is None
+
+
+# ---------------------------------------------------------------------------
+# cask script body capture (source_location + lexer)
+# ---------------------------------------------------------------------------
+
+
+def test_extract_stanza_source_handles_script_blocks() -> None:
+    from pybrew.cask_ruby import _extract_stanza_source
+
+    source = (
+        'cask "tiny" do\n'
+        '  preflight do\n'
+        '    puts "hi"\n'
+        '  end\n'
+        '  postflight { puts "bye" }\n'
+        'end\n'
+    )
+    preflight_line = source.splitlines().index("  preflight do") + 1
+    postflight_line = source.splitlines().index(
+        '  postflight { puts "bye" }'
+    ) + 1
+    assert _extract_stanza_source(
+        source, ["cask.rb", preflight_line], "preflight"
+    ) == 'puts "hi"'
+    assert _extract_stanza_source(
+        source, ["cask.rb", postflight_line], "postflight"
+    ) == 'puts "bye"'
+    assert _extract_stanza_source(source, ["cask.rb", 1], "preflight") is None
+    assert _extract_stanza_source(source, None, "preflight") is None
+
+
+@requires_ruby
+def test_script_source_recovery_failure_is_documented(
+    allow_ruby: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "pybrew.cask_ruby._extract_stanza_source",
+        lambda *_args, **_kwargs: None,
+    )
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  preflight do\n'
+            '    puts "hi"\n'
+            '  end\n'
+        )
+    )
+
+    assert cask.preflight is None
+    assert cask.scripts == {}
+    warnings = cask.extra["ruby_warnings"]
+    assert any("preflight" in warning and "source" in warning for warning in warnings)
+
+
+@requires_ruby
+def test_evaluated_scripts_stay_inert_without_run_scripts(
+    tmp_path: Path, allow_ruby: None
+) -> None:
+    import json
+
+    from pybrew.cask_installer import CaskInstaller
+    from pybrew.paths import Config
+
+    marker = tmp_path / "preflight-ran"
+    tap = tmp_path / "tap"
+    path = tap / "Casks" / "i" / "inert-ruby.rb"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        f'''cask "inert-ruby" do
+  version "1.0"
+  stage_only true
+  preflight do
+    File.write("{marker}", "ran")
+  end
+end
+''',
+        encoding="utf-8",
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    cask = CaskLoader(discover_taps([tap])).load("inert-ruby")
+    assert cask.preflight is not None
+    installer.install(cask)
+
+    assert not marker.exists()
+    receipt = json.loads(
+        (tmp_path / "prefix" / "Caskroom" / "inert-ruby" / "1.0" / ".metadata"
+         / "receipt.json").read_text()
+    )
+    assert receipt["scripts_requested"] is False
+    assert receipt["script_results"] == {}
