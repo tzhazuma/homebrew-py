@@ -3226,6 +3226,10 @@ class PybrewFormulaRef
     logs
   end
 
+  def with_logging(*_args, &block)
+    block.call if block
+  end
+
   def common_sandbox_env
     {}
   end

@@ -2238,3 +2238,20 @@ def test_formula_broad_compatibility_methods(
     assert lines[4] == "" or lines[4].endswith("ruby-broad.rb")
     assert lines[5] == "ruby-broad"
     assert lines[6:] == ["true", "true"]
+
+
+def test_formula_with_logging_yields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-logging",
+        "1.0",
+        (
+            '  ref = Formula["ruby-logging"]\n'
+            '  value = ref.with_logging { "yielded" }\n'
+            '  (prefix/"logging").write value\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "logging").read_text() == "yielded"

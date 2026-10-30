@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-530 passed, 5 skipped in 76.83s
+531 passed, 5 skipped in 1069.77s (one hdiutil-backed cask test was slow)
 ```
 
 Breakdown of the feature slices:
@@ -37,7 +37,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
-101 passed     # declarative + opt-in Ruby bridge/API + broad compatibility batch
+102 passed     # declarative + opt-in Ruby bridge/API + with_logging
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_patches.py tests/test_post_install.py
 47 passed      # patch url/file/:DATA application + post_install
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py tests/test_service_ruby.py
@@ -713,6 +713,10 @@ local remote, commits a change, and confirms the CLI updates it.
 
 - `os macos:` now also enforces version constraints (`>= :sequoia`, etc.) when
   running on macOS, not just the platform.
+
+## Formula with_logging
+
+- Added `Formula#with_logging` which yields the block.
 
 ## Final parallel batch
 
