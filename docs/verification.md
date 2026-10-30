@@ -1125,9 +1125,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `c2dd847` (second parallel cask/test-DSL batch)
-- CI run for `c2dd847`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41045260992>
+- Latest feature commit: `c36df9f` (third parallel cask/test-DSL batch)
+- CI run for `c36df9f`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41047927149>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
