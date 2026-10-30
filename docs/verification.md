@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-538 passed, 5 skipped in 63.03s
+538 passed, 5 skipped in 1183.18s
 ```
 
 Breakdown of the feature slices:
@@ -726,8 +726,9 @@ local remote, commits a change, and confirms the CLI updates it.
 
 ## Installed Keg objects
 
-- `Formula#installed_kegs` now returns `Keg` objects (matching Homebrew) and
-  `installed_prefixes` returns their `Pathname` prefixes.
+- `Formula#installed_kegs` now returns `Keg` objects (matching Homebrew),
+  deterministically sorted by version, and `installed_prefixes` returns their
+  `Pathname` prefixes.
 - Added `Keg#basename`/`to_path` and `Formula#tab`.
 
 ## Formula caveats rendering
@@ -868,9 +869,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `18a7aed` (rendered Formula#caveats)
-- CI run for `18a7aed`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40989942008>
+- Latest feature commit: `f1b812b` (Keg objects from `installed_kegs`)
+- CI run for `f1b812b`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40992881095>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
