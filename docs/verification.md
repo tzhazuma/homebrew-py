@@ -918,9 +918,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `282f673` (Formula#post_install execution)
-- CI run for `282f673`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40998967707>
+- Latest feature commit: `b9d2e72` (Tab option and bottle receipt fields)
+- CI run for `b9d2e72`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40999445442>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
