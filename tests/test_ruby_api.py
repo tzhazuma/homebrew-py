@@ -3390,3 +3390,24 @@ def test_utils_path_module(
         "true",
         "false",
     ]
+
+
+def test_utils_git_and_curl_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-utilsgit",
+        "1.0",
+        (
+            '  (prefix/"utilsgit.txt").write [\n'
+            '    (Utils::Git.version.nil? || Utils::Git.version.is_a?(String)).to_s,\n'
+            '    (Utils::Git.path.nil? || Utils::Git.path.is_a?(Pathname)).to_s,\n'
+            '    (Utils::Curl.version.nil? || Utils::Curl.version.is_a?(String)).to_s,\n'
+            '    (Utils::Curl.curl_path.nil? || Utils::Curl.curl_path.is_a?(Pathname)).to_s,\n'
+            '    (Utils::Curl.curl_executable == Utils::Curl.curl_path).to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "utilsgit.txt").read_text().splitlines() == ["true"] * 5

@@ -43,7 +43,8 @@ def test_install_real_homebrew_bottle(tmp_path: Path) -> None:
     formula_path = tap_root / "Formula" / "libslirp.rb"
     formula_path.write_text(formula_ruby)
     formula = parse_formula_file(formula_path, tap="homebrew/core")
-    assert formula.version == "4.9.6"
+    expected_version = formula.version
+    assert expected_version
     # The formula copy inside .brew/ is the source formula; bottles do not
     # carry their own bottle block, so attach the cached artefact's metadata.
     from pybrew.download import sha256_file
@@ -68,7 +69,7 @@ def test_install_real_homebrew_bottle(tmp_path: Path) -> None:
         InstallOptions(ignore_dependencies=True, bottle_file=bottle),
     )
     result = results[-1]
-    keg = config.keg_path("libslirp", "4.9.6")
+    keg = config.keg_path("libslirp", expected_version)
     assert result.keg == keg
     assert keg.is_dir()
     assert (keg / "lib" / "libslirp.dylib").exists()

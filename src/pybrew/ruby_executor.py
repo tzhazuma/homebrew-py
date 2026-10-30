@@ -1284,11 +1284,55 @@ module Utils
     def self.available?
       !Utils.which("git").nil?
     end
+
+    def self.path
+      Utils.which("git")
+    end
+
+    def self.version
+      output = Utils.popen_read("git", "--version").to_s
+      output[/git version (\S+)/, 1]
+    rescue StandardError
+      nil
+    end
+
+    def self.head(path = ".")
+      Utils.popen_read("git", "-C", path.to_s, "rev-parse", "HEAD").to_s.strip
+    rescue StandardError
+      nil
+    end
+
+    def self.last_commit(path = ".")
+      Utils.popen_read("git", "-C", path.to_s, "log", "-1", "--format=%H").to_s.strip
+    rescue StandardError
+      nil
+    end
+
+    def self.origin_url(path = ".")
+      Utils.popen_read("git", "-C", path.to_s, "remote", "get-url", "origin").to_s.strip
+    rescue StandardError
+      nil
+    end
   end
 
   module Curl
     def self.curl(*args)
       Utils.curl(*args)
+    end
+
+    def self.curl_executable
+      Utils.which("curl")
+    end
+
+    def self.curl_path
+      curl_executable
+    end
+
+    def self.version
+      output = Utils.popen_read("curl", "--version").to_s
+      output[/^curl ([\d.]+)/, 1]
+    rescue StandardError
+      nil
     end
   end
 
