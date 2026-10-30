@@ -3502,3 +3502,35 @@ def test_formula_and_formulary_surface_methods(
         "ruby-surface",
         "ruby-surface",
     ]
+
+
+def test_formula_service_ref_custom_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-service-custom",
+        "1.0",
+        (
+            '  service = Formula["ruby-service-custom"].service\n'
+            '  (prefix/"servicecustom.txt").write [\n'
+            '    service.plist_name,\n'
+            '    service.plist_names.join(","),\n'
+            '    service.service_name,\n'
+            '    service.service_names.join(",")\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.service = {
+        "source": 'service do\n'
+        '  run [opt_bin/"svc"]\n'
+        '  name macos: "com.example.custom", linux: "custom-svc"\n'
+        'end\n'
+    }
+    keg = _build(tmp_path, formula)
+    assert (keg / "servicecustom.txt").read_text().splitlines() == [
+        "com.example.custom",
+        "com.example.custom",
+        "custom-svc",
+        "custom-svc",
+    ]

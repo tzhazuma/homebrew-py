@@ -87,6 +87,8 @@ _SERVICE_FIELDS = (
     "interval",
     "process_type",
     "run_type",
+    "plist_name",
+    "service_name",
     "environment_variables",
     "require_root",
     "throttle_interval",
@@ -502,6 +504,8 @@ class PybrewServiceDSL
       "interval" => nil,
       "process_type" => nil,
       "run_type" => "immediate",
+      "plist_name" => nil,
+      "service_name" => nil,
       "environment_variables" => {},
       "require_root" => false,
       "throttle_interval" => nil,
@@ -623,6 +627,18 @@ class PybrewServiceDSL
     value = args.length == 1 ? args[0] : args
     value = {} if value.nil?
     @data["environment_variables"] = PybrewServiceJSON.value(value)
+  end
+
+  def name(*args)
+    return @data["plist_name"] || @data["service_name"] if args.empty?
+
+    value = args.length == 1 ? args[0] : args
+    hash = PybrewServiceJSON.value(value)
+    if hash.is_a?(Hash)
+      @data["plist_name"] = hash["macos"] if hash.key?("macos")
+      @data["service_name"] = hash["linux"] if hash.key?("linux")
+    end
+    nil
   end
 
   def sockets(*args)

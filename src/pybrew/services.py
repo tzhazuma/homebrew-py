@@ -61,6 +61,8 @@ class ServiceSpec:
     interval: Optional[int] = None
     process_type: Optional[str] = None
     run_type: str = "immediate"
+    plist_name: Optional[str] = None
+    service_name: Optional[str] = None
     environment_variables: dict[str, str] = field(default_factory=dict)
     require_root: bool = False
     throttle_interval: Optional[int] = None
@@ -464,6 +466,16 @@ def _apply_service_directive(spec: ServiceSpec, name: str, args: list[Any]) -> N
                 f"run_type must be one of {', '.join(RUN_TYPES)}, got {args[0]!r}"
             )
         spec.run_type = run_type
+    elif name == "name":
+        mapping = _mapping_from_args(args, "name") if args else {}
+        if mapping.get("macos") is not None:
+            spec.plist_name = str(mapping["macos"])
+        if mapping.get("linux") is not None:
+            spec.service_name = str(mapping["linux"])
+    elif name == "plist_name" and args:
+        spec.plist_name = str(args[0])
+    elif name == "service_name" and args:
+        spec.service_name = str(args[0])
     elif name == "process_type" and args:
         process_type = str(args[0]).lstrip(":").strip().lower()
         if process_type not in PROCESS_TYPES:
@@ -682,15 +694,23 @@ class ServiceManager:
         self.directory = config.service_dir
 
     # -- plist / unit generation ----------------------------------------
-    @staticmethod
-    def label(formula: Formula) -> str:
+    def label(self, formula: Formula, spec: Optional[ServiceSpec] = None) -> str:
+        if spec is not None:
+            if self.backend == "systemd" and spec.service_name:
+                return spec.service_name
+            if self.backend != "systemd" and spec.plist_name:
+                return spec.plist_name
         return f"homebrew.mxcl.{formula.name}"
 
-    def plist_path(self, formula: Formula) -> Path:
-        return self.directory / f"{self.label(formula)}.plist"
+    def plist_path(
+        self, formula: Formula, spec: Optional[ServiceSpec] = None
+    ) -> Path:
+        return self.directory / f"{self.label(formula, spec)}.plist"
 
-    def unit_path(self, formula: Formula) -> Path:
-        return self.directory / f"{self.label(formula)}.service"
+    def unit_path(
+        self, formula: Formula, spec: Optional[ServiceSpec] = None
+    ) -> Path:
+        return self.directory / f"{self.label(formula, spec)}.service"
 
     def unit_text(self, formula: Formula, spec: ServiceSpec) -> str:
         log_dir = self.config.prefix / "var" / "log"
@@ -730,8 +750,10 @@ class ServiceManager:
         lines += ["", "[Install]", "WantedBy=default.target", ""]
         return "\n".join(lines) + "\n"
 
-    def socket_path(self, formula: Formula) -> Path:
-        return self.directory / f"{self.label(formula)}.socket"
+    def socket_path(
+        self, formula: Formula, spec: Optional[ServiceSpec] = None
+    ) -> Path:
+        return self.directory / f"{self.label(formula, spec)}.socket"
 
     def socket_text(self, formula: Formula, spec: ServiceSpec) -> str:
         if not spec.sockets:
@@ -750,12 +772,14 @@ class ServiceManager:
 
     def write_socket(self, formula: Formula, spec: ServiceSpec) -> Path:
         self.directory.mkdir(parents=True, exist_ok=True)
-        path = self.socket_path(formula)
+        path = self.socket_path(formula, spec)
         path.write_text(self.socket_text(formula, spec))
         return path
 
-    def timer_path(self, formula: Formula) -> Path:
-        return self.directory / f"{self.label(formula)}.timer"
+    def timer_path(
+        self, formula: Formula, spec: Optional[ServiceSpec] = None
+    ) -> Path:
+        return self.directory / f"{self.label(formula, spec)}.timer"
 
     def timer_text(self, formula: Formula, spec: ServiceSpec) -> str:
         if not spec.cron:
@@ -774,7 +798,7 @@ class ServiceManager:
 
     def write_timer(self, formula: Formula, spec: ServiceSpec) -> Path:
         self.directory.mkdir(parents=True, exist_ok=True)
-        path = self.timer_path(formula)
+        path = self.timer_path(formula, spec)
         path.write_text(self.timer_text(formula, spec))
         return path
 
@@ -782,12 +806,12 @@ class ServiceManager:
         if not spec.run:
             raise ServiceError(f"{formula.name} service has no run command")
         self.directory.mkdir(parents=True, exist_ok=True)
-        path = self.unit_path(formula)
+        path = self.unit_path(formula, spec)
         path.write_text(self.unit_text(formula, spec))
         return path
 
     def plist_payload(self, formula: Formula, spec: ServiceSpec) -> dict[str, Any]:
-        label = self.label(formula)
+        label = self.label(formula, spec)
         log_dir = self.config.prefix / "var" / "log"
         log_dir.mkdir(parents=True, exist_ok=True)
         stdout_path = spec.log_path or str(log_dir / f"{formula.name}.log")
@@ -835,7 +859,7 @@ class ServiceManager:
         if not spec.run:
             raise ServiceError(f"{formula.name} service has no run command")
         self.directory.mkdir(parents=True, exist_ok=True)
-        path = self.plist_path(formula)
+        path = self.plist_path(formula, spec)
         path.write_bytes(plistlib.dumps(self.plist_payload(formula, spec)))
         return path
 
@@ -843,6 +867,12 @@ class ServiceManager:
     def spec_for(self, formula: Formula) -> ServiceSpec:
         raw = formula.service.get("source") if isinstance(formula.service, dict) else None
         return parse_service_block(formula, self.config, raw=raw)
+
+    def _spec_for_paths(self, formula: Formula) -> Optional[ServiceSpec]:
+        try:
+            return self.spec_for(formula)
+        except Exception:
+            return None
 
     def start(self, formula: Formula) -> Path:
         if not self.config.opt_path(formula.name).is_dir():
@@ -856,30 +886,35 @@ class ServiceManager:
                 self.write_socket(formula, spec)
             self.runner.daemon_reload()
             if spec.cron:
-                self.runner.start(f"{self.label(formula)}.timer")
+                self.runner.start(f"{self.label(formula, spec)}.timer")
             elif spec.sockets:
-                self.runner.start(f"{self.label(formula)}.socket")
+                self.runner.start(f"{self.label(formula, spec)}.socket")
             else:
-                self.runner.start(f"{self.label(formula)}.service")
+                self.runner.start(f"{self.label(formula, spec)}.service")
         else:
             path = self.write_plist(formula, spec)
             self.runner.start(path)
         return path
 
     def stop(self, formula: Formula) -> Optional[Path]:
-        path = self.unit_path(formula) if self.backend == "systemd" else self.plist_path(formula)
+        spec = self._spec_for_paths(formula)
+        path = (
+            self.unit_path(formula, spec)
+            if self.backend == "systemd"
+            else self.plist_path(formula, spec)
+        )
         if not path.exists():
             return None
         if self.backend == "systemd":
-            timer = self.timer_path(formula)
+            timer = self.timer_path(formula, spec)
             if timer.exists():
-                self.runner.stop(f"{self.label(formula)}.timer")
-            socket = self.socket_path(formula)
+                self.runner.stop(f"{self.label(formula, spec)}.timer")
+            socket = self.socket_path(formula, spec)
             if socket.exists():
-                self.runner.stop(f"{self.label(formula)}.socket")
-            self.runner.stop(f"{self.label(formula)}.service")
+                self.runner.stop(f"{self.label(formula, spec)}.socket")
+            self.runner.stop(f"{self.label(formula, spec)}.service")
         else:
-            self.runner.stop(self.label(formula), path)
+            self.runner.stop(self.label(formula, spec), path)
         return path
 
     def restart(self, formula: Formula) -> Path:
@@ -887,34 +922,44 @@ class ServiceManager:
         return self.start(formula)
 
     def remove(self, formula: Formula) -> None:
-        path = self.unit_path(formula) if self.backend == "systemd" else self.plist_path(formula)
+        spec = self._spec_for_paths(formula)
+        path = (
+            self.unit_path(formula, spec)
+            if self.backend == "systemd"
+            else self.plist_path(formula, spec)
+        )
         if path.exists():
             if self.backend == "systemd":
-                timer = self.timer_path(formula)
+                timer = self.timer_path(formula, spec)
                 if timer.exists():
-                    self.runner.stop(f"{self.label(formula)}.timer")
-                socket = self.socket_path(formula)
+                    self.runner.stop(f"{self.label(formula, spec)}.timer")
+                socket = self.socket_path(formula, spec)
                 if socket.exists():
-                    self.runner.stop(f"{self.label(formula)}.socket")
-                self.runner.stop(f"{self.label(formula)}.service")
+                    self.runner.stop(f"{self.label(formula, spec)}.socket")
+                self.runner.stop(f"{self.label(formula, spec)}.service")
             else:
-                self.runner.stop(self.label(formula), path)
+                self.runner.stop(self.label(formula, spec), path)
             path.unlink()
-            timer = self.timer_path(formula)
+            timer = self.timer_path(formula, spec)
             if timer.exists():
                 timer.unlink()
-            socket = self.socket_path(formula)
+            socket = self.socket_path(formula, spec)
             if socket.exists():
                 socket.unlink()
 
     def status(self, formula: Formula) -> str:
-        path = self.unit_path(formula) if self.backend == "systemd" else self.plist_path(formula)
+        spec = self._spec_for_paths(formula)
+        path = (
+            self.unit_path(formula, spec)
+            if self.backend == "systemd"
+            else self.plist_path(formula, spec)
+        )
         if not path.exists():
             return "none"
         label = (
-            f"{self.label(formula)}.service"
+            f"{self.label(formula, spec)}.service"
             if self.backend == "systemd"
-            else self.label(formula)
+            else self.label(formula, spec)
         )
         return self.runner.status(label)
 

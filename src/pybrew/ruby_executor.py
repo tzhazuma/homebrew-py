@@ -2364,11 +2364,11 @@ class PybrewServiceRef
   end
 
   def plist_name
-    "sh.brew.#{formula_name}"
+    @info["plist_name"] || "sh.brew.#{formula_name}"
   end
 
   def canonical_plist_name
-    plist_name
+    "sh.brew.#{formula_name}"
   end
 
   def legacy_plist_name
@@ -2376,15 +2376,17 @@ class PybrewServiceRef
   end
 
   def plist_names
+    return [plist_name] if @info["plist_name"]
+
     [plist_name, canonical_plist_name, legacy_plist_name].uniq
   end
 
   def service_name
-    "sh.brew.#{formula_name}"
+    @info["service_name"] || "sh.brew.#{formula_name}"
   end
 
   def canonical_service_name
-    service_name
+    "sh.brew.#{formula_name}"
   end
 
   def legacy_service_name
@@ -2392,6 +2394,8 @@ class PybrewServiceRef
   end
 
   def service_names
+    return [service_name] if @info["service_name"]
+
     [service_name, canonical_service_name, legacy_service_name].uniq
   end
 
@@ -6088,6 +6092,8 @@ def _service_metadata(formula: Formula, config: Config) -> Optional[dict[str, An
         "interval": spec.interval,
         "process_type": spec.process_type,
         "run_type": spec.run_type,
+        "plist_name": spec.plist_name,
+        "service_name": spec.service_name,
         "environment_variables": dict(spec.environment_variables),
         "require_root": spec.require_root,
         "launch_only_once": spec.launch_only_once,

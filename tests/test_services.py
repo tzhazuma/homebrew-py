@@ -664,3 +664,24 @@ def test_service_run_type_validation(
 
     with pytest.raises(ServiceError, match="run_type"):
         parse_service_block(_formula_with_service("run_type :bogus"), config)
+
+
+def test_service_custom_names(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula_with_service(
+        'run [opt_bin/"svc"]\n'
+        'name macos: "com.example.svc", linux: "custom-svc"'
+    )
+    spec = parse_service_block(formula, config)
+    assert spec.plist_name == "com.example.svc"
+    assert spec.service_name == "custom-svc"
+
+    manager = ServiceManager(config)
+    assert manager.label(formula, spec) == "com.example.svc"
+    assert manager.plist_path(formula, spec).name == "com.example.svc.plist"
+
+    manager.backend = "systemd"
+    assert manager.label(formula, spec) == "custom-svc"
+    assert manager.unit_path(formula, spec).name == "custom-svc.service"

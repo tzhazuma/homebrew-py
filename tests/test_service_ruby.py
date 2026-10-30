@@ -372,6 +372,7 @@ def test_basic_fields_and_directives(
             keep_alive network_state: true, successful_exit: false, interval: 45
             process_type :background
             run_type :cron
+            name macos: "com.example.svc", linux: "custom-svc"
             interval 300
             environment_variables PATH: std_service_path_env, FOO: "bar", NUM: 7
             require_root true
@@ -398,6 +399,8 @@ def test_basic_fields_and_directives(
     }
     assert spec.process_type == "background"
     assert spec.run_type == "cron"
+    assert spec.plist_name == "com.example.svc"
+    assert spec.service_name == "custom-svc"
     assert spec.interval == 300
     assert spec.run_at_load is False
     assert spec.require_root is True
