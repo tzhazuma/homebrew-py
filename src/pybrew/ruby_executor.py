@@ -2633,6 +2633,213 @@ module PybrewStdArgs
   end
 end
 
+class FormulaInstaller
+  class << self
+    def attempted
+      []
+    end
+
+    def installed
+      []
+    end
+
+    def fetched
+      []
+    end
+  end
+
+  attr_reader :formula, :options
+
+  def initialize(formula, *_args, **options)
+    @formula = formula
+    @options = options
+  end
+
+  def install
+    raise NotImplementedError,
+          "FormulaInstaller#install is not available in pybrew; " \
+          "use pybrew's Python installer"
+  end
+
+  def finish
+    nil
+  end
+
+  def prelude
+    nil
+  end
+
+  def prelude_fetch(metadata_only: false)
+    nil
+  end
+
+  def fetch
+    nil
+  end
+
+  def build
+    nil
+  end
+
+  def pour_bottle?(output_warning: false)
+    false
+  end
+
+  def install_bottle_for?(_dep, _build)
+    false
+  end
+
+  def build_from_source?
+    option?(:build_from_source)
+  end
+
+  def build_bottle?
+    option?(:build_bottle)
+  end
+
+  def include_test?
+    option?(:include_test)
+  end
+
+  def skip_post_install?
+    option?(:skip_post_install)
+  end
+
+  def skip_link?
+    option?(:skip_link)
+  end
+
+  def ignore_deps?
+    option?(:ignore_deps)
+  end
+
+  def force?
+    option?(:force)
+  end
+
+  def force_bottle?
+    option?(:force_bottle)
+  end
+
+  def git?
+    option?(:git)
+  end
+
+  def installed_on_request?
+    option?(:installed_on_request)
+  end
+
+  def interactive?
+    false
+  end
+
+  def keep_tmp?
+    option?(:keep_tmp)
+  end
+
+  def only_deps?
+    option?(:only_deps)
+  end
+
+  def overwrite?
+    option?(:overwrite)
+  end
+
+  def quiet?
+    option?(:quiet)
+  end
+
+  def show_header?
+    !option?(:quiet)
+  end
+
+  def show_summary_heading?
+    !option?(:quiet)
+  end
+
+  def verbose?
+    option?(:verbose)
+  end
+
+  def debug?
+    option?(:debug)
+  end
+
+  def debug_symbols?
+    option?(:debug_symbols)
+  end
+
+  def compute_dependencies(use_cache: true)
+    []
+  end
+
+  def install_dependencies(*_args)
+    nil
+  end
+
+  def check_conflicts
+    nil
+  end
+
+  def check_requirements(*_args)
+    nil
+  end
+
+  def check_install_sanity
+    nil
+  end
+
+  def verify_deps_exist
+    nil
+  end
+
+  def fresh_install?(_formula = nil)
+    false
+  end
+
+  def runtime_requirements(_formula = nil)
+    []
+  end
+
+  def expand_requirements
+    []
+  end
+
+  def expand_dependencies
+    []
+  end
+
+  def display_options(_formula = nil)
+    ""
+  end
+
+  def build_time
+    0
+  end
+
+  def build_argv
+    []
+  end
+
+  def sanitized_argv_options
+    []
+  end
+
+  def caveats
+    formula.respond_to?(:caveats) ? formula.caveats : nil
+  end
+
+  def summary
+    nil
+  end
+
+  private
+
+  def option?(name)
+    !!(@options[name] || @options[name.to_s])
+  end
+end
+
 class PybrewFormulaRef
   include PybrewStdArgs
 

@@ -3534,3 +3534,42 @@ def test_formula_service_ref_custom_names(
         "custom-svc",
         "custom-svc",
     ]
+
+
+def test_formula_installer_compatibility_stub(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-installer-stub",
+        "1.0",
+        (
+            '  ref = Formula["ruby-installer-stub"]\n'
+            '  installer = FormulaInstaller.new(ref, verbose: true, build_bottle: true)\n'
+            '  begin\n'
+            '    installer.install\n'
+            '    error = "no error"\n'
+            '  rescue NotImplementedError => e\n'
+            '    error = e.class.name\n'
+            '  end\n'
+            '  (prefix/"installer.txt").write [\n'
+            '    installer.verbose?.to_s,\n'
+            '    installer.build_bottle?.to_s,\n'
+            '    installer.build_from_source?.to_s,\n'
+            '    installer.compute_dependencies.empty?.to_s,\n'
+            '    installer.formula.name,\n'
+            '    error,\n'
+            '    FormulaInstaller.attempted.empty?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "installer.txt").read_text().splitlines() == [
+        "true",
+        "true",
+        "false",
+        "true",
+        "ruby-installer-stub",
+        "NotImplementedError",
+        "true",
+    ]
