@@ -3222,6 +3222,198 @@ class PybrewFormulaRef
     self
   end
 
+  def active_log_prefix
+    logs
+  end
+
+  def common_sandbox_env
+    {}
+  end
+
+  def test_sandbox_env
+    {}
+  end
+
+  def test_fixtures
+    []
+  end
+
+  def pypi_packages
+    {}
+  end
+
+  def shared_library
+    nil
+  end
+
+  def rpath
+    lib
+  end
+
+  def loader_path
+    nil
+  end
+
+  def compatibility_version
+    nil
+  end
+
+  def tap!
+    tap
+  end
+
+  def tap_git_head
+    nil
+  end
+
+  def no_autobump!(*_args, **_kwargs)
+    nil
+  end
+
+  def deprecate!(*_args, **_kwargs)
+    nil
+  end
+
+  def disable!(*_args, **_kwargs)
+    nil
+  end
+
+  def allow_network_access!
+    nil
+  end
+
+  def deny_network_access!
+    nil
+  end
+
+  def keg_only
+    !!@info["keg_only"]
+  end
+
+  def link_overwrite_reason
+    nil
+  end
+
+  def link_overwrite_related_formula_names
+    []
+  end
+
+  def link_overwrite_formulae
+    []
+  end
+
+  def link_overwrite_formulae_names
+    []
+  end
+
+  def link_overwrite_keg_name(*_args)
+    nil
+  end
+
+  def implied_link_overwrite?(*_args)
+    false
+  end
+
+  def synced_with_other_formulae?
+    false
+  end
+
+  def ruby_source_checksum
+    nil
+  end
+
+  def ruby_source_path
+    path
+  end
+
+  def undeclared_runtime_dependencies
+    []
+  end
+
+  def runtime_installed_formula_dependents
+    []
+  end
+
+  def installed_runtime_formula_dependencies
+    []
+  end
+
+  def merge_spec_dependables(*_args)
+    nil
+  end
+
+  def add_global_deps_to_spec(*_args)
+    nil
+  end
+
+  def enqueue_resources_and_patches(*_args)
+    nil
+  end
+
+  def prepare_patches
+    nil
+  end
+
+  def fetch_patches
+    nil
+  end
+
+  def selective_patch(*_args)
+    nil
+  end
+
+  def change_dylib_id(*_args)
+    nil
+  end
+
+  def deuniversalize_machos(*_args)
+    nil
+  end
+
+  def extract_macho_slice_from(*_args)
+    nil
+  end
+
+  def generate_completions_from_executable(*_args)
+    nil
+  end
+
+  def formula_namespace
+    nil
+  end
+
+  def full_name_with_optional_tap(_name)
+    full_name
+  end
+
+  def formula_names_for_glob(*_args)
+    []
+  end
+
+  def full_formulae_names
+    [full_name]
+  end
+
+  def spec_eval(*_args)
+    nil
+  end
+
+  def spec_syms
+    []
+  end
+
+  def specs
+    {}
+  end
+
+  def bottle_tab_attributes
+    {}
+  end
+
+  def fetch_bottle_tab(*_args)
+    nil
+  end
+
   def fails_with
     Array(@info["fails_with"])
   end

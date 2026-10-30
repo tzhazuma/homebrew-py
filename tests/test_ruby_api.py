@@ -2211,3 +2211,30 @@ def test_formula_compatibility_batch(
         "true",
         "0",
     ]
+
+
+def test_formula_broad_compatibility_methods(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-broad",
+        "1.0",
+        (
+            '  ref = Formula["ruby-broad"]\n'
+            '  (prefix/"broad").write [\n'
+            '    ref.rpath.to_s, ref.common_sandbox_env.empty?.to_s,\n'
+            '    ref.test_fixtures.empty?.to_s, ref.pypi_packages.nil?.to_s,\n'
+            '    ref.ruby_source_path.to_s, ref.full_formulae_names.join(","),\n'
+            '    ref.specs.empty?.to_s, ref.link_overwrite_reason.nil?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    lines = (keg / "broad").read_text().splitlines()
+    assert lines[0] == str(keg / "lib")
+    assert lines[1:3] == ["true", "true"]
+    assert lines[3] == "false"
+    assert lines[4] == "" or lines[4].endswith("ruby-broad.rb")
+    assert lines[5] == "ruby-broad"
+    assert lines[6:] == ["true", "true"]
