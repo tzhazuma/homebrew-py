@@ -28,6 +28,7 @@ from .cellar import Cellar
 from .errors import BuildError
 from .models import Formula
 from .paths import Config
+from .taps import FormulaLoader, discover_taps
 
 #: Environment variable overriding the Ruby interpreter used for tests.
 RUBY_ENV = "PYBREW_RUBY"
@@ -38,6 +39,9 @@ DEFAULT_RUBY = "/usr/bin/ruby"
 #: Upper bound for one formula test.  Tests that need longer can pass
 #: ``timeout=`` to :func:`run_formula_test`.
 DEFAULT_TIMEOUT = 300.0
+
+#: Maximum number of dependency formulae loaded for ``Formula[...]`` lookups.
+MAX_FORMULA_ENTRIES = 50
 
 
 class FormulaTestError(BuildError):
@@ -130,12 +134,30 @@ class FormulaTestContext
     # Ruby process, so a simple class-level reference is enough for
     # ``Formula["name"]`` to find the formula under test.
     attr_accessor :current
+
+    # Evaluate a captured test body (``do ... end`` block, ``def test`` method
+    # or a bare expression) inside ``context``.  Shared by the top-level runner
+    # and by ``Formula["dep"].test``.
+    def evaluate_source(context, source, label = "(formula test)")
+      stripped = source.sub(/\A\s+/, "")
+      if stripped.start_with?("def test", "def self.test")
+        # A formula may define ``def test`` instead of using the usual block.
+        context.instance_eval(source, label, 1)
+        context.test
+      elsif stripped.start_with?("do")
+        # The parser captures the block as ``do ... end`` without the leading
+        # ``test`` call.
+        context.instance_eval("test " + stripped, label, 1)
+      else
+        context.instance_eval(stripped, label, 1)
+      end
+    end
   end
 
   # Stand-in for Homebrew's ``Formula`` class.  The test runner knows the
-  # formula under test plus its declared dependencies (their path metadata is
-  # passed in from Python), so ``Formula["name"]`` resolves those and fails
-  # clearly for anything else.
+  # formula under test plus its declared dependencies (path metadata and, when
+  # available from the configured local taps, test sources are passed in from
+  # Python), so ``Formula["name"]`` resolves those and fails clearly otherwise.
   class Formula
     PATH_METHODS = %w[
       bin sbin lib include share etc libexec opt_bin opt_sbin opt_lib
@@ -210,7 +232,7 @@ class FormulaTestContext
     alias latest_version_installed? installed?
 
     def test_defined?
-      @name == @context.name && @info["test_defined"] != false
+      @info["test_defined"] != false
     end
 
     def test_fixtures(file)
@@ -218,17 +240,39 @@ class FormulaTestContext
     end
 
     # Homebrew exposes the formula's ``test`` method (defined by ``test do``).
-    # This runner only loads the test body of the formula under test, so the
-    # entry point exists but cannot run another formula's test block.
+    # Dependency test bodies are loaded from the configured local taps on a
+    # best-effort basis; the parent test's testpath and environment are reused.
     def test
       if @name == @context.name
         raise FormulaTestFailure,
               "Formula[#{@name.inspect}].test cannot be called from inside its own test block"
       end
 
-      raise FormulaTestFailure,
-            "Formula[#{@name.inspect}].test is not available: this test runner does " \
-            "not load dependency test blocks"
+      unless installed?
+        raise FormulaTestFailure,
+              "Formula[#{@name.inspect}].test is not available: the formula is not installed"
+      end
+
+      source = @info["test_source"].to_s
+      if source.strip.empty?
+        load_error = @info["test_source_error"].to_s
+        if load_error.empty?
+          raise FormulaTestFailure,
+                "Formula[#{@name.inspect}].test is not available: it has no test block"
+        end
+
+        raise FormulaTestFailure,
+              "Formula[#{@name.inspect}].test is not available: could not load its test " \
+              "block (#{load_error})"
+      end
+
+      previous = FormulaTestContext.current
+      begin
+        context = @context.dependency_test_context(@info)
+        FormulaTestContext.evaluate_source(context, source, "(formula #{@name} test)")
+      ensure
+        FormulaTestContext.current = previous
+      end
     end
 
     def deps
@@ -313,7 +357,7 @@ class FormulaTestContext
     zsh_completion fish_completion elisp
   ].freeze
 
-  attr_reader :homebrew_prefix, :cellar
+  attr_reader :homebrew_prefix, :cellar, :formulae
 
   def initialize(config)
     @config = config
@@ -355,6 +399,22 @@ class FormulaTestContext
     end
 
     Formula.new(self, name, info)
+  end
+
+  # Build the context used to execute a dependency's test body.  It shares the
+  # parent test's testpath and environment and resolves nested ``Formula[...]``
+  # lookups through the same metadata map.
+  def dependency_test_context(info)
+    FormulaTestContext.new(
+      "name" => info["name"].to_s,
+      "version" => info["version"].to_s,
+      "testpath" => @testpath.to_s,
+      "prefix" => info["prefix"].to_s,
+      "homebrew_prefix" => @homebrew_prefix.to_s,
+      "cellar" => @cellar.to_s,
+      "paths" => info["paths"] || {},
+      "formulae" => @formulae
+    )
   end
 
   PATH_NAMES.each do |name|
@@ -1093,19 +1153,7 @@ HOMEBREW_CELLAR = Pathname.new(config["cellar"].to_s)
 def run_formula_test_body(config)
   source = File.read(ARGV[1])
   context = FormulaTestContext.new(config)
-  stripped = source.sub(/\A\s+/, "")
-
-  if stripped.start_with?("def test", "def self.test")
-    # A formula may define ``def test`` instead of using the usual block.
-    context.instance_eval(source, "(formula test)", 1)
-    context.test
-  elsif stripped.start_with?("do")
-    # The parser captures the block as ``do ... end`` without the leading
-    # ``test`` call.
-    context.instance_eval("test " + stripped, "(formula test)", 1)
-  else
-    context.instance_eval(stripped, "(formula test)", 1)
-  end
+  FormulaTestContext.evaluate_source(context, source)
 end
 
 begin
@@ -1148,8 +1196,8 @@ def _installed_keg(formula: Formula, config: Config) -> Path:
     return keg
 
 
-def _test_paths(formula: Formula, config: Config, keg: Path) -> dict[str, str]:
-    opt = config.opt_path(formula.name)
+def _test_paths(name: str, config: Config, keg: Path) -> dict[str, str]:
+    opt = config.opt_path(name)
     if not opt.exists():
         opt = keg
     share = keg / "share"
@@ -1170,8 +1218,8 @@ def _test_paths(formula: Formula, config: Config, keg: Path) -> dict[str, str]:
         "opt_include": opt / "include",
         "opt_share": opt / "share",
         "opt_libexec": opt / "libexec",
-        "opt_pkgshare": opt / "share" / formula.name,
-        "pkgshare": share / formula.name,
+        "opt_pkgshare": opt / "share" / name,
+        "pkgshare": share / name,
         "var": config.var,
         "man": man_root,
         "man1": man_root / "man1",
@@ -1182,13 +1230,13 @@ def _test_paths(formula: Formula, config: Config, keg: Path) -> dict[str, str]:
         "man6": man_root / "man6",
         "man7": man_root / "man7",
         "man8": man_root / "man8",
-        "doc": share / "doc" / formula.name,
+        "doc": share / "doc" / name,
         "info": share / "info",
-        "pkgetc": config.prefix / "etc" / formula.name,
+        "pkgetc": config.prefix / "etc" / name,
         "bash_completion": keg / "etc" / "bash_completion.d",
         "zsh_completion": share / "zsh" / "site-functions",
         "fish_completion": share / "fish" / "vendor_completions.d",
-        "elisp": share / "emacs" / "site-lisp" / formula.name,
+        "elisp": share / "emacs" / "site-lisp" / name,
     }
     return {name: str(path) for name, path in mapping.items()}
 
@@ -1216,14 +1264,62 @@ def _declared_dependency_names(formula: Formula) -> list[str]:
     return names
 
 
+def _formula_loader(config: Config) -> FormulaLoader:
+    """Loader over the configured local taps only (never the network)."""
+
+    return FormulaLoader(discover_taps(config.taps))
+
+
+def _dependency_entry(
+    name: str, config: Config, loader: FormulaLoader
+) -> tuple[dict[str, object], Optional[Formula]]:
+    """Build one ``Formula[...]`` entry for a declared dependency.
+
+    The dependency's source is read from the configured local taps so its
+    ``test do ... end`` body can be executed by ``Formula["dep"].test``.  When
+    loading fails, ``test_source_error`` records the reason so the Ruby side can
+    report a clear error instead of pretending the formula has no test.
+    """
+
+    dependency_keg = Cellar(config).keg(name)
+    entry: dict[str, object] = {
+        "name": name,
+        "full_name": name,
+        "version": dependency_keg.name if dependency_keg is not None else None,
+        "prefix": str(dependency_keg) if dependency_keg is not None else None,
+        "opt_prefix": str(config.opt_path(name)),
+        "installed": dependency_keg is not None,
+        "dependencies": [],
+        "test_source": "",
+        "test_source_error": None,
+        "test_defined": False,
+    }
+    if dependency_keg is not None:
+        entry["paths"] = _test_paths(name, config, dependency_keg)
+
+    try:
+        loaded = loader.load(name)
+    except Exception as error:  # noqa: BLE001 - best-effort local lookup
+        entry["test_source_error"] = f"{type(error).__name__}: {error}"
+        return entry, None
+
+    entry["full_name"] = loaded.full_name
+    entry["dependencies"] = _declared_dependency_names(loaded)
+    entry["test_source"] = loaded.test_source or ""
+    entry["test_defined"] = bool((loaded.test_source or "").strip())
+    return entry, loaded
+
+
 def _formula_entries(
     formula: Formula, config: Config, keg: Path
 ) -> dict[str, dict[str, object]]:
-    """Path metadata for ``Formula[...]`` lookups inside the test body.
+    """Metadata for ``Formula[...]`` lookups inside the test body.
 
-    Homebrew's ``Formula[]`` can load any formula; pybrew only parses the
-    formula under test, so the runner exposes that formula plus its declared
-    dependencies (installed ones carry their keg path).
+    Homebrew's ``Formula[]`` can load any formula; pybrew exposes the formula
+    under test plus its declared dependencies, and (best-effort) their own
+    declared dependencies so nested ``Formula[...]`` lookups work.  Dependency
+    sources come from the configured local taps; loading failures are recorded
+    and surfaced by ``Formula#test``.
     """
 
     dependencies = _declared_dependency_names(formula)
@@ -1240,22 +1336,23 @@ def _formula_entries(
             "installed": True,
             "dependencies": dependencies,
             "test_defined": bool((formula.test_source or "").strip()),
+            "test_source": "",
+            "test_source_error": "re-entrant test execution is not supported",
         }
     }
-    cellar = Cellar(config)
-    for name in dependencies:
-        if name in entries:
-            continue
-        dependency_keg = cellar.keg(name)
-        entries[name] = {
-            "name": name,
-            "full_name": name,
-            "version": dependency_keg.name if dependency_keg is not None else None,
-            "prefix": str(dependency_keg) if dependency_keg is not None else None,
-            "opt_prefix": str(config.opt_path(name)),
-            "installed": dependency_keg is not None,
-            "dependencies": [],
-        }
+    if dependencies:
+        loader = _formula_loader(config)
+        queue = list(dependencies)
+        while queue and len(entries) < MAX_FORMULA_ENTRIES:
+            name = queue.pop(0)
+            if name in entries:
+                continue
+            entry, loaded = _dependency_entry(name, config, loader)
+            entries[name] = entry
+            if loaded is not None:
+                for child in _declared_dependency_names(loaded):
+                    if child not in entries:
+                        queue.append(child)
     return entries
 
 
@@ -1328,6 +1425,11 @@ def run_formula_test(
     stderr attached.  A test body that calls ``skip`` exits successfully and
     reports ``Formula test skipped: ...`` on stdout.
 
+    ``Formula["dep"].test`` executes a dependency's captured test body when the
+    dependency is installed and its formula source is available in the
+    configured local taps; otherwise it fails with a clear error.  Dependency
+    tests reuse the parent test's ``testpath`` and environment.
+
     ``PYBREW_TEST_FIXTURES`` (directory used by the ``test_fixtures`` helper)
     and ``PYBREW_MACOS_VERSION`` (override used by ``MacOS.version`` inside
     tests) are read from the child environment and can be supplied via
@@ -1361,7 +1463,7 @@ def run_formula_test(
         "prefix": str(keg),
         "homebrew_prefix": str(config.prefix),
         "cellar": str(config.cellar),
-        "paths": _test_paths(formula, config, keg),
+        "paths": _test_paths(formula.name, config, keg),
         "formulae": _formula_entries(formula, config, keg),
     }
     config_path.write_text(json.dumps(payload), encoding="utf-8")

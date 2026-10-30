@@ -36,9 +36,9 @@ requires_ruby = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 
 
-def _config(tmp_path: Path) -> Config:
+def _config(tmp_path: Path, taps: list[Path] | None = None) -> Config:
     config = Config.default(
-        prefix=tmp_path / "prefix", taps=[], cache=tmp_path / "cache"
+        prefix=tmp_path / "prefix", taps=taps or [], cache=tmp_path / "cache"
     )
     config.ensure()
     return config
@@ -51,10 +51,11 @@ def _installed_formula(
     name: str = "hello-test",
     version: str = "1.0",
     installed: bool = True,
+    taps: list[Path] | None = None,
 ) -> tuple[Formula, Config]:
     formula = Formula(name=name, version=version)
     formula.test_source = test_source
-    config = _config(tmp_path)
+    config = _config(tmp_path, taps=taps)
     if installed:
         keg = config.keg_path(name, version)
         (keg / "bin").mkdir(parents=True)
@@ -74,8 +75,14 @@ def _fake_ruby(tmp_path: Path, script: str) -> Path:
     return path
 
 
-def _formula_source(name: str, test_block: str | None) -> str:
+def _formula_source(
+    name: str,
+    test_block: str | None,
+    *,
+    depends_on: list[str] | None = None,
+) -> str:
     class_name = "".join(part.capitalize() for part in name.replace("-", " ").split())
+    deps = "".join(f'  depends_on "{dependency}"\n' for dependency in depends_on or [])
     test = "" if test_block is None else "\n" + test_block + "\n"
     return f'''class {class_name} < Formula
   desc "synthetic formula test fixture"
@@ -83,8 +90,38 @@ def _formula_source(name: str, test_block: str | None) -> str:
   url "https://example.com/{name}-1.0.tar.gz"
   sha256 "{"0" * 64}"
   license "MIT"
-{test}end
+{deps}{test}end
 '''
+
+
+def _write_tap_formula(
+    tap: Path,
+    name: str,
+    test_block: str | None,
+    *,
+    depends_on: list[str] | None = None,
+) -> Path:
+    path = tap / "Formula" / f"{name}.rb"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        _formula_source(name, test_block, depends_on=depends_on), encoding="utf-8"
+    )
+    return path
+
+
+def _install_keg(
+    config: Config, name: str, *, version: str = "1.0", output: str = "ok"
+) -> Path:
+    keg = config.keg_path(name, version)
+    (keg / "bin").mkdir(parents=True)
+    script = keg / "bin" / name
+    script.write_text(f"#!/bin/sh\necho {output}\n", encoding="utf-8")
+    script.chmod(0o755)
+    opt = config.opt_path(name)
+    opt.parent.mkdir(parents=True, exist_ok=True)
+    if not os.path.lexists(opt):
+        opt.symlink_to(keg)
+    return keg
 
 
 def _write_cli_formula(
@@ -599,15 +636,17 @@ def test_formula_test_entry_rejects_reentrant_call(tmp_path: Path) -> None:
 
 
 @requires_ruby
-def test_formula_test_entry_does_not_load_dependency_tests(tmp_path: Path) -> None:
+def test_dependency_test_requires_installation(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(tap, "dep-lib", "  test do\n    assert true\n  end")
     formula, config = _installed_formula(
-        tmp_path, 'do\n  Formula["dep-lib"].test\nend'
+        tmp_path, 'do\n  Formula["dep-lib"].test\nend', taps=[tap]
     )
     formula.dependencies = [Dependency(name="dep-lib")]
     with pytest.raises(FormulaTestError) as excinfo:
         run_formula_test(formula, config, ruby=_REAL_RUBY)
 
-    assert "does not load dependency test blocks" in excinfo.value.stderr
+    assert "the formula is not installed" in excinfo.value.stderr
 
 
 @requires_ruby
@@ -1060,4 +1099,130 @@ end
         ruby=_REAL_RUBY,
         env={"PYBREW_MACOS_VERSION": "14.5.1"},
     )
+    assert result.success is True
+
+
+# ---------------------------------------------------------------------------
+# dependency test bodies (best-effort, local taps only)
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_dependency_test_body_executes(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(
+        tap,
+        "dep-lib",
+        '''  test do
+    assert_equal "dep-lib", name
+    assert_equal "dep-ok", shell_output("#{bin}/dep-lib").strip
+    (testpath/"dep-marker").write "marker"
+  end''',
+    )
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  Formula["dep-lib"].test
+  assert Formula["dep-lib"].test_defined?
+  assert_equal "hello-test", Formula["hello-test"].name
+  assert_path_exists testpath/"dep-marker"
+  assert_equal "marker", (testpath/"dep-marker").read
+end
+""",
+        taps=[tap],
+    )
+    formula.dependencies = [Dependency(name="dep-lib")]
+    _install_keg(config, "dep-lib", output="dep-ok")
+
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_dependency_without_test_block_fails_clearly(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(tap, "dep-notest", None)
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  Formula["dep-notest"].test\nend', taps=[tap]
+    )
+    formula.dependencies = [Dependency(name="dep-notest")]
+    _install_keg(config, "dep-notest")
+
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert "has no test block" in excinfo.value.stderr
+
+
+@requires_ruby
+def test_dependency_test_source_unavailable_fails_clearly(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  Formula["dep-lib"].test\nend', taps=[]
+    )
+    formula.dependencies = [Dependency(name="dep-lib")]
+    _install_keg(config, "dep-lib")
+
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert "could not load its test block" in excinfo.value.stderr
+    assert "no formula named" in excinfo.value.stderr
+
+
+@requires_ruby
+def test_dependency_test_failure_propagates(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(
+        tap, "dep-lib", '  test do\n    assert_equal "expected", "actual"\n  end'
+    )
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  Formula["dep-lib"].test\nend', taps=[tap]
+    )
+    formula.dependencies = [Dependency(name="dep-lib")]
+    _install_keg(config, "dep-lib")
+
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert "Expected" in excinfo.value.stderr
+    assert "expected" in excinfo.value.stderr
+
+
+@requires_ruby
+def test_dependency_test_skip_propagates(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(
+        tap, "dep-lib", '  test do\n    skip "dep not applicable"\n  end'
+    )
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  Formula["dep-lib"].test\nend', taps=[tap]
+    )
+    formula.dependencies = [Dependency(name="dep-lib")]
+    _install_keg(config, "dep-lib")
+
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+    assert "Formula test skipped: dep not applicable" in result.stdout
+
+
+@requires_ruby
+def test_nested_dependency_test_body_executes(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(
+        tap, "grandchild", '  test do\n    assert_equal "grandchild", name\n  end'
+    )
+    _write_tap_formula(
+        tap,
+        "dep-lib",
+        '  test do\n    Formula["grandchild"].test\n    assert_equal "dep-lib", name\n  end',
+        depends_on=["grandchild"],
+    )
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  Formula["dep-lib"].test\nend', taps=[tap]
+    )
+    formula.dependencies = [Dependency(name="dep-lib")]
+    _install_keg(config, "dep-lib")
+    _install_keg(config, "grandchild")
+
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
     assert result.success is True
