@@ -828,6 +828,19 @@ class PybrewCaskDSL
   # Evaluate the default language block once, mirroring Homebrew's lazy
   # ``language_eval``.  Without an explicit ``default: true`` block the first
   # declared language is used so a single-language cask still works.
+  def languages
+    @language_blocks.keys
+  end
+
+  def language_groups
+    @language_blocks.keys.map { |key| [key] }
+  end
+
+  def default_language_group
+    key = @default_language_key || @language_blocks.keys.first
+    key.nil? ? nil : [key]
+  end
+
   def language_eval
     return @language_value unless @language_value.nil?
     return nil if @language_blocks.empty?

@@ -839,3 +839,25 @@ def test_cask_path_and_os_helpers(
         f"caskroom={prefix}/Caskroom/tiny staged={prefix}/Caskroom/tiny/1.0 os="
     )
     assert cask.caveats.endswith(" token=tiny")
+
+
+@requires_ruby
+def test_cask_language_helpers(allow_ruby: None) -> None:
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  sha256 "' + "a" * 64 + '"\n'
+            '  url "https://example.com/tiny.zip"\n'
+            '  name "Tiny"\n'
+            '  desc "tiny fixture"\n'
+            '  homepage "https://example.com/tiny"\n'
+            '  language "en", default: true do\n'
+            '    "English"\n'
+            '  end\n'
+            '  language "fr" do\n'
+            '    "French"\n'
+            '  end\n'
+            '  caveats "langs=#{languages.join(",")} groups=#{language_groups.length} default=#{default_language_group.first}"\n'
+        )
+    )
+    assert cask.caveats == "langs=en,fr groups=2 default=en"
