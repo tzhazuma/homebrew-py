@@ -1086,3 +1086,138 @@ def test_evaluator_metadata_helpers_on_cask_model(allow_ruby: None) -> None:
     assert cask.autobump is False
     assert cask.livecheck_defined is False
     assert cask.livecheck == {}
+
+
+# ---------------------------------------------------------------------------
+# sha256 Linux architecture keys
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_cask_sha256_linux_arch_keys(
+    allow_ruby: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    arm_digest = "a" * 64
+    intel_digest = "b" * 64
+    arm_linux_digest = "c" * 64
+    x64_linux_digest = "d" * 64
+    source = _source(
+        '  version "1.0"\n'
+        f'  sha256 arm: "{arm_digest}", intel: "{intel_digest}", '
+        f'arm64_linux: "{arm_linux_digest}", '
+        f'x86_64_linux: "{x64_linux_digest}"\n'
+    )
+    expected_map = {
+        "arm": arm_digest,
+        "intel": intel_digest,
+        "arm64_linux": arm_linux_digest,
+        "x86_64_linux": x64_linux_digest,
+    }
+
+    monkeypatch.setenv("PYBREW_TARGET_OS", "linux")
+    monkeypatch.setenv("PYBREW_TARGET_ARCH", "arm64")
+    arm_linux = evaluate_cask_source(source)
+    assert arm_linux.sha256_map == expected_map
+    assert arm_linux.sha256 == arm_linux_digest
+    assert arm_linux.resolved_sha256() == arm_linux_digest
+
+    monkeypatch.setenv("PYBREW_TARGET_ARCH", "x86_64")
+    x64_linux = evaluate_cask_source(source)
+    assert x64_linux.sha256 == x64_linux_digest
+    assert x64_linux.resolved_sha256() == x64_linux_digest
+
+    monkeypatch.setenv("PYBREW_TARGET_OS", "darwin")
+    monkeypatch.setenv("PYBREW_TARGET_ARCH", "arm64")
+    mac_arm = evaluate_cask_source(source)
+    assert mac_arm.sha256 == arm_digest
+
+
+# ---------------------------------------------------------------------------
+# deprecation/disable/homepage/no_autobump metadata
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_cask_deprecation_and_disable_metadata(allow_ruby: None) -> None:
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  homepage "https://example.com/", browsed: "2026-07-26"\n'
+            '  deprecate! date: "2024-01-01", because: :unmaintained, '
+            'replacement_formula: "other"\n'
+            '  disable! date: "2024-02-02", because: "broken", '
+            'replacement: "newtool"\n'
+            '  no_autobump! because: :extract_plist\n'
+        )
+    )
+
+    assert cask.homepage == "https://example.com/"
+    assert cask.homepage_browsed == "2026-07-26"
+
+    assert cask.deprecated is True
+    assert cask.deprecation_date == "2024-01-01"
+    assert cask.deprecation_reason == ":unmaintained"
+    assert cask.deprecation_replacement_formula == "other"
+    assert cask.deprecation_replacement_cask is None
+    assert cask.deprecate_args == {
+        "date": "2024-01-01",
+        "because": ":unmaintained",
+        "replacement_formula": "other",
+    }
+
+    assert cask.disabled is True
+    assert cask.disable_date == "2024-02-02"
+    assert cask.disable_reason == "broken"
+    # The legacy ``replacement:`` keyword fills both replacement fields.
+    assert cask.disable_replacement_formula == "newtool"
+    assert cask.disable_replacement_cask == "newtool"
+    assert cask.disable_args["replacement"] == "newtool"
+
+    assert cask.no_autobump is True
+    assert cask.no_autobump_message == ":extract_plist"
+
+
+# ---------------------------------------------------------------------------
+# on_system_block_min_os
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_cask_on_system_block_min_os(
+    allow_ruby: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PYBREW_TARGET_OS", "darwin")
+    monkeypatch.setenv("HOMEBREW_MACOS_VERSION", "14.5")
+    sonoma = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  on_sonoma do\n'
+            '    version "2.0"\n'
+            '  end\n'
+        )
+    )
+    assert sonoma.version == "2.0"
+    assert sonoma.on_system_block_min_os == "14"
+
+    monkeypatch.setenv("HOMEBREW_MACOS_VERSION", "12.0")
+    older = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  on_monterey :or_older do\n'
+            '    version "2.0"\n'
+            '  end\n'
+        )
+    )
+    assert older.version == "2.0"
+    assert older.on_system_block_min_os == "10.15"
+
+    monkeypatch.setenv("PYBREW_TARGET_OS", "linux")
+    linux = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  on_sonoma do\n'
+            '    version "2.0"\n'
+            '  end\n'
+        )
+    )
+    assert linux.on_system_block_min_os is None

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from .errors import FormulaParseError, PybrewError
-from .models import is_macos, macos_major_version
+from .models import is_linux, is_macos, macos_major_version
 from .ruby_parser import Lexer, Token
 
 
@@ -37,6 +37,7 @@ class Cask:
     name: Optional[str] = None
     desc: Optional[str] = None
     homepage: Optional[str] = None
+    homepage_browsed: Optional[str] = None
     artifacts: list[Artifact] = field(default_factory=list)
     renames: list[tuple[str, str]] = field(default_factory=list)
     uninstall: dict[str, Any] = field(default_factory=dict)
@@ -62,12 +63,24 @@ class Cask:
     #: True when the cask uses ``on_macos``/``on_linux`` blocks.  Mirrors the
     #: Homebrew DSL helper ``on_system_blocks_exist?``.
     on_system_blocks: bool = False
+    #: Minimum macOS release implied by the active ``on_<release>`` block.
+    on_system_block_min_os: Optional[str] = None
     no_autobump: bool = False
     no_autobump_reason: Optional[str] = None
+    #: Homebrew exposes the ``no_autobump!`` reason as ``no_autobump_message``.
+    no_autobump_message: Optional[str] = None
     deprecated: bool = False
     deprecation_reason: Optional[str] = None
+    deprecation_date: Optional[str] = None
+    deprecation_replacement_formula: Optional[str] = None
+    deprecation_replacement_cask: Optional[str] = None
+    deprecate_args: dict[str, Any] = field(default_factory=dict)
     disabled: bool = False
     disable_reason: Optional[str] = None
+    disable_date: Optional[str] = None
+    disable_replacement_formula: Optional[str] = None
+    disable_replacement_cask: Optional[str] = None
+    disable_args: dict[str, Any] = field(default_factory=dict)
     # Raw Ruby block bodies captured from the cask.  They are inert data: no
     # parser or installer path executes them unless a caller explicitly opts
     # in (see ``CaskInstaller(run_scripts=True)``).
@@ -109,11 +122,20 @@ class Cask:
         machine = platform.machine().lower()
         return "arm64" if machine in ("arm64", "aarch64") else "intel"
 
+    def resolved_sha256_key(self) -> str:
+        """Return the platform-specific ``sha256`` map key for this host."""
+        return _sha256_key(self.resolved_arch())
+
     def resolved_sha256(self) -> Optional[str]:
         if self.sha256:
             return self.sha256
         arch = self.resolved_arch()
-        return self.sha256_map.get(arch)
+        value = self.sha256_map.get(self.resolved_sha256_key())
+        if value is not None:
+            return value
+        # Older casks only use the macOS-style ``arm``/``intel`` keys; keep
+        # accepting them where a Linux-specific checksum is absent.
+        return self.sha256_map.get("arm" if arch == "arm64" else "intel")
 
     def _interpolate(self, template: str) -> str:
         version = self.resolved_version()
@@ -241,6 +263,50 @@ _ARCH_NAMES = {
     "golden_gate": 27,
 }
 
+#: Oldest macOS release Homebrew still allows; used by ``:or_older`` blocks.
+_OLDEST_MACOS_VERSION = "10.15"
+
+#: Homebrew accepts these ``sha256`` map keys (macOS and Linux architectures).
+_SHA256_KEYS = ("arm", "intel", "arm64_linux", "x86_64_linux")
+
+
+def _sha256_key(arch: str) -> str:
+    """Return the Homebrew ``sha256`` map key for ``arch`` on this host."""
+
+    if is_linux():
+        return "arm64_linux" if arch == "arm64" else "x86_64_linux"
+    return "arm" if arch == "arm64" else "intel"
+
+
+def _apply_lifecycle_fields(
+    cask: Cask, prefix: str, args: list[Any], kwargs: dict[Any, Any]
+) -> None:
+    """Copy ``deprecate!``/``disable!`` metadata onto ``cask``.
+
+    ``prefix`` is ``"deprecation"`` or ``"disable"``; the attribute names match
+    Homebrew's ``deprecation_*``/``disable_*`` readers.  The legacy
+    ``replacement:`` keyword fills both replacement fields, like Homebrew.
+    """
+
+    reason = kwargs.get("because") or (args[0] if args else None)
+    if reason is not None:
+        setattr(cask, f"{prefix}_reason", str(reason))
+    date = kwargs.get("date")
+    if date is not None:
+        setattr(cask, f"{prefix}_date", str(date))
+    replacement = kwargs.get("replacement")
+    replacement_formula = kwargs.get("replacement_formula")
+    replacement_cask = kwargs.get("replacement_cask")
+    if replacement is not None:
+        if replacement_formula is None:
+            replacement_formula = replacement
+        if replacement_cask is None:
+            replacement_cask = replacement
+    if replacement_formula is not None:
+        setattr(cask, f"{prefix}_replacement_formula", str(replacement_formula))
+    if replacement_cask is not None:
+        setattr(cask, f"{prefix}_replacement_cask", str(replacement_cask))
+
 
 class CaskParser:
     def __init__(self, source: str, path: Optional[Path] = None, tap: Optional[str] = None):
@@ -353,6 +419,13 @@ class CaskParser:
             self.cask.on_system_blocks = True
         active = self._conditional_active(name, args)
         if active:
+            release = name[3:] if name.startswith("on_") else ""
+            if release in _ARCH_NAMES:
+                modifier = str(args[0]) if args else ""
+                if "or_older" in modifier:
+                    self.cask.on_system_block_min_os = _OLDEST_MACOS_VERSION
+                else:
+                    self.cask.on_system_block_min_os = str(_ARCH_NAMES[release])
             self._parse_block()
         else:
             self._skip_block_body(opener)
@@ -557,21 +630,29 @@ class CaskParser:
             if args:
                 cask.sha256 = str(args[0])
             elif kwargs:
-                for key, value in kwargs.items():
-                    if key in ("arm", "intel"):
-                        cask.sha256_map[key] = str(value)
-                if "arm" in kwargs and cask.resolved_arch() == "arm64":
-                    cask.sha256 = str(kwargs["arm"])
-                elif "intel" in kwargs and cask.resolved_arch() == "intel":
-                    cask.sha256 = str(kwargs["intel"])
+                for key in _SHA256_KEYS:
+                    if key in kwargs:
+                        cask.sha256_map[key] = str(kwargs[key])
+                arch = cask.resolved_arch()
+                preferred = _sha256_key(arch)
+                if preferred in cask.sha256_map:
+                    cask.sha256 = cask.sha256_map[preferred]
+                elif arch == "arm64" and "arm" in cask.sha256_map:
+                    cask.sha256 = cask.sha256_map["arm"]
+                elif arch != "arm64" and "intel" in cask.sha256_map:
+                    cask.sha256 = cask.sha256_map["intel"]
         elif name == "url" and args:
             cask.url = str(args[0])
         elif name == "name" and args:
             cask.name = str(args[0]) if cask.name is None else f"{cask.name}, {args[0]}"
         elif name == "desc" and args:
             cask.desc = str(args[0])
-        elif name == "homepage" and args:
-            cask.homepage = str(args[0])
+        elif name == "homepage":
+            if args:
+                cask.homepage = str(args[0])
+            browsed = kwargs.get("browsed") or kwargs.get(":browsed")
+            if browsed is not None:
+                cask.homepage_browsed = str(browsed)
         elif name == "auto_updates":
             cask.auto_updates = bool(args[0]) if args else True
         elif name == "arch":
@@ -623,14 +704,12 @@ class CaskParser:
                 cask.caveats = str(args[0])
         elif name in ("deprecate!", "deprecate_args"):
             cask.deprecated = True
-            reason = kwargs.get("because") or (args[0] if args else None)
-            if reason is not None:
-                cask.deprecation_reason = str(reason)
+            cask.deprecate_args = dict(kwargs)
+            _apply_lifecycle_fields(cask, "deprecation", args, kwargs)
         elif name == "disable!":
             cask.disabled = True
-            reason = kwargs.get("because") or (args[0] if args else None)
-            if reason is not None:
-                cask.disable_reason = str(reason)
+            cask.disable_args = dict(kwargs)
+            _apply_lifecycle_fields(cask, "disable", args, kwargs)
         elif name == "livecheck":
             self.cask.livecheck_defined = True
         elif name == "no_autobump!":
@@ -638,6 +717,7 @@ class CaskParser:
             reason = kwargs.get("because") or (args[0] if args else None)
             if reason is not None:
                 cask.no_autobump_reason = str(reason)
+                cask.no_autobump_message = str(reason)
         else:
             cask.extra[name] = {"args": args, "kwargs": kwargs}
 

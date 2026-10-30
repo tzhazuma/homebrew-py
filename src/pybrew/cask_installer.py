@@ -138,6 +138,7 @@ require "open3"
 require "pathname"
 require "rbconfig"
 require "shellwords"
+require "timeout"
 
 # Shellwords, FileUtils and Pathname are available to cask script bodies (for
 # example Shellwords.escape or FileUtils.rm_rf) in addition to the helpers
@@ -369,6 +370,68 @@ module PybrewCaskSystem
     environment, command, spawn_options = normalize(args, options, label)
     Kernel.system(environment, *command, **spawn_options)
   end
+
+  # Capture stdout/stderr with optional stdin data and timeout.  ``input`` is
+  # written verbatim, matching Homebrew's SystemCommand (an Array is joined
+  # without separators).  A timeout raises Timeout::Error after terminating the
+  # child process, so a hung cask script cannot hang the installer.
+  def capture(environment, command, spawn_options, input = nil, timeout = nil)
+    stdin_data = if input.nil?
+                   nil
+                 elsif input.is_a?(Array)
+                   input.join
+                 else
+                   input.to_s
+                 end
+    if timeout.nil?
+      spawn = spawn_options.dup
+      spawn[:stdin_data] = stdin_data unless stdin_data.nil?
+      return Open3.capture3(environment, *command, **spawn)
+    end
+    capture_with_timeout(environment, command, spawn_options, stdin_data, timeout)
+  end
+
+  def capture_with_timeout(environment, command, spawn_options, input, timeout)
+    result = nil
+    Open3.popen3(environment, *command, **spawn_options) do |stdin, stdout, stderr, wait_thr|
+      begin
+        stdin.write(input) unless input.nil?
+      rescue Errno::EPIPE
+        nil
+      ensure
+        begin
+          stdin.close unless stdin.closed?
+        rescue IOError
+          nil
+        end
+      end
+      out_reader = Thread.new { stdout.read }
+      err_reader = Thread.new { stderr.read }
+      if wait_thr.join(timeout).nil?
+        begin
+          Process.kill("TERM", wait_thr.pid)
+        rescue Errno::ESRCH, Errno::EPERM
+          nil
+        end
+        unless wait_thr.join(2)
+          begin
+            Process.kill("KILL", wait_thr.pid)
+          rescue Errno::ESRCH, Errno::EPERM
+            nil
+          end
+          wait_thr.join
+        end
+        out_reader.join(2)
+        err_reader.join(2)
+        raise Timeout::Error,
+              "command timed out after #{timeout}s: #{command.join(' ')}"
+      end
+      out_reader.join
+      err_reader.join
+      result = [out_reader.value, err_reader.value, wait_thr.value]
+    end
+    result
+  end
 end
 
 # Command helpers used by some cask scripts through ``Utils``.  They are
@@ -421,6 +484,34 @@ module Utils
       return path if File.file?(path) && File.executable?(path)
     end
     nil
+  end
+
+  # Write to a command's stdin and capture its output.  This is the safe,
+  # non-interactive subset of Homebrew's ``Utils.popen_write``: no sudo and no
+  # shell is involved.  With ``safe: true`` a non-zero exit raises.
+  def popen_write(*args, safe: false, **options, &block)
+    environment, command, spawn_options =
+      PybrewCaskSystem.normalize(args, options, "Utils.popen_write")
+    output = +""
+    status = nil
+    Open3.popen2e(environment, *command, **spawn_options) do |stdin, stdout, wait_thr|
+      begin
+        block.call(stdin) if block
+      ensure
+        begin
+          stdin.close unless stdin.closed?
+        rescue IOError
+          nil
+        end
+      end
+      output = stdout.read
+      status = wait_thr.value
+    end
+    if safe && (status.nil? || !status.success?)
+      code = status.nil? ? 1 : status.exitstatus
+      raise "Utils.popen_write failed (exit #{code}): #{command.join(' ')}"
+    end
+    output
   end
 end
 
@@ -493,13 +584,20 @@ class PybrewCaskScriptContext
     # Homebrew's cask ``system_command`` is SystemCommand.run! and raises on a
     # non-zero exit.  ``must_succeed: false`` requests the non-raising form.
     must_succeed = options.key?(:must_succeed) ? options.delete(:must_succeed) : true
+    input = options.delete(:input)
+    timeout = options.delete(:timeout)
     if options.delete(:sudo) || options.delete(:sudo_as_root)
       raise ArgumentError, "system_command: sudo is not supported by pybrew cask scripts"
     end
     arguments = [command, *Array(args_option), *positional]
     environment, argv, spawn_options =
       PybrewCaskSystem.normalize(arguments, options, "system_command")
-    stdout, stderr, status = Open3.capture3(environment, *argv, **spawn_options)
+    if input.nil? && timeout.nil?
+      stdout, stderr, status = Open3.capture3(environment, *argv, **spawn_options)
+    else
+      stdout, stderr, status =
+        PybrewCaskSystem.capture(environment, argv, spawn_options, input, timeout)
+    end
     $stdout.print(stdout) if print_stdout && !stdout.empty?
     $stderr.print(stderr) if print_stderr && !stderr.empty?
     result = PybrewCaskScriptResult.new(stdout: stdout, stderr: stderr,

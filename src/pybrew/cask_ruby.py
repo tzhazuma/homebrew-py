@@ -508,10 +508,13 @@ def _cask_from_result(
     cask = Cask(token=token, path=path, tap=tap)
     cask.version = _optional_text(data.get("version"))
     cask.sha256 = _optional_text(data.get("sha256"))
-    cask.sha256_map = _string_map(data.get("sha256_map"), ("arm", "intel"))
+    cask.sha256_map = _string_map(
+        data.get("sha256_map"), ("arm", "intel", "arm64_linux", "x86_64_linux")
+    )
     cask.url = _optional_text(data.get("url"))
     cask.desc = _optional_text(data.get("desc"))
     cask.homepage = _optional_text(data.get("homepage"))
+    cask.homepage_browsed = _optional_text(data.get("homepage_browsed"))
     cask.caveats = _optional_text(data.get("caveats"))
     cask.livecheck_source = _optional_text(data.get("livecheck_source"))
     cask.livecheck_defined = bool(data.get("livecheck_defined"))
@@ -521,6 +524,9 @@ def _cask_from_result(
             str(key): value for key, value in livecheck.items() if value is not None
         }
     cask.on_system_blocks = bool(data.get("on_system_blocks"))
+    cask.on_system_block_min_os = _optional_text(
+        data.get("on_system_block_min_os")
+    )
     cask.language = _optional_text(data.get("language"))
     cask.arch = _optional_text(data.get("arch"))
     cask.arch_map = _string_map(data.get("arch_map"), ("arm", "intel"))
@@ -555,10 +561,21 @@ def _cask_from_result(
     deprecation_reason = data.get("deprecation_reason")
     if deprecation_reason is not None and str(deprecation_reason).strip():
         cask.deprecation_reason = str(deprecation_reason)
+    cask.deprecation_date = _optional_text(data.get("deprecation_date"))
+    cask.deprecation_replacement_formula = _optional_text(
+        data.get("deprecation_replacement_formula")
+    )
+    cask.deprecation_replacement_cask = _optional_text(
+        data.get("deprecation_replacement_cask")
+    )
+    deprecate_args = data.get("deprecate_args")
+    if isinstance(deprecate_args, dict):
+        cask.deprecate_args = dict(deprecate_args)
 
     no_autobump_reason = data.get("no_autobump_reason")
     if no_autobump_reason is not None and str(no_autobump_reason).strip():
         cask.no_autobump_reason = str(no_autobump_reason)
+    cask.no_autobump_message = _optional_text(data.get("no_autobump_message"))
     if data.get("no_autobump"):
         cask.no_autobump = True
 
@@ -566,6 +583,16 @@ def _cask_from_result(
     if disabled:
         cask.disabled = True
         cask.disable_reason = str(data.get("disable_reason") or "") or None
+        cask.disable_date = _optional_text(data.get("disable_date"))
+        cask.disable_replacement_formula = _optional_text(
+            data.get("disable_replacement_formula")
+        )
+        cask.disable_replacement_cask = _optional_text(
+            data.get("disable_replacement_cask")
+        )
+        disable_args = data.get("disable_args")
+        if isinstance(disable_args, dict):
+            cask.disable_args = dict(disable_args)
 
     os_map = data.get("os_map")
     if isinstance(os_map, dict):
@@ -764,6 +791,9 @@ PYBREW_MACOS_VERSION_SYMBOLS = {
   "27" => :golden_gate,
 }.freeze
 
+#: Oldest macOS release Homebrew still allows; used by ``:or_older`` blocks.
+PYBREW_OLDEST_MACOS_VERSION = "10.15"
+
 # A minimal stand-in for Homebrew's ``MacOS::SDK``.  pybrew only reports SDKs it
 # can see on disk; see the ``MacOS.sdk`` documentation below.
 class PybrewCaskSDK
@@ -944,6 +974,7 @@ class PybrewCaskDSL
       "names" => [],
       "desc" => nil,
       "homepage" => nil,
+      "homepage_browsed" => nil,
       "caveats" => nil,
       "artifacts" => [],
       "renames" => [],
@@ -960,15 +991,25 @@ class PybrewCaskDSL
       "arch_map" => {},
       "deprecated" => false,
       "deprecation_reason" => nil,
+      "deprecation_date" => nil,
+      "deprecation_replacement_formula" => nil,
+      "deprecation_replacement_cask" => nil,
+      "deprecate_args" => {},
       "disabled" => false,
+      "disable_reason" => nil,
+      "disable_date" => nil,
+      "disable_replacement_formula" => nil,
+      "disable_replacement_cask" => nil,
+      "disable_args" => {},
       "os_map" => {},
       "no_autobump" => false,
+      "no_autobump_message" => nil,
       "on_system_blocks" => false,
+      "on_system_block_min_os" => nil,
       "livecheck_defined" => false,
       "livecheck" => {},
       "livecheck_location" => nil,
       "no_autobump_reason" => nil,
-      "disable_reason" => nil,
       "warnings" => [],
       "unsupported" => [],
     }
@@ -986,6 +1027,16 @@ class PybrewCaskDSL
 
   def host_arch_key
     host_arch == "arm64" ? "arm" : "intel"
+  end
+
+  # Homebrew's ``sha256`` map uses ``arm64_linux``/``x86_64_linux`` keys for
+  # Linux casks and ``arm``/``intel`` keys for macOS casks.
+  def sha256_key
+    if host_platform == "linux"
+      host_arch == "arm64" ? "arm64_linux" : "x86_64_linux"
+    else
+      host_arch_key
+    end
   end
 
   def macos_major
@@ -1034,12 +1085,12 @@ class PybrewCaskDSL
     end
 
     kwargs.each do |key, value|
-      next unless %w[arm intel].include?(key.to_s)
+      next unless %w[arm intel arm64_linux x86_64_linux].include?(key.to_s)
 
       @sha256_map[key.to_s] = value.to_s
     end
     @data["sha256_map"] = @sha256_map
-    mapped = @sha256_map[host_arch_key]
+    mapped = @sha256_map[sha256_key] || @sha256_map[host_arch_key]
     unless mapped.nil?
       @sha256 = mapped
       @data["sha256"] = mapped
@@ -1070,7 +1121,8 @@ class PybrewCaskDSL
     @data["desc"] = value.to_s
   end
 
-  def homepage(value = nil, *_args)
+  def homepage(value = nil, browsed: nil, **_options)
+    @data["homepage_browsed"] = browsed.to_s unless browsed.nil?
     return @data["homepage"] if value.nil?
 
     @data["homepage"] = value.to_s
@@ -1216,7 +1268,11 @@ class PybrewCaskDSL
                  when "or_newer" then macos_major >= major
                  else macos_major == major
                  end
-        evaluate_block(block) if active
+        if active
+          @data["on_system_block_min_os"] =
+            condition.to_s == "or_older" ? PYBREW_OLDEST_MACOS_VERSION : major.to_s
+          evaluate_block(block)
+        end
       end
       nil
     end
@@ -1353,15 +1409,39 @@ class PybrewCaskDSL
   def deprecate!(*args)
     _positional, kwargs = PybrewCaskJSON.split_args(args)
     @data["deprecated"] = true
-    reason = kwargs["because"] || kwargs[:because]
-    @data["deprecation_reason"] = reason.to_s unless reason.nil?
+    @data["deprecate_args"] = kwargs
+    record_lifecycle_metadata("deprecation", kwargs)
     nil
   end
 
   def disable!(*args)
     _positional, kwargs = PybrewCaskJSON.split_args(args)
     @data["disabled"] = true
-    @data["disable_reason"] = (kwargs["because"] || kwargs[:because]).to_s unless (kwargs["because"] || kwargs[:because]).nil?
+    @data["disable_args"] = kwargs
+    record_lifecycle_metadata("disable", kwargs)
+    nil
+  end
+
+  # Copy Homebrew's deprecate!/disable! keyword metadata into the result.  The
+  # legacy ``replacement:`` keyword fills both replacement fields, matching
+  # Homebrew.  pybrew captures the date but does not defer the deprecation or
+  # disable by date; that remains a documented limitation.
+  def record_lifecycle_metadata(prefix, kwargs)
+    reason = kwargs["because"] || kwargs[:because]
+    @data["#{prefix}_reason"] = reason.to_s unless reason.nil?
+    date = kwargs["date"] || kwargs[:date]
+    @data["#{prefix}_date"] = date.to_s unless date.nil?
+    replacement = kwargs["replacement"] || kwargs[:replacement]
+    replacement_formula = kwargs["replacement_formula"] || kwargs[:replacement_formula]
+    replacement_cask = kwargs["replacement_cask"] || kwargs[:replacement_cask]
+    replacement_formula = replacement if replacement_formula.nil? && !replacement.nil?
+    replacement_cask = replacement if replacement_cask.nil? && !replacement.nil?
+    unless replacement_formula.nil?
+      @data["#{prefix}_replacement_formula"] = replacement_formula.to_s
+    end
+    unless replacement_cask.nil?
+      @data["#{prefix}_replacement_cask"] = replacement_cask.to_s
+    end
     nil
   end
 
@@ -1369,7 +1449,10 @@ class PybrewCaskDSL
     _positional, kwargs = PybrewCaskJSON.split_args(args)
     @data["no_autobump"] = true
     reason = kwargs["because"] || kwargs[:because]
-    @data["no_autobump_reason"] = reason.to_s unless reason.nil?
+    unless reason.nil?
+      @data["no_autobump_reason"] = reason.to_s
+      @data["no_autobump_message"] = reason.to_s
+    end
     nil
   end
 

@@ -1027,6 +1027,25 @@ def test_cask_script_shim_macos_and_command_helpers(
       raise "system should have raised"
     rescue RuntimeError
     end
+    cat = system_command "/bin/cat", input: "hello\n",
+                                       print_stdout: false, print_stderr: false
+    if cat.stdout != "hello\n"
+      raise "bad stdin input"
+    end
+    begin
+      system_command "/bin/sleep", args: ["5"], timeout: 0.2, print_stderr: false
+      raise "timeout should have raised"
+    rescue Timeout::Error
+    end
+    piped = Utils.popen_write("/bin/cat") { |io| io.write("piped") }
+    if piped != "piped"
+      raise "bad popen_write"
+    end
+    begin
+      Utils.popen_write("/usr/bin/false", safe: true) { |io| }
+      raise "popen_write safe should have raised"
+    rescue RuntimeError
+    end
   end
 end
 ''',
@@ -1079,3 +1098,133 @@ end
     )
     assert receipt["scripts_requested"] is False
     assert receipt["script_results"] == {}
+
+
+# ---------------------------------------------------------------------------
+# sha256 Linux architecture keys (default parser / Cask model)
+# ---------------------------------------------------------------------------
+
+
+def test_default_parser_sha256_linux_arch_keys(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    arm_digest = "a" * 64
+    intel_digest = "b" * 64
+    arm_linux_digest = "c" * 64
+    x64_linux_digest = "d" * 64
+    cask = parse_cask_source(
+        'cask "multi" do\n'
+        '  version "1.0"\n'
+        f'  sha256 arm: "{arm_digest}", intel: "{intel_digest}", '
+        f'arm64_linux: "{arm_linux_digest}", '
+        f'x86_64_linux: "{x64_linux_digest}"\n'
+        'end\n'
+    )
+    assert cask.sha256_map == {
+        "arm": arm_digest,
+        "intel": intel_digest,
+        "arm64_linux": arm_linux_digest,
+        "x86_64_linux": x64_linux_digest,
+    }
+    # The literal parser selected the checksum for the *host* platform; clear
+    # it so the platform-specific resolution helpers are exercised directly.
+    cask.sha256 = None
+
+    monkeypatch.setattr("pybrew.cask.is_linux", lambda: True)
+    monkeypatch.setattr("pybrew.cask.platform.machine", lambda: "aarch64")
+    assert cask.resolved_sha256_key() == "arm64_linux"
+    assert cask.resolved_sha256() == arm_linux_digest
+
+    monkeypatch.setattr("pybrew.cask.platform.machine", lambda: "x86_64")
+    assert cask.resolved_sha256_key() == "x86_64_linux"
+    assert cask.resolved_sha256() == x64_linux_digest
+
+    monkeypatch.setattr("pybrew.cask.is_linux", lambda: False)
+    monkeypatch.setattr("pybrew.cask.platform.machine", lambda: "arm64")
+    assert cask.resolved_sha256_key() == "arm"
+    assert cask.resolved_sha256() == arm_digest
+
+
+# ---------------------------------------------------------------------------
+# deprecation/disable/homepage/no_autobump metadata (default parser)
+# ---------------------------------------------------------------------------
+
+
+def test_default_parser_lifecycle_metadata() -> None:
+    cask = parse_cask_source(
+        'cask "meta" do\n'
+        '  version "1.0"\n'
+        '  homepage "https://example.com/", browsed: "2026-07-26"\n'
+        '  deprecate! date: "2024-01-01", because: "old", '
+        'replacement_formula: "other"\n'
+        '  disable! date: "2024-02-02", because: "broken", '
+        'replacement: "newtool"\n'
+        '  no_autobump! because: "test"\n'
+        'end\n'
+    )
+
+    assert cask.homepage == "https://example.com/"
+    assert cask.homepage_browsed == "2026-07-26"
+
+    assert cask.deprecated is True
+    assert cask.deprecation_date == "2024-01-01"
+    assert cask.deprecation_reason == "old"
+    assert cask.deprecation_replacement_formula == "other"
+    assert cask.deprecation_replacement_cask is None
+    assert cask.deprecate_args["replacement_formula"] == "other"
+
+    assert cask.disabled is True
+    assert cask.disable_date == "2024-02-02"
+    assert cask.disable_reason == "broken"
+    assert cask.disable_replacement_formula == "newtool"
+    assert cask.disable_replacement_cask == "newtool"
+    assert cask.disable_args["replacement"] == "newtool"
+
+    assert cask.no_autobump_message == "test"
+
+
+def test_default_parser_on_system_block_min_os(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("pybrew.cask.macos_major_version", lambda: 14)
+    sonoma = parse_cask_source(
+        'cask "sonoma" do\n'
+        '  version "1.0"\n'
+        '  on_sonoma do\n'
+        '    version "2.0"\n'
+        '  end\n'
+        'end\n'
+    )
+    assert sonoma.version == "2.0"
+    assert sonoma.on_system_block_min_os == "14"
+
+    monkeypatch.setattr("pybrew.cask.macos_major_version", lambda: 12)
+    older = parse_cask_source(
+        'cask "older" do\n'
+        '  version "1.0"\n'
+        '  on_monterey :or_older do\n'
+        '    version "2.0"\n'
+        '  end\n'
+        'end\n'
+    )
+    assert older.on_system_block_min_os == "10.15"
+
+
+# ---------------------------------------------------------------------------
+# script shim: stdin input, timeout and Utils.popen_write
+# ---------------------------------------------------------------------------
+
+
+def test_cask_script_shim_supports_input_timeout_and_popen_write() -> None:
+    from pybrew.cask_installer import _CASK_SCRIPT_SHIM
+
+    for snippet in (
+        "require \"timeout\"",
+        "def capture(environment, command, spawn_options, input = nil, timeout = nil)",
+        "def capture_with_timeout(",
+        "options.delete(:input)",
+        "options.delete(:timeout)",
+        "def popen_write(*args, safe: false, **options, &block)",
+        "Open3.popen2e",
+    ):
+        assert snippet in _CASK_SCRIPT_SHIM
