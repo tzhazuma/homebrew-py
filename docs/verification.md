@@ -862,9 +862,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `cbd46d0` (Keg, Tab and Formulary Ruby API)
-- CI run for `cbd46d0`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/40989421460>
+- Latest feature commit: `18a7aed` (rendered Formula#caveats)
+- CI run for `18a7aed`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/40989942008>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
