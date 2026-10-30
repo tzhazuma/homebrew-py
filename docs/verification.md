@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-574 passed, 4 skipped in 125.04s
+575 passed, 4 skipped in 139.49s
 ```
 
 Breakdown of the feature slices:
@@ -723,6 +723,11 @@ local remote, commits a change, and confirms the CLI updates it.
 - Added `socket_path`/`socket_text`/`write_socket` and wired socket services to
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
+
+## Cask livecheck flag
+
+- Added `livecheck_defined?` to the opt-in cask Ruby evaluator; `livecheck`
+  blocks now record that they were seen.
 
 ## Service ref names
 

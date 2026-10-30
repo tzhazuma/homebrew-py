@@ -861,3 +861,22 @@ def test_cask_language_helpers(allow_ruby: None) -> None:
         )
     )
     assert cask.caveats == "langs=en,fr groups=2 default=en"
+
+
+@requires_ruby
+def test_cask_livecheck_defined_helper(allow_ruby: None) -> None:
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  sha256 "' + "a" * 64 + '"\n'
+            '  url "https://example.com/tiny.zip"\n'
+            '  name "Tiny"\n'
+            '  desc "tiny fixture"\n'
+            '  homepage "https://example.com/tiny"\n'
+            '  livecheck do\n'
+            '    regex(/tiny-(\\d+)/)\n'
+            '  end\n'
+            '  caveats "livecheck=#{livecheck_defined?}"\n'
+        )
+    )
+    assert cask.caveats == "livecheck=true"

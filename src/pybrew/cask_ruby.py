@@ -592,6 +592,7 @@ class PybrewCaskDSL
       "os_map" => {},
       "no_autobump" => false,
       "on_system_blocks" => false,
+      "livecheck_defined" => false,
       "no_autobump_reason" => nil,
       "disable_reason" => nil,
       "warnings" => [],
@@ -985,7 +986,12 @@ class PybrewCaskDSL
   end
 
   def livecheck(*_args, &_block)
+    @data["livecheck_defined"] = true
     nil
+  end
+
+  def livecheck_defined?
+    !!@data["livecheck_defined"]
   end
 
   # -- cask scripts and unknown stanzas ---------------------------------
