@@ -955,9 +955,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `b361217` (Keg file linking)
-- CI run for `b361217`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41002040900>
+- Latest feature commit: `24d750c` (Keg introspection helpers)
+- CI run for `24d750c`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41002509371>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
