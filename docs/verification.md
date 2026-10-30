@@ -1077,9 +1077,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `2abe532` (Formula sandbox environment hashes)
-- CI run for `2abe532`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41021545982>
+- Latest feature commit: `a978550` (service ref plist and service names)
+- CI run for `a978550`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41022135145>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
