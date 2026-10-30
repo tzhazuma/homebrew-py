@@ -1054,9 +1054,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `82acf38` (Utils Git/Curl helpers)
-- CI run for `82acf38`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41019065684>
+- Latest feature commit: `1ad9368` (cask DSL metadata helpers)
+- CI run for `1ad9368`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41019648951>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
