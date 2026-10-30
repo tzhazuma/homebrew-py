@@ -1047,9 +1047,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `979c987` (Utils::Path helpers)
-- CI run for `979c987`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41014912922>
+- Latest feature commit: `82acf38` (Utils Git/Curl helpers)
+- CI run for `82acf38`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41019065684>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
