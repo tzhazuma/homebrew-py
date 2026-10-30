@@ -1021,9 +1021,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `286bee6` (service run_type directive)
-- CI run for `286bee6`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41011960977>
+- Latest feature commit: `8dcb5ef` (Superenv compatibility module)
+- CI run for `8dcb5ef`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41012640339>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
