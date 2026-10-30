@@ -3055,6 +3055,26 @@ class PybrewFormulaRef
     !!@info["livecheck?"]
   end
 
+  def caveats_source
+    @info["caveats_source"].to_s
+  end
+
+  def test_source
+    @info["test_source"].to_s
+  end
+
+  def livecheck_source
+    @info["livecheck_source"].to_s
+  end
+
+  def post_install_source
+    @info["post_install_source"].to_s
+  end
+
+  def fetch_source
+    @info["fetch_source"].to_s
+  end
+
   def test?
     !!@info["test?"]
   end
@@ -4241,6 +4261,11 @@ def _formula_reference_map(
             isinstance(formula.service, dict) and formula.service.get("source")
         ),
         "caveats?": bool(formula.caveats),
+        "caveats_source": formula.caveats or "",
+        "test_source": formula.test_source or "",
+        "livecheck_source": formula.livecheck_source or "",
+        "post_install_source": formula.post_install_source or "",
+        "fetch_source": formula.fetch_source or "",
         "test?": bool(formula.test_source),
         "options": list(formula.options),
         "deprecated_options": dict(formula.deprecated_options),

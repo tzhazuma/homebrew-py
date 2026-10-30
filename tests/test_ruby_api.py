@@ -2255,3 +2255,30 @@ def test_formula_with_logging_yields(
     )
     keg = _build(tmp_path, formula)
     assert (keg / "logging").read_text() == "yielded"
+
+
+def test_formula_source_accessors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-sources",
+        "1.0",
+        (
+            '  ref = Formula["ruby-sources"]\n'
+            '  (prefix/"sources").write [\n'
+            '    ref.caveats_source.include?("caveat").to_s,\n'
+            '    ref.test_source.include?("assert").to_s,\n'
+            '    ref.livecheck_source.include?("regex").to_s,\n'
+            '    ref.post_install_source.include?("puts").to_s,\n'
+            '    ref.fetch_source.include?("system").to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.caveats = "caveat text"
+    formula.test_source = "assert true"
+    formula.livecheck_source = "regex(/x/)"
+    formula.post_install_source = "puts 1"
+    formula.fetch_source = "system true"
+    keg = _build(tmp_path, formula)
+    assert (keg / "sources").read_text().splitlines() == ["true"] * 5
