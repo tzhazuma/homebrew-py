@@ -936,9 +936,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `7b33d6c` (Formula#fetch and build path accessors)
-- CI run for `7b33d6c`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41000498569>
+- Latest feature commit: `a7403ca` (Formula misc helpers)
+- CI run for `a7403ca`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41001041559>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
