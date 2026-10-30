@@ -96,12 +96,32 @@ require "fileutils"
 require "json"
 require "open3"
 require "pathname"
+require "rbconfig"
 
 class FormulaTestFailure < StandardError
 end
 
+# Raised by ``skip`` inside a formula test.  The runner reports it as a skip
+# (exit 0) rather than a failure, mirroring Minitest's ``Minitest::Skip``.
+class FormulaTestSkip < FormulaTestFailure
+end
+
 class FormulaTestContext
   include FileUtils
+
+  # Sentinel for the single-argument ``assert_operator``/``refute_operator``
+  # predicate forms (Minitest's ``UNDEFINED``).
+  UNDEFINED = Object.new.freeze
+
+  # ``NoMatchingPatternError`` only exists on Ruby 2.7+.  Keep the pattern
+  # assertions loadable on the Ruby 2.6 shipped with macOS; on older Rubies the
+  # fallback class simply never matches.
+  NO_MATCHING_PATTERN_ERROR =
+    if defined?(NoMatchingPatternError)
+      NoMatchingPatternError
+    else
+      Class.new(StandardError)
+    end
 
   attr_reader :testpath
 
@@ -191,6 +211,10 @@ class FormulaTestContext
 
     def test_defined?
       @name == @context.name && @info["test_defined"] != false
+    end
+
+    def test_fixtures(file)
+      @context.test_fixtures(file)
     end
 
     # Homebrew exposes the formula's ``test`` method (defined by ``test do``).
@@ -496,13 +520,31 @@ class FormulaTestContext
   end
 
   def assert_not_equal(expected, actual, message = nil)
-    refute_equal(expected, actual, message)
+    return unless expected == actual
+
+    raise_failure("Expected #{expected.inspect} to not equal #{actual.inspect}", message)
   end
 
-  def assert_operator(left, operator, right, message = nil)
+  def assert_operator(left, operator, right = UNDEFINED, message = nil)
+    if right.equal?(UNDEFINED)
+      return if left.__send__(operator)
+
+      raise_failure("Expected #{left.inspect} to satisfy #{operator}", message)
+    end
     return if left.__send__(operator, right)
 
     raise_failure("Expected #{left.inspect} #{operator} #{right.inspect}", message)
+  end
+
+  def refute_operator(left, operator, right = UNDEFINED, message = nil)
+    if right.equal?(UNDEFINED)
+      return unless left.__send__(operator)
+
+      raise_failure("Expected #{left.inspect} to not satisfy #{operator}", message)
+    end
+    return unless left.__send__(operator, right)
+
+    raise_failure("Expected #{left.inspect} #{operator} #{right.inspect} to be falsey", message)
   end
 
   def assert_kind_of(klass, object, message = nil)
@@ -554,7 +596,9 @@ class FormulaTestContext
   end
 
   def assert_path_not_exists(path, message = nil)
-    refute_path_exists(path, message)
+    return unless File.exist?(path.to_s)
+
+    raise_failure("Expected path #{path.to_s.inspect} to not exist", message)
   end
 
   def assert_path_exists(path, message = nil)
@@ -687,11 +731,19 @@ class FormulaTestContext
   end
 
   def assert_in_epsilon(expected, actual, epsilon = 0.001, message = nil)
-    assert_in_delta(expected, actual, [expected.abs, actual.abs].min * epsilon, message)
+    difference = (expected - actual).abs
+    delta = [expected.abs, actual.abs].min * epsilon
+    return if difference <= delta
+
+    raise_failure("Expected |#{expected} - #{actual}| (#{difference}) to be <= #{delta}", message)
   end
 
   def refute_in_epsilon(expected, actual, epsilon = 0.001, message = nil)
-    refute_in_delta(expected, actual, expected * epsilon, message)
+    difference = (expected - actual).abs
+    delta = expected * epsilon
+    return unless difference <= delta
+
+    raise_failure("Expected |#{expected} - #{actual}| (#{difference}) to be > #{delta}", message)
   end
 
   def assert_same(expected, actual, message = nil)
@@ -750,6 +802,101 @@ class FormulaTestContext
     true
   end
 
+  # Mark the formula test as skipped and stop executing it (Minitest's
+  # ``skip``).  The runner reports the skip and exits successfully.
+  def skip(message = nil)
+    @skipped = true
+    text = message.nil? || message.to_s.empty? ? "Skipped, no message given" : message.to_s
+    raise FormulaTestSkip, text
+  end
+
+  def skipped?
+    @skipped == true
+  end
+
+  def assert_send(send_array, message = nil)
+    receiver, method_name, *arguments = Array(send_array)
+    return if receiver.__send__(method_name, *arguments)
+
+    raise_failure(
+      "Expected #{receiver.inspect}.#{method_name}(*#{arguments.inspect}) to return true",
+      message
+    )
+  end
+
+  # Minitest's pattern-matching assertions (Ruby 2.7+ syntax in the test body).
+  # On Ruby 2.6 the block cannot contain ``case ... in`` at all, but the methods
+  # stay defined so bodies written for newer Rubies run when PYBREW_RUBY points
+  # at a newer interpreter.
+  def assert_pattern
+    raise_failure("assert_pattern requires a block to capture errors.", nil) unless block_given?
+
+    begin
+      yield
+    rescue NO_MATCHING_PATTERN_ERROR => error
+      raise_failure(error.message, nil)
+    end
+  end
+
+  def refute_pattern
+    raise_failure("refute_pattern requires a block to capture errors.", nil) unless block_given?
+
+    begin
+      yield
+    rescue NO_MATCHING_PATTERN_ERROR
+      return
+    end
+    raise_failure("NoMatchingPatternError expected, but nothing was raised.", nil)
+  end
+
+  # Resolve a Homebrew-style test fixture from ``PYBREW_TEST_FIXTURES``.
+  def test_fixtures(file)
+    root = ENV["PYBREW_TEST_FIXTURES"]
+    if root.nil? || root.to_s.empty?
+      raise FormulaTestFailure,
+            "test_fixtures is not configured: set PYBREW_TEST_FIXTURES to a fixtures directory"
+    end
+    path = Pathname.new(root.to_s)/file.to_s
+    unless File.exist?(path)
+      raise FormulaTestFailure,
+            "test fixture #{file.to_s.inspect} does not exist under #{root}"
+    end
+
+    path
+  end
+
+  # Number of assertions executed so far (Minitest's ``assertions``).
+  def assertions
+    @assertions ||= 0
+  end
+
+  attr_writer :assertions
+
+  ASSERTION_METHODS = %i[
+    assert refute assert_equal refute_equal assert_match refute_match
+    assert_predicate refute_predicate assert_empty refute_empty
+    assert_includes refute_includes assert_output refute_output
+    assert_not_equal assert_operator refute_operator assert_kind_of
+    assert_instance_of assert_respond_to assert_raises assert_silent
+    assert_path_exists refute_path_exists assert_path_not_exists
+    assert_directory refute_directory assert_file refute_file
+    assert_symlink refute_symlink assert_executable refute_executable
+    assert_nil refute_nil assert_in_delta refute_in_delta
+    assert_in_epsilon refute_in_epsilon assert_same refute_same
+    refute_instance_of refute_kind_of refute_respond_to assert_throws
+    assert_send assert_pattern refute_pattern flunk pass
+  ].freeze
+
+  module AssertionCounter
+    ASSERTION_METHODS.each do |method_name|
+      define_method(method_name) do |*args, &block|
+        @assertions = assertions + 1
+        super(*args, &block)
+      end
+    end
+  end
+  prepend AssertionCounter
+
   private
 
   def resolve_command(command)
@@ -800,8 +947,150 @@ class FormulaTestContext
   end
 end
 
-def run_formula_test_body
-  config = JSON.parse(File.read(ARGV[0]))
+# Minimal read-only platform helpers used by real formula test blocks.  They
+# intentionally cover only the common predicates (no network, no installs).
+module OS
+  def self.mac?
+    RUBY_PLATFORM.include?("darwin")
+  end
+
+  def self.linux?
+    RUBY_PLATFORM.include?("linux")
+  end
+
+  module Mac
+    class Version
+      include Comparable
+
+      SYMBOLS = {
+        ventura: "13",
+        sonoma: "14",
+        sequoia: "15",
+        tahoe: "26",
+        monterey: "12",
+        big_sur: "11",
+        catalina: "10.15",
+      }.freeze
+
+      attr_reader :major, :minor, :patch
+
+      def initialize(version)
+        parts = version.to_s.split(".")
+        @major = parts[0].to_i
+        @minor = parts[1].to_i
+        @patch = parts[2].to_i
+      end
+
+      def self.from_symbol(symbol)
+        raw = SYMBOLS[symbol.to_sym]
+        raw.nil? ? nil : new(raw)
+      end
+
+      def <=>(other)
+        if other.is_a?(Symbol)
+          other = self.class.from_symbol(other)
+          return nil if other.nil?
+          return 0 if strip_patch == other.strip_patch
+        elsif other.is_a?(String) || other.is_a?(Numeric)
+          other = self.class.new(other.to_s)
+        end
+        return nil unless other.respond_to?(:major) && other.respond_to?(:minor)
+
+        [major, minor, patch] <=> [other.major, other.minor, other.patch]
+      end
+
+      def strip_patch
+        if major >= 11
+          self.class.new(major.to_s)
+        else
+          self.class.new("#{major}.#{minor}")
+        end
+      end
+
+      def to_sym
+        stripped = strip_patch.to_s
+        SYMBOLS.each do |name, raw|
+          return name if self.class.new(raw) == self.class.new(stripped)
+        end
+        :dunno
+      end
+
+      def to_s
+        if patch.positive?
+          "#{major}.#{minor}.#{patch}"
+        elsif minor.positive?
+          "#{major}.#{minor}"
+        else
+          major.to_s
+        end
+      end
+
+      def inspect
+        "#<MacOSVersion: #{to_s.inspect}>"
+      end
+    end
+
+    def self.full_version
+      @full_version ||= Version.new(
+        begin
+          raw = ENV["PYBREW_MACOS_VERSION"].to_s
+          if raw.empty? && OS.mac?
+            raw = `/usr/bin/sw_vers -productVersion 2>/dev/null`.strip
+          end
+          raw.empty? ? "0" : raw
+        rescue StandardError
+          "0"
+        end
+      )
+    end
+
+    def self.version
+      @version ||= full_version.strip_patch
+    end
+  end
+end
+
+# Homebrew exposes ``MacOS`` as an alias for ``OS::Mac``.
+MacOS = OS::Mac
+
+module Hardware
+  module CPU
+    def self.arch
+      host_cpu = RbConfig::CONFIG["host_cpu"].to_s
+      host_cpu =~ /aarch64|arm/ ? :arm64 : :x86_64
+    end
+
+    def self.arm?
+      arch == :arm64
+    end
+
+    def self.intel?
+      !arm?
+    end
+
+    def self.is_64_bit?
+      host_cpu = RbConfig::CONFIG["host_cpu"].to_s
+      ["x86_64", "amd64"].include?(host_cpu) || arch == :arm64
+    end
+
+    def self.cores
+      require "etc"
+      Etc.nprocessors
+    rescue StandardError
+      1
+    end
+
+    def self.physical_cores
+      cores
+    end
+  end
+end
+
+config = JSON.parse(File.read(ARGV[0]))
+HOMEBREW_PREFIX = Pathname.new(config["homebrew_prefix"].to_s)
+HOMEBREW_CELLAR = Pathname.new(config["cellar"].to_s)
+
+def run_formula_test_body(config)
   source = File.read(ARGV[1])
   context = FormulaTestContext.new(config)
   stripped = source.sub(/\A\s+/, "")
@@ -820,7 +1109,10 @@ def run_formula_test_body
 end
 
 begin
-  run_formula_test_body
+  run_formula_test_body(config)
+rescue FormulaTestSkip => error
+  $stdout.puts "Formula test skipped: #{error.message}"
+  exit 0
 rescue FormulaTestFailure => error
   $stderr.puts "Formula test failed: #{error.message}"
   exit 1
@@ -1033,7 +1325,13 @@ def run_formula_test(
     On success a :class:`FormulaTestResult` is returned.  Missing tests,
     missing installations, missing Ruby interpreters, timeouts and failing
     assertions all raise :class:`FormulaTestError` with the captured Ruby
-    stderr attached.
+    stderr attached.  A test body that calls ``skip`` exits successfully and
+    reports ``Formula test skipped: ...`` on stdout.
+
+    ``PYBREW_TEST_FIXTURES`` (directory used by the ``test_fixtures`` helper)
+    and ``PYBREW_MACOS_VERSION`` (override used by ``MacOS.version`` inside
+    tests) are read from the child environment and can be supplied via
+    ``env``.
     """
 
     source = formula.test_source or ""

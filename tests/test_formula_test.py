@@ -835,3 +835,229 @@ def test_assert_raises_reports_unexpected_exception(tmp_path: Path) -> None:
     assert "Expected [ArgumentError] to be raised" in stderr
     assert "RuntimeError" in stderr
     assert "wrong" in stderr
+
+
+# ---------------------------------------------------------------------------
+# remaining Minitest surface (real Ruby)
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_refute_operator_and_assert_send(tmp_path: Path) -> None:
+    source = """do
+  assert_operator 2, :>, 1
+  assert_operator 2, :positive?
+  refute_operator 1, :>, 2
+  refute_operator 2, :negative?
+  assert_send [2, :+, 2]
+  assert_send ["text", :start_with?, "te"]
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_refute_operator_failure_is_reported(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path, "do\n  refute_operator 1, :<, 2\nend"
+    )
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert "to be falsey" in excinfo.value.stderr
+
+
+@requires_ruby
+def test_assert_operator_predicate_failure_is_reported(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path, "do\n  assert_operator 2, :negative?\nend"
+    )
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert "to satisfy" in excinfo.value.stderr
+
+
+@requires_ruby
+def test_assert_send_failure_is_reported(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path, "do\n  assert_send [1, :zero?]\nend"
+    )
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert "to return true" in excinfo.value.stderr
+
+
+@requires_ruby
+def test_skip_marks_the_test_as_skipped(tmp_path: Path) -> None:
+    source = """do
+  refute skipped?
+  begin
+    skip "not applicable"
+  rescue StandardError
+    assert skipped?
+    raise
+  end
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert result.success is True
+    assert result.returncode == 0
+    assert "Formula test skipped: not applicable" in result.stdout
+
+
+@requires_ruby
+def test_assertions_counter_tracks_assertions(tmp_path: Path) -> None:
+    source = """do
+  assert_equal 0, assertions
+  assert_equal 1, 1
+  refute false
+  begin
+    assert_nil "not nil"
+  rescue StandardError
+  end
+  assert_equal 4, assertions
+  self.assertions = 7
+  assert_equal 7, assertions
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_assert_pattern_fallback_behaviour(tmp_path: Path) -> None:
+    source = """do
+  assert_pattern { 1 + 1 }
+  no_block = begin
+    assert_pattern
+  rescue StandardError => error
+    error
+  end
+  assert_match(/requires a block/, no_block.message)
+  error = begin
+    refute_pattern { }
+  rescue StandardError => error
+    error
+  end
+  assert_match(/NoMatchingPatternError expected/, error.message)
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+# ---------------------------------------------------------------------------
+# test_fixtures helper (real Ruby)
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_test_fixtures_helper_resolves_configured_directory(tmp_path: Path) -> None:
+    fixtures = tmp_path / "fixtures"
+    fixtures.mkdir()
+    (fixtures / "sample.txt").write_text("fixture-data", encoding="utf-8")
+    source = """do
+  fixture = test_fixtures("sample.txt")
+  assert_path_exists fixture
+  assert_equal "fixture-data", fixture.read
+  assert_equal fixture.to_s, Formula["hello-test"].test_fixtures("sample.txt").to_s
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(
+        formula,
+        config,
+        ruby=_REAL_RUBY,
+        env={"PYBREW_TEST_FIXTURES": str(fixtures)},
+    )
+    assert result.success is True
+
+
+@requires_ruby
+def test_test_fixtures_without_configuration_fails_clearly(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  test_fixtures("sample.txt")\nend'
+    )
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(
+            formula,
+            config,
+            ruby=_REAL_RUBY,
+            env={"PYBREW_TEST_FIXTURES": ""},
+        )
+
+    assert "test_fixtures is not configured" in excinfo.value.stderr
+
+
+@requires_ruby
+def test_test_fixtures_missing_file_fails_clearly(tmp_path: Path) -> None:
+    fixtures = tmp_path / "fixtures"
+    fixtures.mkdir()
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  test_fixtures("missing.txt")\nend'
+    )
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(
+            formula,
+            config,
+            ruby=_REAL_RUBY,
+            env={"PYBREW_TEST_FIXTURES": str(fixtures)},
+        )
+
+    assert "does not exist" in excinfo.value.stderr
+
+
+# ---------------------------------------------------------------------------
+# platform constants and read-only helpers (real Ruby)
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_homebrew_constants_and_platform_modules(tmp_path: Path) -> None:
+    source = """do
+  assert_equal homebrew_prefix.to_s, HOMEBREW_PREFIX.to_s
+  assert_equal cellar.to_s, HOMEBREW_CELLAR.to_s
+  assert HOMEBREW_PREFIX.is_a?(Pathname)
+  assert HOMEBREW_CELLAR.is_a?(Pathname)
+  assert_equal OS.mac?, !OS.linux?
+  assert_includes [:arm64, :x86_64], Hardware::CPU.arch
+  assert_equal Hardware::CPU.arm?, !Hardware::CPU.intel?
+  assert_kind_of Integer, Hardware::CPU.cores
+  assert Hardware::CPU.cores >= 1
+  assert_kind_of Integer, Hardware::CPU.physical_cores
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_macos_version_module(tmp_path: Path) -> None:
+    source = """do
+  if OS.mac?
+    assert_equal "14", MacOS.version.to_s
+    assert_equal "14.5.1", MacOS.full_version.to_s
+    assert MacOS.version >= :ventura
+    assert MacOS.version < :sequoia
+    assert_equal :sonoma, MacOS.version.to_sym
+    assert_equal MacOS.version.to_s, OS::Mac.version.to_s
+  end
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(
+        formula,
+        config,
+        ruby=_REAL_RUBY,
+        env={"PYBREW_MACOS_VERSION": "14.5.1"},
+    )
+    assert result.success is True
