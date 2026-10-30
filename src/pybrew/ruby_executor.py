@@ -251,6 +251,13 @@ $stderr.sync = true
 PYBREW_CONFIG = JSON.parse(Base64.strict_decode64("__PYBREW_CONFIG__"))
 PYBREW_BODY = Base64.strict_decode64("__PYBREW_BODY__")
 
+HOMEBREW_PREFIX = Pathname.new(
+  PYBREW_CONFIG["homebrew_prefix"] || ENV["HOMEBREW_PREFIX"] || "/usr/local"
+)
+HOMEBREW_CELLAR = Pathname.new(
+  PYBREW_CONFIG["cellar"] || ENV["HOMEBREW_CELLAR"] || (HOMEBREW_PREFIX/"Cellar").to_s
+)
+
 module OS
   def self.mac?
     !!(RUBY_PLATFORM =~ /darwin/)
@@ -3055,6 +3062,13 @@ class PybrewFormulaRef
     !!@info["livecheck?"]
   end
 
+  def caveats
+    source = @info["caveats_source"].to_s
+    return "" if source.empty?
+
+    PybrewCaveatsContext.new(self).render(source)
+  end
+
   def caveats_source
     @info["caveats_source"].to_s
   end
@@ -3751,6 +3765,91 @@ class Tab
 
   def inspect
     "#<Tab #{@data.inspect}>"
+  end
+end
+
+class PybrewCaveatsContext
+  def initialize(formula)
+    @formula = formula
+    @output = +""
+  end
+
+  def render(source)
+    value = instance_eval(source, "caveats", 1)
+    text = value.is_a?(String) ? value : ""
+    @output.empty? ? text : @output + text
+  end
+
+  def formula
+    @formula
+  end
+
+  def name
+    @formula.name
+  end
+
+  def version
+    @formula.version
+  end
+
+  def full_name
+    @formula.full_name
+  end
+
+  def puts(*messages)
+    if messages.empty?
+      @output << "\n"
+    else
+      messages.each { |message| @output << message.to_s << "\n" }
+    end
+    nil
+  end
+
+  def print(*messages)
+    messages.each { |message| @output << message.to_s }
+    nil
+  end
+
+  def ohai(*messages)
+    messages.each { |message| @output << "==> " << message.to_s << "\n" }
+    nil
+  end
+
+  def opoo(*messages)
+    messages.each { |message| @output << "Warning: " << message.to_s << "\n" }
+    nil
+  end
+
+  def on_macos
+    yield if OS.mac?
+    nil
+  end
+
+  def on_linux
+    yield if OS.linux?
+    nil
+  end
+
+  def on_arm
+    yield if Hardware::CPU.arm?
+    nil
+  end
+
+  def on_intel
+    yield if Hardware::CPU.intel?
+    nil
+  end
+
+  def method_missing(name, *args, &block)
+    if @formula.respond_to?(name)
+      @formula.public_send(name, *args, &block)
+    else
+      super
+    end
+  end
+
+  def respond_to_missing?(name, include_private = false)
+    @formula.respond_to?(name, include_private) || super
   end
 end
 

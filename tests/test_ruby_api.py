@@ -2399,3 +2399,36 @@ def test_formulary_factory_helpers(
         "ruby-formulary",
         "FooBar",
     ]
+
+
+def test_formula_caveats_renders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    caveats_source = (
+        '  lines = []\n'
+        '  puts "hello"\n'
+        '  lines << "name=#{name}"\n'
+        '  lines << "prefix=#{prefix}"\n'
+        '  lines << "global=#{HOMEBREW_PREFIX}"\n'
+        '  on_macos { lines << "mac" }\n'
+        '  on_linux { lines << "linux" }\n'
+        '  lines.join("\\n")\n'
+    )
+    formula = _formula(
+        "ruby-caveats",
+        "1.0",
+        (
+            '  ref = Formula["ruby-caveats"]\n'
+            '  (prefix/"caveats.txt").write ref.caveats\n'
+        ),
+    )
+    formula.caveats = caveats_source
+    keg = _build(tmp_path, formula)
+    lines = (keg / "caveats.txt").read_text().splitlines()
+    assert lines[0] == "hello"
+    assert lines[1] == "name=ruby-caveats"
+    assert lines[2] == f"prefix={keg}"
+    assert lines[3] == f"global={tmp_path / 'prefix'}"
+    expected = "mac" if is_macos() else "linux"
+    assert lines[4] == expected

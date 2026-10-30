@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-536 passed, 5 skipped in 135.06s
+537 passed, 5 skipped in 75.24s
 ```
 
 Breakdown of the feature slices:
@@ -37,7 +37,7 @@ $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask.py tests/test
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_cask_depth.py tests/test_cask_pkg_system.py tests/test_cask_pkg_uninstall.py tests/test_cask_rollback.py
 38 passed      # depth/system install/uninstall/rollback
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_source_build.py tests/test_ruby_dsl.py tests/test_ruby_api.py
-107 passed     # declarative + opt-in Ruby bridge/API + Keg/Tab/Formulary
+108 passed     # declarative + opt-in Ruby bridge/API + Keg/Tab/Formulary + caveats
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_patches.py tests/test_post_install.py
 47 passed      # patch url/file/:DATA application + post_install
 $ PYTHONPATH=src python -m pytest -o addopts='' -q tests/test_services.py tests/test_service_ruby.py
@@ -723,6 +723,12 @@ local remote, commits a change, and confirms the CLI updates it.
 - Added `socket_path`/`socket_text`/`write_socket` and wired socket services to
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
+
+## Formula caveats rendering
+
+- Added `Formula#caveats`: evaluates the captured block with `puts`/`ohai`/
+  `opoo`, platform/arch guards, path helpers, and the global
+  `HOMEBREW_PREFIX`/`HOMEBREW_CELLAR` constants.
 
 ## Keg, Tab and Formulary
 
