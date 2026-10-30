@@ -245,6 +245,7 @@ require "pathname"
 require "rbconfig"
 require "shellwords"
 require "stringio"
+require "open3"
 
 $stdout.sync = true
 $stderr.sync = true
@@ -2889,6 +2890,24 @@ class PybrewFormulaRef
     context.instance_eval(source, "post_install", 1)
   end
 
+  def test
+    source = @info["test_source"].to_s
+    return nil if source.empty?
+
+    paths = {}
+    PybrewInstallContext::PATH_METHODS.each do |method_name|
+      next unless respond_to?(method_name)
+
+      paths[method_name] = public_send(method_name).to_s
+    end
+    config = {
+      "paths" => paths,
+      "formula" => { "name" => name, "version" => version.to_s },
+      "verbose" => false,
+    }
+    PybrewTestContext.new(config, self).instance_eval(source, "test", 1)
+  end
+
   def fetch?
     !!@info["fetch?"]
   end
@@ -4767,6 +4786,147 @@ class PybrewInstallContext
     raise NoMethodError,
           "unsupported Homebrew formula API `#{method_name}' in the pybrew arbitrary-Ruby install shim; " \
           "see src/pybrew/ruby_executor.py for the supported API"
+  end
+end
+
+class PybrewTestContext < PybrewInstallContext
+  class Failure < StandardError; end
+
+  def initialize(config, formula)
+    super(config)
+    @test_formula = formula
+  end
+
+  def formula
+    @test_formula
+  end
+
+  def shell_output(command, expected_status = 0, stderr: false, env: nil, chdir: nil)
+    stdout, stderr_text, status = run_test_command(command, nil, env, chdir)
+    if status.exitstatus != expected_status
+      raise Failure,
+            "shell_output failed with exit status #{status.exitstatus} " \
+            "(expected #{expected_status}): #{command}\n#{stderr_text}"
+    end
+    stderr ? stderr_text : stdout
+  end
+
+  def pipe_output(command, input = nil, stderr: false, env: nil, chdir: nil)
+    stdout, stderr_text, = run_test_command(command, input, env, chdir)
+    stderr ? stderr_text : stdout
+  end
+
+  def assert(value, message = nil)
+    return if value
+
+    raise Failure, message || "Expected #{value.inspect} to be truthy"
+  end
+
+  def refute(value, message = nil)
+    return unless value
+
+    raise Failure, message || "Expected #{value.inspect} to be falsey"
+  end
+
+  def assert_equal(expected, actual, message = nil)
+    return if expected == actual
+
+    raise Failure, message || "Expected #{expected.inspect} to equal #{actual.inspect}"
+  end
+
+  def refute_equal(expected, actual, message = nil)
+    return unless expected == actual
+
+    raise Failure, message || "Expected #{expected.inspect} to not equal #{actual.inspect}"
+  end
+  alias assert_not_equal refute_equal
+
+  def assert_match(pattern, string, message = nil)
+    regexp = pattern.is_a?(Regexp) ? pattern : Regexp.new(pattern.to_s)
+    return if regexp.match?(string.to_s)
+
+    raise Failure, message || "Expected #{string.inspect} to match #{pattern.inspect}"
+  end
+
+  def refute_match(pattern, string, message = nil)
+    regexp = pattern.is_a?(Regexp) ? pattern : Regexp.new(pattern.to_s)
+    return unless regexp.match?(string.to_s)
+
+    raise Failure, message || "Expected #{string.inspect} to not match #{pattern.inspect}"
+  end
+
+  def assert_predicate(object, predicate, message = nil)
+    return if object.__send__(predicate)
+
+    raise Failure, message || "Expected #{object.inspect} to satisfy #{predicate}"
+  end
+
+  def refute_predicate(object, predicate, message = nil)
+    return unless object.__send__(predicate)
+
+    raise Failure, message || "Expected #{object.inspect} to not satisfy #{predicate}"
+  end
+
+  def assert_empty(object, message = nil)
+    return if object.empty?
+
+    raise Failure, message || "Expected #{object.inspect} to be empty"
+  end
+
+  def refute_empty(object, message = nil)
+    return unless object.empty?
+
+    raise Failure, message || "Expected #{object.inspect} to not be empty"
+  end
+
+  def assert_includes(collection, object, message = nil)
+    return if collection.include?(object)
+
+    raise Failure, message || "Expected #{collection.inspect} to include #{object.inspect}"
+  end
+
+  def refute_includes(collection, object, message = nil)
+    return unless collection.include?(object)
+
+    raise Failure, message || "Expected #{collection.inspect} to not include #{object.inspect}"
+  end
+
+  def assert_nil(object, message = nil)
+    return if object.nil?
+
+    raise Failure, message || "Expected #{object.inspect} to be nil"
+  end
+
+  def refute_nil(object, message = nil)
+    return unless object.nil?
+
+    raise Failure, message || "Expected #{object.inspect} to not be nil"
+  end
+
+  def assert_output(expected, actual = nil, message = nil)
+    if block_given?
+      old_stdout = $stdout
+      buffer = StringIO.new
+      $stdout = buffer
+      begin
+        yield
+      ensure
+        $stdout = old_stdout
+      end
+      actual = buffer.string
+    end
+    return if expected == actual
+
+    raise Failure, message || "Expected output #{expected.inspect} to equal #{actual.inspect}"
+  end
+
+  private
+
+  def run_test_command(command, input, env, chdir)
+    options = {}
+    options[:stdin_data] = input.to_s unless input.nil?
+    options[:chdir] = chdir.to_s unless chdir.nil?
+    Open3.capture3(env || {}, *Array(command), **options)
   end
 end
 

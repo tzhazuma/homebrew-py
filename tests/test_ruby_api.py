@@ -2768,3 +2768,26 @@ def test_tab_receipt_options_and_bottle_flags(
         "false",
         "false",
     ]
+
+
+def test_formula_test_execution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-test",
+        "1.0",
+        (
+            '  ref = Formula["ruby-test"]\n'
+            '  ref.test\n'
+            '  (prefix/"test.txt").write "ok"\n'
+        ),
+    )
+    formula.test_source = (
+        '  assert_equal "hi", shell_output("printf hi")\n'
+        '  assert_match(/h/, "hi")\n'
+        '  assert_predicate Pathname.new(prefix), :directory?\n'
+        '  assert_output("hello\\n") { puts "hello" }\n'
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "test.txt").read_text() == "ok"
