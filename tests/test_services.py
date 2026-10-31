@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import plistlib
 import textwrap
 from pathlib import Path
@@ -213,6 +214,85 @@ def test_cli_services_start_list_stop(run_cli, sample, tmp_path, monkeypatch) ->
     stopped = run_cli("services", "stop", "svc", extra_env=env)
     assert stopped.returncode == 0, stopped.stderr
     assert "bootout" in log.read_text()
+
+
+# ---------------------------------------------------------------------------
+# CLI warning surfacing for unsupported service directives
+# ---------------------------------------------------------------------------
+
+
+def _install_cli_svc_keg(sample) -> None:
+    keg = sample.prefix / "Cellar" / "svc" / "1.0"
+    (keg / "bin").mkdir(parents=True)
+    executable = keg / "bin" / "svc"
+    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.chmod(0o755)
+    opt = sample.prefix / "opt" / "svc"
+    opt.parent.mkdir(parents=True, exist_ok=True)
+    opt.symlink_to(keg)
+
+
+def _cli_launchd_env(sample) -> dict[str, str]:
+    script = sample.root / "fake-launchctl-warnings"
+    log = sample.root / "launchctl-warnings.log"
+    script.write_text('#!/bin/sh\necho "$@" >> "$FAKE_LAUNCHCTL_LOG"\nexit 0\n')
+    script.chmod(0o755)
+    return {
+        "PYBREW_SERVICE_DIR": str(sample.root / "warning-agents"),
+        "PYBREW_LAUNCHCTL": str(script),
+        "FAKE_LAUNCHCTL_LOG": str(log),
+        "PYBREW_SERVICE_BACKEND": "launchd",
+    }
+
+
+def _add_unknown_service_directive(sample) -> None:
+    svc_file = sample.tap / "Formula" / "svc.rb"
+    source = svc_file.read_text()
+    marker = "    keep_alive true"
+    assert marker in source
+    svc_file.write_text(source.replace(marker, f'{marker}\n    frobnicate "x"', 1))
+
+
+def test_cli_services_info_json_reports_warnings(run_cli, sample) -> None:
+    _add_unknown_service_directive(sample)
+    proc = run_cli("services", "info", "svc", "--json")
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["name"] == "svc"
+    assert payload["warnings"] == ["unsupported service directive `frobnicate`"]
+    # --json output stays pure JSON: the warning lives inside the payload and
+    # is never printed as text on stdout.
+    assert "Warning:" not in proc.stdout
+    assert proc.stderr == ""
+
+
+@pytest.mark.parametrize("action", ["start", "stop", "restart", "run"])
+def test_cli_services_actions_print_spec_warnings(action, run_cli, sample) -> None:
+    _install_cli_svc_keg(sample)
+    _add_unknown_service_directive(sample)
+    env = _cli_launchd_env(sample)
+    proc = run_cli("services", action, "svc", extra_env=env)
+    assert proc.returncode == 0, proc.stderr
+    assert "Warning: unsupported service directive `frobnicate`" in proc.stderr
+    assert "Warning:" not in proc.stdout
+
+
+def test_cli_services_quiet_when_service_has_no_warnings(run_cli, sample) -> None:
+    _install_cli_svc_keg(sample)
+    env = _cli_launchd_env(sample)
+
+    info = run_cli("services", "info", "svc", "--json")
+    assert info.returncode == 0, info.stderr
+    assert json.loads(info.stdout)["warnings"] == []
+    assert info.stderr == ""
+
+    started = run_cli("services", "start", "svc", extra_env=env)
+    assert started.returncode == 0, started.stderr
+    assert started.stderr == ""
+
+    stopped = run_cli("services", "stop", "svc", extra_env=env)
+    assert stopped.returncode == 0, stopped.stderr
+    assert stopped.stderr == ""
 
 
 def test_systemd_unit_and_lifecycle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

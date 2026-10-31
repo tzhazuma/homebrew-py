@@ -877,10 +877,10 @@ class ServiceManager:
         except Exception:
             return None
 
-    def start(self, formula: Formula) -> Path:
+    def start(self, formula: Formula, spec: Optional[ServiceSpec] = None) -> Path:
         if not self.config.opt_path(formula.name).is_dir():
             raise ServiceError(f"{formula.name} is not installed")
-        spec = self.spec_for(formula)
+        spec = spec or self.spec_for(formula)
         if self.backend == "systemd":
             path = self.write_unit(formula, spec)
             if spec.cron:
@@ -899,8 +899,8 @@ class ServiceManager:
             self.runner.start(path)
         return path
 
-    def stop(self, formula: Formula) -> Optional[Path]:
-        spec = self._spec_for_paths(formula)
+    def stop(self, formula: Formula, spec: Optional[ServiceSpec] = None) -> Optional[Path]:
+        spec = spec or self._spec_for_paths(formula)
         path = (
             self.unit_path(formula, spec)
             if self.backend == "systemd"
@@ -920,9 +920,9 @@ class ServiceManager:
             self.runner.stop(self.label(formula, spec), path)
         return path
 
-    def restart(self, formula: Formula) -> Path:
-        self.stop(formula)
-        return self.start(formula)
+    def restart(self, formula: Formula, spec: Optional[ServiceSpec] = None) -> Path:
+        self.stop(formula, spec)
+        return self.start(formula, spec)
 
     def remove(self, formula: Formula) -> None:
         spec = self._spec_for_paths(formula)

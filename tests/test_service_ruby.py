@@ -682,6 +682,26 @@ def test_full_service_declaration_source_is_accepted(
 
 
 @requires_ruby
+def test_unknown_directives_are_recorded_as_warnings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allow_ruby: None
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    spec = evaluate_service_source(
+        _body(
+            '''
+            run opt_bin/"svc"
+            frobnicate "x"
+            '''
+        ),
+        _formula(),
+        config,
+    )
+
+    assert spec.run == [str(config.opt_path("svc") / "bin" / "svc")]
+    assert spec.warnings == ["unsupported service directive `frobnicate`"]
+
+
+@requires_ruby
 def test_evaluate_service_block_without_service_is_an_error(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allow_ruby: None
 ) -> None:

@@ -44,7 +44,7 @@ from .maintenance import (
 from .models import Formula, candidate_bottle_tags
 from .paths import Config
 from .ruby_parser import parse_formula_file
-from .services import ServiceError, ServiceManager, installed_formulae
+from .services import ServiceError, ServiceManager, ServiceSpec, installed_formulae
 from .tap_manager import TapManager
 from .taps import FormulaLoader, discover_taps
 
@@ -1216,6 +1216,30 @@ def cmd_cask(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def _service_spec_for_warnings(
+    manager: ServiceManager, formula: Formula
+) -> Optional[ServiceSpec]:
+    """Parse *formula*'s service block and print any warnings to stderr.
+
+    Parsing is best-effort here: ``stop``/``restart`` historically tolerate a
+    block the literal parser cannot understand (the file path is derived from
+    the formula name), so a parse failure must not turn an otherwise working
+    command into an error.  The requested action itself reports genuine
+    failures with the usual error message.
+
+    The parsed spec is returned so the action can reuse it instead of parsing
+    the block a second time (which matters for the opt-in Ruby evaluator).
+    """
+
+    try:
+        spec = manager.spec_for(formula)
+    except Exception:
+        return None
+    for warning in spec.warnings:
+        print(f"Warning: {warning}", file=sys.stderr)
+    return spec
+
+
 def cmd_services(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     loader = _loader(config)
@@ -1251,20 +1275,23 @@ def cmd_services(args: argparse.Namespace) -> int:
             "log_path": spec.log_path,
             "keep_alive": spec.keep_alive,
             "status": manager.status(formula),
+            "warnings": list(spec.warnings),
         }
         print(json.dumps(payload, indent=2))
         return 0
+    spec = _service_spec_for_warnings(manager, formula)
     if args.action == "start":
-        path = manager.start(formula)
+        path = manager.start(formula, spec)
         print(f"Started {formula.name} ({path})")
     elif args.action == "stop":
-        path = manager.stop(formula)
+        path = manager.stop(formula, spec)
         print(f"Stopped {formula.name}" + (f" ({path})" if path else ""))
     elif args.action == "restart":
-        path = manager.restart(formula)
+        path = manager.restart(formula, spec)
         print(f"Restarted {formula.name} ({path})")
     elif args.action == "run":
-        spec = manager.spec_for(formula)
+        if spec is None:
+            spec = manager.spec_for(formula)
         if not spec.run:
             raise ServiceError(f"{formula.name} service has no run command")
         import subprocess
