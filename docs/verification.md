@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-640 passed, 4 skipped in 263.16s
+641 passed, 4 skipped in 370.19s
 ```
 
 Breakdown of the feature slices:
@@ -723,6 +723,12 @@ local remote, commits a change, and confirms the CLI updates it.
 - Added `socket_path`/`socket_text`/`write_socket` and wired socket services to
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
+
+## FormulaInstaller loaded sources
+
+- `FormulaInstaller#install` now installs `Formulary.load_formula_from_path`
+  results (`PybrewLoadedFormula` instances) by running their captured install
+  block; keg/ref installs still raise the explicit Python-installer error.
 
 ## Formulary source loader
 

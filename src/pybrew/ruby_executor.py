@@ -2660,9 +2660,13 @@ class FormulaInstaller
   end
 
   def install
+    if formula.is_a?(PybrewLoadedFormula)
+      return formula.install
+    end
+
     raise NotImplementedError,
-          "FormulaInstaller#install is not available in pybrew; " \
-          "use pybrew's Python installer"
+          "FormulaInstaller#install is only available for Formulary-loaded " \
+          "formula sources in pybrew; use pybrew's Python installer for kegs"
   end
 
   def finish

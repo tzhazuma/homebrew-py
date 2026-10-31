@@ -3663,3 +3663,39 @@ def test_formulary_loads_formula_source_from_path(
         "dep",
         "false",
     ]
+
+
+def test_formula_installer_installs_loaded_formula_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-loaded-installer",
+        "1.0",
+        (
+            '  path = prefix/"loaded-installed.rb"\n'
+            '  path.write <<~RUBY\n'
+            '    class LoadedInstalled < Formula\n'
+            '      version "2.0"\n'
+            '      install do\n'
+            '        prefix.mkpath\n'
+            '        (prefix/"installed.txt").write("ok")\n'
+            '      end\n'
+            '    end\n'
+            '  RUBY\n'
+            '  klass = Formulary.load_formula_from_path("loaded-installed", path)\n'
+            '  FormulaInstaller.new(klass.new).install\n'
+            '  (prefix/"installer-loaded.txt").write("done")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "installer-loaded.txt").read_text() == "done"
+    installed = (
+        tmp_path
+        / "prefix"
+        / "Cellar"
+        / "loaded-installed"
+        / "2.0"
+        / "installed.txt"
+    )
+    assert installed.read_text() == "ok"
