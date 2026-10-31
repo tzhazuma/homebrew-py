@@ -3819,3 +3819,443 @@ def test_development_tools_extra_helpers(
         "true",
         "true",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Formulary path cache / namespacing, loaded-source installer flow, and the
+# Superenv compiler-selection surface
+# ---------------------------------------------------------------------------
+
+
+def test_formulary_path_cache_namespacing_and_clear(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-formulary-cache",
+        "1.0",
+        (
+            '  path = prefix/"cache-formula.rb"\n'
+            '  path.write <<~RUBY\n'
+            '    class CacheFixture < Formula\n'
+            '      desc "cache fixture"\n'
+            '      version "2.0"\n'
+            '    end\n'
+            '  RUBY\n'
+            '  before_defined = Formulary.formula_class_defined_from_path?(path).to_s\n'
+            '  begin\n'
+            '    Formulary.formula_class_get_from_path(path)\n'
+            '    missing_error = "none"\n'
+            '  rescue => error\n'
+            '    missing_error = error.class.name\n'
+            '  end\n'
+            '  klass = Formulary.load_formula_from_path("cache-fixture", path, flags: ["--with-x"])\n'
+            '  namespace = klass.loaded_namespace\n'
+            '  namespace_name = namespace.name.split("::").last\n'
+            '  cached = Formulary.formula_class_get_from_path(path)\n'
+            '  values = [\n'
+            '    before_defined,\n'
+            '    Formulary.formula_class_defined_from_path?(path).to_s,\n'
+            '    missing_error,\n'
+            '    cached.equal?(klass).to_s,\n'
+            '    klass.loaded_class_name,\n'
+            '    klass.loaded_name,\n'
+            '    klass.new.name,\n'
+            '    Formulary.const_defined?(namespace_name).to_s,\n'
+            '    namespace.const_defined?(:Formula).to_s,\n'
+            '    namespace.const_get(:BUILD_FLAGS).join(","),\n'
+            '    namespace.const_defined?(:LOADED_FROM_METADATA).to_s\n'
+            '  ]\n'
+            '  Formulary.clear_cache\n'
+            '  values << Formulary.formula_class_defined_from_path?(path).to_s\n'
+            '  begin\n'
+            '    Formulary.formula_class_get_from_path(path)\n'
+            '    cleared_error = "none"\n'
+            '  rescue => error\n'
+            '    cleared_error = error.class.name\n'
+            '  end\n'
+            '  values << cleared_error\n'
+            '  values << Formulary.const_defined?(namespace_name).to_s\n'
+            '  (prefix/"cache.txt").write values.join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "cache.txt").read_text().splitlines() == [
+        "false",
+        "true",
+        "PybrewFormulaUnavailableError",
+        "true",
+        "CacheFixture",
+        "cache-fixture",
+        "cache-fixture",
+        "true",
+        "true",
+        "--with-x",
+        "false",
+        "false",
+        "PybrewFormulaUnavailableError",
+        "false",
+    ]
+
+
+def test_formulary_namespace_metadata_and_class_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-formulary-namespace",
+        "1.0",
+        (
+            '  path = prefix/"namespaced.rb"\n'
+            '  path.write <<~RUBY\n'
+            '    class NamespacedFixture < Formula\n'
+            '      version "1.0"\n'
+            '    end\n'
+            '  RUBY\n'
+            '  klass = Formulary.load_formula("namespaced-fixture", path, path.read,\n'
+            '                                 "PybrewFixtureNamespace",\n'
+            '                                 flags: ["--a", "--b"], from_metadata: true)\n'
+            '  namespace = Formulary.const_get(:PybrewFixtureNamespace)\n'
+            '  bad_path = prefix/"bad.rb"\n'
+            '  bad_path.write "DESCRIPTION = \\"no class here\\"\\n"\n'
+            '  begin\n'
+            '    Formulary.load_formula_from_path("bad-formula", bad_path)\n'
+            '    bad_error = "none"\n'
+            '  rescue => error\n'
+            '    bad_error = error.class.name\n'
+            '  end\n'
+            '  begin\n'
+            '    Formulary.formula_class_get_from_api("x")\n'
+            '    api_error = "none"\n'
+            '  rescue => error\n'
+            '    api_error = error.class.name\n'
+            '  end\n'
+            '  (prefix/"namespace.txt").write [\n'
+            '    namespace.const_defined?(:Formula).to_s,\n'
+            '    namespace.const_get(:BUILD_FLAGS).join(" "),\n'
+            '    namespace.const_defined?(:LOADED_FROM_METADATA).to_s,\n'
+            '    klass.loaded_namespace.name,\n'
+            '    klass.loaded_class_name,\n'
+            '    klass.loaded_name,\n'
+            '    bad_error,\n'
+            '    Formulary.formula_class_defined_from_path?(bad_path).to_s,\n'
+            '    api_error\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "namespace.txt").read_text().splitlines() == [
+        "true",
+        "--a --b",
+        "true",
+        "Formulary::PybrewFixtureNamespace",
+        "NamespacedFixture",
+        "namespaced-fixture",
+        "PybrewFormulaClassUnavailableError",
+        "false",
+        "PybrewFormulaUnavailableError",
+    ]
+
+
+def test_formula_installer_loaded_fetch_build_link_clean(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-installer-loaded-api",
+        "1.0",
+        (
+            '  path = prefix/"installer-api.rb"\n'
+            '  path.write <<~RUBY\n'
+            '    class InstallerApiFixture < Formula\n'
+            '      version "2.0"\n'
+            '      depends_on "dep"\n'
+            '      fetch do\n'
+            '        (HOMEBREW_PREFIX/"installer-fetched.txt").write("fetched")\n'
+            '      end\n'
+            '      install do\n'
+            '        prefix.mkpath\n'
+            '        (prefix/"installed.txt").write("ok")\n'
+            '        (prefix/"lib").mkpath\n'
+            '        (prefix/"lib"/"junk.la").write("la")\n'
+            '        (prefix/"lib"/"charset.alias").write("alias")\n'
+            '      end\n'
+            '      post_install do\n'
+            '        (prefix/"post-install.txt").write("post")\n'
+            '      end\n'
+            '    end\n'
+            '  RUBY\n'
+            '  klass = Formulary.load_formula_from_path("installer-api-fixture", path)\n'
+            '  installer = FormulaInstaller.new(klass.new, verbose: true)\n'
+            '  deps = installer.compute_dependencies\n'
+            '  installer.fetch\n'
+            '  fetched = (HOMEBREW_PREFIX/"installer-fetched.txt").read\n'
+            '  fetched_names = FormulaInstaller.fetched.map(&:name).join(",")\n'
+            '  installer.build\n'
+            '  loaded_prefix = HOMEBREW_PREFIX/"Cellar"/"installer-api-fixture"/"2.0"\n'
+            '  built = (loaded_prefix/"installed.txt").read\n'
+            '  la_before = (loaded_prefix/"lib"/"junk.la").exist?.to_s\n'
+            '  installer.clean\n'
+            '  la_after = (loaded_prefix/"lib"/"junk.la").exist?.to_s\n'
+            '  charset_after = (loaded_prefix/"lib"/"charset.alias").exist?.to_s\n'
+            '  linked = installer.link.to_s\n'
+            '  opt = HOMEBREW_PREFIX/"opt"/"installer-api-fixture"\n'
+            '  installer.finish\n'
+            '  post = (loaded_prefix/"post-install.txt").read\n'
+            '  (prefix/"installer-api.txt").write [\n'
+            '    deps.map(&:name).join(","),\n'
+            '    fetched,\n'
+            '    fetched_names,\n'
+            '    built,\n'
+            '    la_before,\n'
+            '    la_after,\n'
+            '    charset_after,\n'
+            '    linked,\n'
+            '    opt.symlink?.to_s,\n'
+            '    post,\n'
+            '    FormulaInstaller.attempted.empty?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "installer-api.txt").read_text().splitlines() == [
+        "dep",
+        "fetched",
+        "dep,installer-api-fixture",
+        "ok",
+        "true",
+        "false",
+        "false",
+        "true",
+        "true",
+        "post",
+        "true",
+    ]
+
+
+def test_formula_installer_install_runs_full_loaded_flow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-installer-loaded-flow",
+        "1.0",
+        (
+            '  path = prefix/"loaded-flow.rb"\n'
+            '  path.write <<~RUBY\n'
+            '    class LoadedFlowFixture < Formula\n'
+            '      version "3.0"\n'
+            '      depends_on "dep"\n'
+            '      fetch do\n'
+            '        (HOMEBREW_PREFIX/"flow-fetched.txt").write("fetched")\n'
+            '      end\n'
+            '      install do\n'
+            '        prefix.mkpath\n'
+            '        (prefix/"installed.txt").write("ok")\n'
+            '        (prefix/"lib").mkpath\n'
+            '        (prefix/"lib"/"old.la").write("la")\n'
+            '      end\n'
+            '      post_install do\n'
+            '        (prefix/"post.txt").write("post")\n'
+            '      end\n'
+            '    end\n'
+            '  RUBY\n'
+            '  klass = Formulary.load_formula_from_path("loaded-flow", path)\n'
+            '  FormulaInstaller.new(klass.new).install\n'
+            '  loaded_prefix = HOMEBREW_PREFIX/"Cellar"/"loaded-flow"/"3.0"\n'
+            '  (prefix/"flow.txt").write [\n'
+            '    (HOMEBREW_PREFIX/"flow-fetched.txt").read,\n'
+            '    (loaded_prefix/"installed.txt").read,\n'
+            '    (loaded_prefix/"lib"/"old.la").exist?.to_s,\n'
+            '    (loaded_prefix/"post.txt").read,\n'
+            '    (HOMEBREW_PREFIX/"opt"/"loaded-flow").symlink?.to_s,\n'
+            '    FormulaInstaller.attempted.map(&:name).join(","),\n'
+            '    FormulaInstaller.installed.map(&:name).join(","),\n'
+            '    FormulaInstaller.fetched.map(&:name).join(",")\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "flow.txt").read_text().splitlines() == [
+        "fetched",
+        "ok",
+        "false",
+        "post",
+        "true",
+        "loaded-flow",
+        "dep",
+        "dep,loaded-flow",
+    ]
+
+
+def test_compiler_selection_surface(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-compiler-selection",
+        "1.0",
+        (
+            '  clang_failure = CompilerFailure.create(:clang) { version "99.0" }\n'
+            '  gcc_failure = CompilerFailure.create(gcc: "7")\n'
+            '  clang_compiler = CompilerSelector::Compiler.new(:clang, :clang, "15.0")\n'
+            '  gcc_compiler = CompilerSelector::Compiler.new(:gcc, :gcc, "12.2.0")\n'
+            '  failing = Object.new\n'
+            '  def failing.compiler_failures\n'
+            '    [CompilerFailure.create(:clang) { version "99.0" }]\n'
+            '  end\n'
+            '  clean = Object.new\n'
+            '  def clean.compiler_failures\n'
+            '    []\n'
+            '  end\n'
+            '  hopeless = Object.new\n'
+            '  def hopeless.compiler_failures\n'
+            '    [\n'
+            '      CompilerFailure.create(:clang) { version "99.0" },\n'
+            '      CompilerFailure.create(:llvm_clang) { version "99.0" },\n'
+            '      CompilerFailure.create(:gcc) { version "99.0" },\n'
+            '    ]\n'
+            '  end\n'
+            '  begin\n'
+            '    CompilerSelector.select_for(hopeless)\n'
+            '    selection_error = "none"\n'
+            '  rescue => error\n'
+            '    selection_error = error.class.name\n'
+            '  end\n'
+            '  failure_path = prefix/"failure-fixture.rb"\n'
+            '  failure_path.write <<~RUBY\n'
+            '    class FailureFixture < Formula\n'
+            '      fails_with :clang do\n'
+            '        version "99.0"\n'
+            '      end\n'
+            '    end\n'
+            '  RUBY\n'
+            '  loaded = Formulary.load_formula_from_path("failure-fixture", failure_path)\n'
+            '  ref = Formula["ruby-compiler-selection"]\n'
+            '  (prefix/"compilers.txt").write [\n'
+            '    CompilerConstants::GNU_GCC_VERSIONS.include?("12").to_s,\n'
+            '    CompilerConstants::GNU_GCC_REGEXP.match?("gcc-12").to_s,\n'
+            '    CompilerConstants::COMPILER_SYMBOL_MAP["clang"].to_s,\n'
+            '    CompilerConstants::COMPILERS.include?("gcc-12").to_s,\n'
+            '    gcc_failure.type.to_s,\n'
+            '    gcc_failure.version.to_s,\n'
+            '    (gcc_failure.build == gcc_failure.version).to_s,\n'
+            '    clang_failure.fails_with?(clang_compiler).to_s,\n'
+            '    clang_failure.fails_with?(gcc_compiler).to_s,\n'
+            '    gcc_failure.fails_with?(gcc_compiler).to_s,\n'
+            '    gcc_failure.fails_with?(clang_compiler).to_s,\n'
+            '    CompilerSelector.compilers.join(","),\n'
+            '    CompilerSelector.select_for(failing).to_s,\n'
+            '    CompilerSelector.select_for(clean).to_s,\n'
+            '    CompilerSelector.preferred_gcc,\n'
+            '    gcc_failure.inspect,\n'
+            '    ref.compiler_failures.map(&:inspect).join(";"),\n'
+            '    CompilerSelector.select_for(ref).to_s,\n'
+            '    loaded.new.compiler_failures.map(&:inspect).join(";"),\n'
+            '    CompilerSelector.select_for(loaded.new).to_s,\n'
+            '    selection_error\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.fails_with = [{"gcc": "7"}]
+    keg = _build(tmp_path, formula)
+    assert (keg / "compilers.txt").read_text().splitlines() == [
+        "true",
+        "true",
+        "clang",
+        "true",
+        "gcc",
+        "7.999",
+        "true",
+        "true",
+        "false",
+        "false",
+        "false",
+        "clang,llvm_clang,gnu",
+        "llvm_clang",
+        "clang",
+        "gcc",
+        "#<CompilerFailure: gcc 7.999>",
+        "#<CompilerFailure: gcc 7.999>",
+        "clang",
+        "#<CompilerFailure: clang 99.0>",
+        "llvm_clang",
+        "CompilerSelectionError",
+    ]
+
+
+def test_env_superenv_setup_and_compiler_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-env-superenv",
+        "1.0",
+        (
+            '  ENV.clang\n'
+            '  clang_cc = ENV.cc\n'
+            '  clang_cxx = ENV.cxx\n'
+            '  clang_compiler = ENV.compiler.to_s\n'
+            '  ENV.gcc\n'
+            '  gcc_cc = ENV["CC"]\n'
+            '  gcc_cxx = ENV["CXX"]\n'
+            '  ENV.llvm_clang\n'
+            '  llvm_cc = ENV["CC"]\n'
+            '  ENV.cc = "cc-custom"\n'
+            '  ENV.cxx = "cxx-custom"\n'
+            '  custom_cc = ENV["CC"]\n'
+            '  custom_objc = ENV["OBJC"]\n'
+            '  custom_cxx = ENV["CXX"]\n'
+            '  ENV.append_to_cccfg "x"\n'
+            '  ENV.append_to_cccfg "y"\n'
+            '  cccfg = ENV["HOMEBREW_CCCFG"]\n'
+            '  removed = ENV.remove_cc_etc\n'
+            '  removed_cc = removed["CC"]\n'
+            '  after_remove = ENV["CC"].inspect\n'
+            '  ENV.setup_build_environment(formula: Formula["ruby-env-superenv"], cc: "clang")\n'
+            '  shims = Superenv.shims_path.to_s\n'
+            '  (prefix/"superenv.txt").write [\n'
+            '    clang_cc, clang_cxx, clang_compiler,\n'
+            '    gcc_cc, gcc_cxx, llvm_cc,\n'
+            '    custom_cc, custom_objc, custom_cxx, cccfg,\n'
+            '    removed_cc.to_s, after_remove,\n'
+            '    ENV["HOMEBREW_ENV"], ENV["HOMEBREW_CC"], ENV["CC"], ENV["CXX"],\n'
+            '    ENV["MAKEFLAGS"], ENV["HOMEBREW_MAKE_JOBS"],\n'
+            '    ENV["HOMEBREW_PREFIX"], ENV["HOMEBREW_CELLAR"], ENV["HOMEBREW_OPT"],\n'
+            '    ENV["HOMEBREW_OPTFLAGS"], ENV["HOMEBREW_OPTIMIZATION_LEVEL"],\n'
+            '    ENV["HOMEBREW_FORMULA_PREFIX"],\n'
+            '    ENV["PATH"].split(File::PATH_SEPARATOR).include?(shims).to_s,\n'
+            '    ENV.compiler.to_s, ENV.effective_arch.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    lines = (keg / "superenv.txt").read_text().splitlines()
+    assert lines[0:11] == [
+        "clang",
+        "clang++",
+        "clang",
+        "gcc",
+        "g++",
+        "clang",
+        "cc-custom",
+        "cc-custom",
+        "cxx-custom",
+        "xy",
+        "cc-custom",
+    ]
+    assert lines[11] == "nil"
+    assert lines[12:16] == ["super", "clang", "clang", "clang++"]
+    assert lines[16].startswith("-j") and int(lines[16][2:]) >= 1
+    assert int(lines[17]) >= 1
+    prefix = tmp_path / "prefix"
+    assert lines[18] == str(prefix)
+    assert lines[19] == str(prefix / "Cellar")
+    assert lines[20] == f"{prefix}/opt"
+    assert lines[21] == "-O2"
+    assert lines[22] == "Os"
+    # Formula["..."] resolves the current formula to its pybrew keg prefix.
+    assert lines[23] == str(keg)
+    assert lines[24] == "true"
+    assert lines[25] == "clang"
+    assert lines[26] in ("arm64", "x86_64", "i386", "arm", "dunno")

@@ -633,6 +633,13 @@ end
 
 class PybrewChecksumMismatch < RuntimeError; end
 
+# Formulary raises these for formula source that cannot be loaded or whose
+# class cannot be found.  They mirror Homebrew's ``FormulaUnavailableError``
+# family closely enough for formula/test code to rescue by class.
+class PybrewFormulaUnavailableError < RuntimeError; end
+class PybrewFormulaUnreadableError < PybrewFormulaUnavailableError; end
+class PybrewFormulaClassUnavailableError < PybrewFormulaUnavailableError; end
+
 class PybrewVersion < String
   def major
     split(".")[0].to_s
@@ -969,6 +976,181 @@ module DevelopmentTools
   def locate
     clang
   end
+end
+
+# Homebrew's compiler constants are referenced by compiler-selection code and
+# by a handful of formulae.  Keep the same names/values as upstream.
+module CompilerConstants
+  GNU_GCC_VERSIONS = %w[8 9 10 11 12 13 14 15 16].freeze
+  GNU_GCC_REGEXP = /^gcc-(#{GNU_GCC_VERSIONS.join("|")})$/
+  COMPILER_SYMBOL_MAP = {
+    "gcc" => :gcc,
+    "clang" => :clang,
+    "llvm_clang" => :llvm_clang,
+  }.freeze
+  COMPILERS = (COMPILER_SYMBOL_MAP.values +
+               GNU_GCC_VERSIONS.map { |version| "gcc-#{version}" }).freeze
+end
+
+# A single ``fails_with`` declaration: ``fails_with :clang do ... end`` or
+# ``fails_with gcc: "7" do ... end``.  The shim only records and compares
+# versions; it never actually builds with the compiler.
+class CompilerFailure
+  attr_reader :type
+
+  def self.create(spec, &block)
+    if spec.is_a?(Hash)
+      compiler, major_version = spec.first
+      compiler = compiler.to_s.to_sym
+      raise ArgumentError, "The `fails_with` hash syntax only supports GCC" if compiler != :gcc
+
+      type = compiler
+      version = "#{major_version}.999"
+      exact_major_match = true
+    else
+      type = spec.to_s.to_sym
+      version = 9999
+      exact_major_match = false
+    end
+    new(type, version, exact_major_match: exact_major_match, &block)
+  end
+
+  def self.version_segments(value)
+    value.to_s.scan(/\d+/).map(&:to_i)
+  end
+
+  def self.compare_versions(left, right)
+    left_parts = version_segments(left)
+    right_parts = version_segments(right)
+    length = [left_parts.length, right_parts.length].max
+    index = 0
+    while index < length
+      comparison = (left_parts[index] || 0) <=> (right_parts[index] || 0)
+      return comparison unless comparison.zero?
+
+      index += 1
+    end
+    0
+  end
+
+  def self.major_version(value)
+    version_segments(value).first || 0
+  end
+
+  def initialize(type, version, exact_major_match: false, &block)
+    @type = type.to_s.to_sym
+    @version = PybrewVersion.new(version.to_s)
+    @exact_major_match = exact_major_match
+    instance_eval(&block) if block
+  end
+
+  def version(value = nil)
+    @version = PybrewVersion.new(value.to_s) unless value.nil?
+    @version
+  end
+  alias build version
+
+  def cause(_message)
+    nil
+  end
+
+  def fails_with?(compiler)
+    return false unless type == compiler.type
+
+    compiler_version = compiler.version.to_s
+    if @exact_major_match
+      self.class.major_version(@version) == self.class.major_version(compiler_version) &&
+        self.class.compare_versions(@version, compiler_version) >= 0
+    elsif type == :gcc
+      self.class.compare_versions(
+        self.class.major_version(@version),
+        self.class.major_version(compiler_version)
+      ) >= 0
+    else
+      self.class.compare_versions(@version, compiler_version) >= 0
+    end
+  end
+
+  def inspect
+    "#<CompilerFailure: #{type} #{version}>"
+  end
+end
+
+class CompilerSelectionError < RuntimeError
+  def initialize(formula)
+    name = formula.respond_to?(:full_name) ? formula.full_name : formula.to_s
+    super("#{name} cannot be built with any available compilers.")
+  end
+end
+
+# Compatibility compiler selector.  It honours ``compiler_failures`` metadata
+# and the host's default compiler, but does not probe/build with compilers.
+class CompilerSelector
+  include CompilerConstants
+
+  Compiler = Struct.new(:type, :name, :version)
+
+  COMPILER_PRIORITY = {
+    clang: [:clang, :llvm_clang, :gnu],
+    gcc: [:gnu, :gcc, :llvm_clang, :clang],
+  }.freeze
+
+  def self.select_for(formula, compilers = nil, testing_formula: false)
+    failures = if formula.respond_to?(:compiler_failures)
+      Array(formula.compiler_failures)
+    else
+      []
+    end
+
+    Array(compilers || self.compilers).each do |candidate|
+      build_compilers(candidate).each do |compiler|
+        return compiler.name unless failures.any? { |failure| failure.fails_with?(compiler) }
+      end
+    end
+
+    raise CompilerSelectionError, formula
+  end
+
+  def self.compilers
+    COMPILER_PRIORITY.fetch(DevelopmentTools.default_compiler)
+  end
+
+  def self.preferred_gcc
+    "gcc"
+  end
+
+  def self.build_compilers(candidate)
+    case candidate.to_sym
+    when :gnu
+      version = compiler_version(:gcc)
+      GNU_GCC_VERSIONS.reverse.map do |gcc_version|
+        Compiler.new(:gcc, "gcc-#{gcc_version}", version)
+      end
+    when :llvm
+      []
+    when :gcc
+      [Compiler.new(:gcc, preferred_gcc, compiler_version(:gcc))]
+    when :llvm_clang
+      [Compiler.new(:llvm_clang, :llvm_clang, compiler_version(:clang))]
+    else
+      [Compiler.new(candidate.to_sym, candidate.to_sym, compiler_version(candidate.to_sym))]
+    end
+  end
+  private_class_method :build_compilers
+
+  def self.compiler_version(type)
+    raw = case type.to_s
+          when "gcc", CompilerConstants::GNU_GCC_REGEXP
+            DevelopmentTools.gcc_version
+          when "llvm_clang"
+            DevelopmentTools.clang_version
+          else
+            DevelopmentTools.compiler_version(type)
+          end
+    raw = DevelopmentTools.clang_version if raw.nil? || raw.to_s.empty?
+    PybrewVersion.new(raw.nil? || raw.to_s.empty? ? "0" : raw.to_s)
+  end
+  private_class_method :compiler_version
 end
 
 module Linux
@@ -1884,18 +2066,76 @@ class << ENV
   end
 
   def compiler
+    return @pybrew_compiler.to_sym unless @pybrew_compiler.nil?
+
     configured = self["HOMEBREW_CC"].to_s
     return configured.to_sym unless configured.empty?
 
-    find_tool("clang") ? :clang : :gcc
+    DevelopmentTools.default_compiler
   end
 
   def cc
     self["CC"] || RbConfig::CONFIG["CC"] || "cc"
   end
 
+  def cc=(value)
+    self["CC"] = self["OBJC"] = value.to_s
+  end
+
   def cxx
     self["CXX"] || RbConfig::CONFIG["CXX"] || "c++"
+  end
+
+  def cxx=(value)
+    self["CXX"] = self["OBJCXX"] = value.to_s
+  end
+
+  # Compiler-selection helpers from Homebrew's Superenv: they only configure
+  # the environment, no compiler is invoked.
+  def clang
+    apply_compiler(:clang)
+  end
+
+  def gcc
+    apply_compiler(:gcc)
+  end
+
+  def llvm_clang
+    apply_compiler(:llvm_clang)
+  end
+
+  def append_to_cccfg(value)
+    self["HOMEBREW_CCCFG"] = self["HOMEBREW_CCCFG"].to_s + value.to_s
+    nil
+  end
+
+  def remove_cc_etc
+    keys = %w[CC CXX OBJC OBJCXX LD CPP CFLAGS CXXFLAGS OBJCFLAGS OBJCXXFLAGS LDFLAGS CPPFLAGS]
+    keys.each_with_object({}) do |key, removed|
+      removed[key] = delete(key)
+    end
+  end
+
+  def effective_arch
+    Hardware::CPU.arch
+  end
+
+  def apply_compiler(name)
+    value = name.to_s
+    case value
+    when "clang", "llvm_clang"
+      self["CC"] = self["OBJC"] = "clang"
+      self["CXX"] = self["OBJCXX"] = "clang++"
+    when "gcc", /\Agcc-\d+\z/
+      self["CC"] = self["OBJC"] = value
+      self["CXX"] = self["OBJCXX"] = value.sub(/\Agcc/, "g++")
+    else
+      self["CC"] = self["OBJC"] = value
+      self["CXX"] = self["OBJCXX"] = value.sub(/clang\z/, "clang++").sub(/gcc\z/, "g++")
+    end
+    self["HOMEBREW_CC"] = value
+    @pybrew_compiler = value
+    nil
   end
 
   def cflags
@@ -2083,6 +2323,48 @@ class << ENV
     ensure
       replace(old_env)
     end
+  end
+
+  # Superenv-compatible build environment setup.  This configures the same
+  # variables the real shim would (HOMEBREW_ENV, CC/CXX, MAKEFLAGS, paths,
+  # optimisation flags) without compiling anything.
+  def setup_build_environment(formula: nil, cc: nil, build_bottle: false,
+                              bottle_arch: nil, testing_formula: false,
+                              debug_symbols: false)
+    @pybrew_build_formula = formula
+    @pybrew_build_bottle = build_bottle
+    @pybrew_bottle_arch = bottle_arch
+    @pybrew_testing_formula = testing_formula
+    @pybrew_debug_symbols = debug_symbols
+
+    selected = if cc.nil? || cc.to_s.empty?
+      if !formula.nil? && formula.respond_to?(:compiler_failures)
+        CompilerSelector.select_for(formula, testing_formula: testing_formula)
+      else
+        DevelopmentTools.default_compiler
+      end
+    else
+      cc
+    end
+    apply_compiler(selected)
+
+    self["HOMEBREW_ENV"] = "super"
+    self["MAKEFLAGS"] ||= "-j#{make_jobs}"
+    self["HOMEBREW_MAKE_JOBS"] = make_jobs.to_s
+    self["HOMEBREW_CCCFG"] ||= ""
+    self["HOMEBREW_OPTIMIZATION_LEVEL"] = "Os"
+    self["HOMEBREW_OPTFLAGS"] = "-O2"
+    self["HOMEBREW_PREFIX"] = HOMEBREW_PREFIX.to_s
+    self["HOMEBREW_CELLAR"] = HOMEBREW_CELLAR.to_s
+    self["HOMEBREW_OPT"] = "#{HOMEBREW_PREFIX}/opt"
+    self["HOMEBREW_TEMP"] = HOMEBREW_TEMP.to_s
+    if !formula.nil? && formula.respond_to?(:prefix)
+      self["HOMEBREW_FORMULA_PREFIX"] = formula.prefix.to_s
+    end
+    shims = Superenv.shims_path.to_s
+    path_parts = self["PATH"].to_s.split(File::PATH_SEPARATOR)
+    prepend_path("PATH", shims) unless path_parts.include?(shims)
+    self
   end
 end
 
@@ -2668,15 +2950,23 @@ end
 class FormulaInstaller
   class << self
     def attempted
-      []
+      @attempted ||= []
     end
 
     def installed
-      []
+      @installed ||= []
     end
 
     def fetched
-      []
+      @fetched ||= []
+    end
+
+    # Test/embedding helper: forget per-process install bookkeeping.
+    def reset_tracking!
+      @attempted = []
+      @installed = []
+      @fetched = []
+      nil
     end
   end
 
@@ -2688,17 +2978,35 @@ class FormulaInstaller
   end
 
   def install
-    if formula.is_a?(PybrewLoadedFormula)
-      return formula.install
+    unless formula.is_a?(PybrewLoadedFormula)
+      raise NotImplementedError,
+            "FormulaInstaller#install is only available for Formulary-loaded " \
+            "formula sources in pybrew; use pybrew's Python installer for kegs"
     end
 
-    raise NotImplementedError,
-          "FormulaInstaller#install is only available for Formulary-loaded " \
-          "formula sources in pybrew; use pybrew's Python installer for kegs"
+    prelude
+    self.class.attempted << formula unless self.class.attempted.include?(formula)
+    fetch
+    install_dependencies
+    build
+    clean
+    finish
+    formula
   end
 
+  # Mirror Homebrew's install flow for Formulary-loaded sources: link the keg
+  # and run ``post_install`` (unless asked to skip it).
   def finish
-    nil
+    return nil if only_deps?
+    return nil unless formula.is_a?(PybrewLoadedFormula)
+
+    link
+    if build_bottle? || skip_post_install?
+      nil
+    elsif formula.respond_to?(:post_install)
+      formula.post_install
+    end
+    self
   end
 
   def prelude
@@ -2709,12 +3017,92 @@ class FormulaInstaller
     nil
   end
 
+  # Fetch dependencies and, for Formulary-loaded sources, run the formula's
+  # ``fetch do ... end`` block when one was declared.
   def fetch
-    nil
+    fetch_dependencies
+    if formula.respond_to?(:fetch_defined?) && formula.fetch_defined? &&
+       formula.respond_to?(:fetch)
+      formula.fetch
+    elsif formula.respond_to?(:fetch?) && formula.fetch? && formula.respond_to?(:fetch)
+      formula.fetch
+    end
+    unless self.class.fetched.any? { |item| item.to_s == formula.to_s }
+      self.class.fetched << formula
+    end
+    self
   end
 
+  # Run a Formulary-loaded formula's install block.  Ref-based installs stay
+  # owned by pybrew's Python installer.
   def build
-    nil
+    unless formula.is_a?(PybrewLoadedFormula)
+      raise NotImplementedError,
+            "FormulaInstaller#build is only available for Formulary-loaded " \
+            "formula sources in pybrew; use pybrew's Python installer for kegs"
+    end
+
+    formula.install
+    self
+  end
+
+  # Homebrew's Cleaner surface, limited to the safe removals that make sense
+  # for a shim-owned build: ``charset.alias`` and ``.la``/``.tbd`` files.
+  def clean
+    return nil unless formula.is_a?(PybrewLoadedFormula)
+
+    prefix = formula.prefix
+    return nil unless prefix.directory?
+
+    removed = []
+    skip_clean = lambda do |path|
+      formula.respond_to?(:skip_clean?) && formula.skip_clean?(path)
+    end
+
+    charset = prefix/"lib"/"charset.alias"
+    if charset.file? && !skip_clean.call(charset) && charset.unlink
+      removed << charset
+    end
+
+    [prefix/"bin", prefix/"sbin", prefix/"lib"].each do |directory|
+      next unless directory.directory?
+
+      Dir.glob("#{directory}/**/*", File::FNM_DOTMATCH).sort.each do |entry|
+        path = Pathname.new(entry)
+        next if path.directory?
+        next if path.symlink?
+        next if skip_clean.call(path)
+        next unless %w[.la .tbd].include?(path.extname)
+
+        removed << path if path.unlink
+      end
+    end
+
+    removed
+  end
+  alias cleanup clean
+
+  def link(keg = nil)
+    return nil unless formula.is_a?(PybrewLoadedFormula)
+
+    keg ||= Keg.new(formula.prefix)
+    return false unless keg.installed?
+
+    if skip_link?
+      optlink = keg.optlink
+      if File.symlink?(optlink.to_s)
+        return true if File.identical?(optlink.to_s, keg.prefix.to_s)
+
+        FileUtils.rm_f(optlink.to_s)
+      elsif optlink.exist?
+        return false
+      end
+      optlink.dirname.mkpath
+      FileUtils.ln_s(keg.prefix.to_s, optlink.to_s)
+      return true
+    end
+
+    keg.link
   end
 
   def pour_bottle?(output_warning: false)
@@ -2806,11 +3194,45 @@ class FormulaInstaller
   end
 
   def compute_dependencies(use_cache: true)
-    []
+    return [] unless formula.is_a?(PybrewLoadedFormula)
+
+    seen = {}
+    formula.dependencies.each_with_object([]) do |dep, deps|
+      name = dep.name.to_s
+      next if seen[name]
+
+      seen[name] = true
+      deps << dep
+    end
   end
 
-  def install_dependencies(*_args)
-    nil
+  def fetch_dependency(dep)
+    unless self.class.fetched.any? { |item| item.to_s == dep.to_s }
+      self.class.fetched << dep
+    end
+    dep
+  end
+
+  def fetch_dependencies
+    return nil if ignore_deps?
+
+    deps = compute_dependencies.reject do |dep|
+      self.class.fetched.any? { |item| item.to_s == dep.to_s }
+    end
+    return nil if deps.empty?
+
+    deps.each { |dep| fetch_dependency(dep) }
+    deps
+  end
+
+  def install_dependencies(deps = nil)
+    deps = compute_dependencies if deps.nil?
+    deps.each do |dep|
+      unless self.class.installed.any? { |item| item.to_s == dep.to_s }
+        self.class.installed << dep
+      end
+    end
+    deps
   end
 
   def check_conflicts
@@ -4504,6 +4926,18 @@ class PybrewFormulaRef
     Array(@info["fails_with"])
   end
 
+  # Homebrew's Formula#compiler_failures: ``fails_with`` metadata as
+  # ``CompilerFailure`` objects suitable for CompilerSelector.
+  def compiler_failures
+    Array(@info["fails_with"]).flat_map do |entry|
+      if entry.is_a?(Hash)
+        entry.map { |compiler, version| CompilerFailure.create(compiler.to_sym => version) }
+      else
+        [CompilerFailure.create(entry.to_s.to_sym)]
+      end
+    end
+  end
+
   def preserve_rpath?
     !!@info["preserve_rpath"]
   end
@@ -5486,7 +5920,8 @@ class PybrewLoadedFormula
                   :loaded_caveats_block, :loaded_post_install_block,
                   :loaded_bottle, :loaded_service, :loaded_livecheck,
                   :loaded_resources, :loaded_patches, :loaded_options,
-                  :loaded_head, :loaded_stable
+                  :loaded_head, :loaded_stable, :loaded_fetch_block,
+                  :loaded_fails_with, :loaded_namespace, :loaded_class_name
 
     def name
       @loaded_name || super
@@ -5572,6 +6007,10 @@ class PybrewLoadedFormula
       @loaded_install_block = block
     end
 
+    def fetch(&block)
+      @loaded_fetch_block = block
+    end
+
     def caveats(&block)
       @loaded_caveats_block = block
     end
@@ -5619,7 +6058,9 @@ class PybrewLoadedFormula
       nil
     end
 
-    def fails_with(*_args, &_block)
+    def fails_with(compiler = nil, &block)
+      @loaded_fails_with ||= []
+      @loaded_fails_with << [compiler, block]
       nil
     end
 
@@ -5673,8 +6114,31 @@ class PybrewLoadedFormula
     (@name || self.class.loaded_name).to_s
   end
 
+  def full_name
+    name
+  end
+
   def version
     (@version || self.class.loaded_version || "HEAD").to_s
+  end
+
+  def fetch?
+    !self.class.loaded_fetch_block.nil?
+  end
+
+  def fetch_defined?
+    fetch?
+  end
+
+  def fetch
+    block = self.class.loaded_fetch_block
+    instance_eval(&block) if block
+  end
+
+  def compiler_failures
+    (self.class.loaded_fails_with || []).map do |spec, block|
+      CompilerFailure.create(spec, &block)
+    end
   end
 
   def desc
@@ -5839,25 +6303,95 @@ module Formulary
     Formula[name]
   end
 
-  def load_formula(name, path = nil, contents = nil, _namespace = nil, **_kwargs)
+  # Evaluate formula source inside a real namespace module, like Homebrew's
+  # Formulary.  The namespace constant is registered under ``Formulary`` so
+  # formula code (and tests) can inspect it, and BUILD_FLAGS mirrors the flags
+  # Homebrew exposes to the formula's class scope.
+  def load_formula(name, path = nil, contents = nil, namespace = nil,
+                   flags: [], ignore_errors: false, from_metadata: false, **_kwargs)
     return Formula[name] if contents.nil?
+
+    namespace_name = if namespace.nil? || namespace.to_s.empty?
+      "FormulaNamespace#{namespace_key(path.to_s)}"
+    else
+      namespace.to_s
+    end
 
     module_object = Module.new
     module_object.const_set(:Formula, PybrewLoadedFormula)
+    module_object.const_set(:BUILD_FLAGS, Array(flags).map(&:to_s))
+    module_object.const_set(:LOADED_FROM_METADATA, true) if from_metadata
+    remove_const(namespace_name) if const_defined?(namespace_name, false)
+    const_set(namespace_name, module_object)
+    @namespace_constants ||= []
+    @namespace_constants << namespace_name unless @namespace_constants.include?(namespace_name)
+
     before = PybrewLoadedFormula.loaded_classes.length
-    module_object.module_eval(contents.to_s, path.to_s, 1)
-    klass = PybrewLoadedFormula.loaded_classes[before]
-    return Formula[name] if klass.nil?
+    begin
+      module_object.module_eval(contents.to_s, path.to_s, 1)
+    rescue NameError, ArgumentError
+      unless ignore_errors
+        remove_const(namespace_name) if const_defined?(namespace_name, false)
+        @namespace_constants.delete(namespace_name)
+        raise
+      end
+    rescue ScriptError, StandardError => error
+      remove_const(namespace_name) if const_defined?(namespace_name, false)
+      @namespace_constants.delete(namespace_name)
+      raise PybrewFormulaUnreadableError,
+            "Formula #{name} could not be loaded from #{path}: " \
+            "#{error.class}: #{error.message}"
+    end
+
+    expected = class_s(name)
+    klass = begin
+      candidate = module_object.const_get(expected, false)
+      candidate.is_a?(Class) && candidate <= PybrewLoadedFormula ? candidate : nil
+    rescue NameError
+      nil
+    end
+
+    # Tolerate a source file whose class name does not match the formula name
+    # as long as it defines exactly one formula subclass in the namespace.
+    if klass.nil?
+      candidates = (PybrewLoadedFormula.loaded_classes[before..-1] || []).select do |candidate|
+        candidate.is_a?(Class) && candidate <= PybrewLoadedFormula
+      end
+      klass = candidates.last
+    end
+
+    if klass.nil?
+      remove_const(namespace_name) if const_defined?(namespace_name, false)
+      @namespace_constants.delete(namespace_name)
+      raise PybrewFormulaClassUnavailableError,
+            "Formula #{name} (#{path}) does not define a formula class " \
+            "(expected #{expected})"
+    end
 
     klass.loaded_name ||= name.to_s
+    klass.loaded_namespace = module_object
+    klass.loaded_class_name = expected
     klass
   end
 
-  def load_formula_from_path(name, path = nil, *_args, **_kwargs)
+  def load_formula_from_path(name, path = nil, *_args, flags: [], ignore_errors: false,
+                             from_metadata: false, namespace: nil, **_kwargs)
     return Formula[name] if path.nil? || !Pathname.new(path.to_s).file?
 
-    contents = Pathname.new(path.to_s).read
-    load_formula(name, path, contents)
+    path = Pathname.new(path.to_s)
+    contents = path.open("r") { |file| ensure_utf8_encoding(file).read }
+    namespace_name = if namespace.nil? || namespace.to_s.empty?
+      "FormulaNamespace#{namespace_key(path.to_s)}"
+    else
+      namespace.to_s
+    end
+    klass = load_formula(
+      name, path, contents, namespace_name,
+      flags: flags, ignore_errors: ignore_errors, from_metadata: from_metadata
+    )
+    @path_cache ||= {}
+    @path_cache[path.to_s] = klass
+    klass
   end
 
   def load_formula_from_struct!(name, *_args, **_kwargs)
@@ -5883,20 +6417,26 @@ module Formulary
     false
   end
 
-  def formula_class_defined_from_path?(_path)
-    false
+  def formula_class_defined_from_path?(path)
+    (@path_cache ||= {}).key?(path.to_s)
   end
 
   def formula_class_defined_from_api?(_name)
     false
   end
 
-  def formula_class_get_from_path(_path)
-    raise "formula classes are not loaded by the pybrew Ruby shim"
+  def formula_class_get_from_path(path)
+    cached = (@path_cache ||= {})[path.to_s]
+    return cached unless cached.nil?
+
+    raise PybrewFormulaUnavailableError,
+          "no formula class has been loaded from #{path}; " \
+          "call Formulary.load_formula_from_path first"
   end
 
   def formula_class_get_from_api(_name)
-    raise "formula classes are not loaded by the pybrew Ruby shim"
+    raise PybrewFormulaUnavailableError,
+          "API formula loading is not available in the pybrew Ruby shim"
   end
 
   def namespace_key(identifier)
@@ -5915,6 +6455,11 @@ module Formulary
   end
 
   def clear_cache
+    Array(@namespace_constants).each do |namespace_name|
+      remove_const(namespace_name) if const_defined?(namespace_name, false)
+    end
+    @namespace_constants = []
+    @path_cache = {}
     nil
   end
 
