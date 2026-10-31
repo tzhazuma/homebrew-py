@@ -5426,7 +5426,10 @@ class PybrewLoadedFormula
                   :loaded_sha256, :loaded_license, :loaded_version,
                   :loaded_revision, :loaded_version_scheme,
                   :loaded_test_block, :loaded_install_block,
-                  :loaded_caveats_block, :loaded_post_install_block
+                  :loaded_caveats_block, :loaded_post_install_block,
+                  :loaded_bottle, :loaded_service, :loaded_livecheck,
+                  :loaded_resources, :loaded_patches, :loaded_options,
+                  :loaded_head, :loaded_stable
 
     def name
       @loaded_name || super
@@ -5520,36 +5523,42 @@ class PybrewLoadedFormula
       @loaded_post_install_block = block
     end
 
-    def service(&_block)
+    def service(&block)
+      @loaded_service = block
+    end
+
+    def bottle(&block)
+      @loaded_bottle = block
+    end
+
+    def livecheck(&block)
+      @loaded_livecheck = block
+    end
+
+    def head(url = nil, **options)
+      @loaded_head = { url: url, options: options }
       nil
     end
 
-    def bottle(&_block)
+    def stable(&block)
+      @loaded_stable = block
+    end
+
+    def resource(name, &block)
+      @loaded_resources ||= {}
+      @loaded_resources[name.to_s] = block
       nil
     end
 
-    def livecheck(&_block)
+    def patch(*args, &block)
+      @loaded_patches ||= []
+      @loaded_patches << [args, block]
       nil
     end
 
-    def head(*_args, &_block)
-      nil
-    end
-
-    def stable(&_block)
-      yield if block_given?
-      nil
-    end
-
-    def resource(*_args, &_block)
-      nil
-    end
-
-    def patch(*_args, &_block)
-      nil
-    end
-
-    def option(*_args)
+    def option(name, description = "")
+      @loaded_options ||= []
+      @loaded_options << [name.to_s, description.to_s]
       nil
     end
 
@@ -5643,6 +5652,30 @@ class PybrewLoadedFormula
     (self.class.dependencies || []).map do |dep_name, tags|
       PybrewDependencyRef.new(dep_name, tags)
     end
+  end
+
+  def options
+    (self.class.loaded_options || []).map(&:first)
+  end
+
+  def option?(name)
+    options.include?(name.to_s)
+  end
+
+  def head?
+    !self.class.loaded_head.nil?
+  end
+
+  def stable?
+    !self.class.loaded_stable.nil?
+  end
+
+  def bottle?
+    !self.class.loaded_bottle.nil?
+  end
+
+  def livecheck?
+    !self.class.loaded_livecheck.nil?
   end
 
   def prefix

@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-641 passed, 4 skipped in 370.19s
+642 passed, 4 skipped in 191.42s
 ```
 
 Breakdown of the feature slices:
@@ -723,6 +723,12 @@ local remote, commits a change, and confirms the CLI updates it.
 - Added `socket_path`/`socket_text`/`write_socket` and wired socket services to
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
+
+## Formulary loaded metadata blocks
+
+- `PybrewLoadedFormula` records bottle/service/livecheck blocks, resources,
+  patches, options, head and stable blocks, with instance helpers
+  (`options`, `option?`, `head?`, `stable?`, `bottle?`, `livecheck?`).
 
 ## FormulaInstaller loaded sources
 

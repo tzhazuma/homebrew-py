@@ -3699,3 +3699,62 @@ def test_formula_installer_installs_loaded_formula_source(
         / "installed.txt"
     )
     assert installed.read_text() == "ok"
+
+
+def test_formulary_loaded_formula_metadata_blocks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-loaded-meta",
+        "1.0",
+        (
+            '  path = prefix/"loaded-meta.rb"\n'
+            '  path.write <<~RUBY\n'
+            '    class LoadedMeta < Formula\n'
+            '      version "3.0"\n'
+            '      option "with-x", "description"\n'
+            '      bottle do\n'
+            '        sha256 "abc"\n'
+            '      end\n'
+            '      service do\n'
+            '        run ["svc"]\n'
+            '      end\n'
+            '      livecheck do\n'
+            '        url "https://example.com/live"\n'
+            '      end\n'
+            '      resource "res" do\n'
+            '        url "https://example.com/res"\n'
+            '      end\n'
+            '      patch :DATA\n'
+            '      head "https://example.com/head"\n'
+            '      stable do\n'
+            '        url "https://example.com/stable"\n'
+            '      end\n'
+            '    end\n'
+            '  RUBY\n'
+            '  klass = Formulary.load_formula_from_path("loaded-meta", path)\n'
+            '  instance = klass.new\n'
+            '  (prefix/"loaded-meta.txt").write [\n'
+            '    klass.loaded_bottle.nil?.to_s,\n'
+            '    klass.loaded_service.nil?.to_s,\n'
+            '    klass.loaded_livecheck.nil?.to_s,\n'
+            '    klass.loaded_resources.keys.join(","),\n'
+            '    klass.loaded_patches.length.to_s,\n'
+            '    instance.options.join(","),\n'
+            '    klass.loaded_head[:url],\n'
+            '    klass.loaded_stable.nil?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "loaded-meta.txt").read_text().splitlines() == [
+        "false",
+        "false",
+        "false",
+        "res",
+        "1",
+        "with-x",
+        "https://example.com/head",
+        "false",
+    ]
