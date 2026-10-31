@@ -37,7 +37,7 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 from .errors import BuildError, ChecksumMismatch, DownloadError, UnsupportedInstall
 from .models import Formula, PatchSpec, is_linux, is_macos
@@ -1070,6 +1070,187 @@ class BuildContext:
         )
 
 
+# ---------------------------------------------------------------------------
+# compiler selection / build environment
+# ---------------------------------------------------------------------------
+
+# Homebrew-style compiler families.  The first name is the C driver, the second
+# the C++ driver; both are resolved with ``shutil.which`` inside the build
+# environment's PATH so a fake toolchain in tests is honoured.
+_COMPILER_DRIVERS: dict[str, tuple[str, str]] = {
+    "clang": ("clang", "clang++"),
+    "gcc": ("gcc", "g++"),
+}
+
+_INCLUDE_FLAG = "-I{prefix}/include"
+_LIBRARY_FLAG = "-L{prefix}/lib"
+
+
+@dataclass(frozen=True)
+class CompilerSelection:
+    """The compilers selected for one source build.
+
+    ``cc``/``cxx`` are ``None`` when the build should keep using the
+    toolchain's defaults (i.e. neither ``CC``/``CXX`` nor a requested
+    ``PYBREW_COMPILER`` provided a usable driver).
+    """
+
+    cc: Optional[str] = None
+    cxx: Optional[str] = None
+    family: Optional[str] = None
+    warning: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class BuildEnvironment:
+    """A fully prepared source-build environment plus its compiler choice."""
+
+    env: dict[str, str]
+    compiler: CompilerSelection
+
+
+def _first_environment_value(
+    environment: Mapping[str, str], names: Iterable[str]
+) -> Optional[str]:
+    """Return the first non-empty value among ``names`` (in priority order)."""
+
+    for name in names:
+        value = environment.get(name)
+        if value is not None and value.strip():
+            return value.strip()
+    return None
+
+
+def _which_in(environment: Mapping[str, str], command: str) -> Optional[str]:
+    """Resolve ``command`` against the build environment's PATH.
+
+    ``shutil.which`` defaults to the *host* PATH; a source build may carry an
+    explicit environment (tests, callers), so look it up there instead.
+    """
+
+    search_path = environment.get("PATH") or os.defpath
+    return shutil.which(command, path=search_path)
+
+
+def select_compiler(
+    environment: Optional[Mapping[str, str]] = None,
+) -> CompilerSelection:
+    """Resolve the compiler choice from environment variables.
+
+    Explicit values always win and are never replaced:
+
+    * ``PYBREW_CC`` (then ``CC``) selects the C compiler;
+    * ``PYBREW_CXX`` (then ``CXX``) selects the C++ compiler;
+    * ``PYBREW_COMPILER=clang|gcc`` fills in whichever of the two is still
+      unset, but only when that family's driver is available.
+
+    An unavailable/unknown ``PYBREW_COMPILER`` is a soft failure: the function
+    returns a :class:`CompilerSelection` with ``warning`` set and the default
+    toolchain is used.
+    """
+
+    env = os.environ if environment is None else environment
+    cc = _first_environment_value(env, ("PYBREW_CC", "CC"))
+    cxx = _first_environment_value(env, ("PYBREW_CXX", "CXX"))
+    requested = (env.get("PYBREW_COMPILER") or "").strip().lower()
+    if not requested:
+        return CompilerSelection(cc=cc, cxx=cxx)
+
+    if requested not in _COMPILER_DRIVERS:
+        return CompilerSelection(
+            cc=cc,
+            cxx=cxx,
+            warning=(
+                f"PYBREW_COMPILER={requested!r} is not supported "
+                "(expected 'clang' or 'gcc'); using the default compiler"
+            ),
+        )
+
+    # Both channels are explicitly configured: PYBREW_COMPILER has nothing
+    # left to fill in, so do not validate or replace the user's choice.
+    if cc is not None and cxx is not None:
+        return CompilerSelection(cc=cc, cxx=cxx, family=requested)
+
+    c_driver, cxx_driver = _COMPILER_DRIVERS[requested]
+    available_cc = _which_in(env, c_driver)
+    available_cxx = _which_in(env, cxx_driver)
+    if cc is None and available_cc is None:
+        return CompilerSelection(
+            cc=cc,
+            cxx=cxx,
+            warning=(
+                f"PYBREW_COMPILER={requested} was requested but {c_driver} is "
+                "not available; using the default compiler"
+            ),
+        )
+
+    warning: Optional[str] = None
+    if cc is None:
+        cc = available_cc
+    if cxx is None:
+        if available_cxx is not None:
+            cxx = available_cxx
+        else:
+            warning = (
+                f"PYBREW_COMPILER={requested} was requested but {cxx_driver} "
+                "is not available; CXX will use the default toolchain"
+            )
+    return CompilerSelection(cc=cc, cxx=cxx, family=requested, warning=warning)
+
+
+def _merge_flags(existing: str, additions: Iterable[str]) -> str:
+    """Append build flags to ``existing`` without dropping user values."""
+
+    result = (existing or "").strip()
+    parts = result.split()
+    for addition in additions:
+        if addition not in parts:
+            result = f"{result} {addition}".strip()
+            parts.append(addition)
+    return result
+
+
+def build_environment(
+    config: Config,
+    base_env: Optional[Mapping[str, str]] = None,
+) -> BuildEnvironment:
+    """Prepare the environment for a source build.
+
+    The Homebrew-like variables (prefix paths, pkg-config paths, include and
+    library flags) are derived from ``config``.  User-supplied compiler flags
+    are preserved and extended, and an explicit compiler in the environment is
+    never overwritten.  The previous default values are kept exactly when the
+    user did not set the corresponding variable.
+    """
+
+    env = dict(os.environ if base_env is None else base_env)
+    prefix = config.prefix
+    paths = [str(prefix / "bin"), str(prefix / "sbin")]
+    env["PATH"] = os.pathsep.join(paths + [env.get("PATH", "/usr/bin:/bin")])
+    env["HOMEBREW_PREFIX"] = str(prefix)
+    env["HOMEBREW_CELLAR"] = str(config.cellar)
+    env["HOMEBREW_REPOSITORY"] = str(prefix)
+    env["PKG_CONFIG_PATH"] = os.pathsep.join(
+        [str(prefix / "lib" / "pkgconfig"), str(prefix / "share" / "pkgconfig")]
+    )
+    env["CMAKE_PREFIX_PATH"] = str(prefix)
+    env["ACLOCAL_PATH"] = str(prefix / "share" / "aclocal")
+    include_flag = _INCLUDE_FLAG.format(prefix=prefix)
+    library_flag = _LIBRARY_FLAG.format(prefix=prefix)
+    env["CPPFLAGS"] = _merge_flags(env.get("CPPFLAGS", ""), [include_flag])
+    env["CFLAGS"] = _merge_flags(env.get("CFLAGS", ""), [include_flag])
+    env["CXXFLAGS"] = _merge_flags(env.get("CXXFLAGS", ""), [include_flag])
+    env["LDFLAGS"] = _merge_flags(env.get("LDFLAGS", ""), [library_flag])
+    env["MAKEFLAGS"] = env.get("MAKEFLAGS", f"-j{max(1, (os.cpu_count() or 2))}")
+
+    compiler = select_compiler(env)
+    if compiler.cc is not None:
+        env["CC"] = compiler.cc
+    if compiler.cxx is not None:
+        env["CXX"] = compiler.cxx
+    return BuildEnvironment(env=env, compiler=compiler)
+
+
 class SourceBuilder:
     def __init__(
         self,
@@ -1077,11 +1258,13 @@ class SourceBuilder:
         config: Config,
         verbose: bool = False,
         downloader: Optional[Any] = None,
+        environment: Optional[Mapping[str, str]] = None,
     ):
         self.formula = formula
         self.config = config
         self.verbose = verbose
         self.downloader = downloader
+        self.environment = environment
         self._resource_stages: dict[str, Path] = {}
 
     def build(self, build_root: Path, keg: Path) -> None:
@@ -1220,24 +1403,10 @@ class SourceBuilder:
             )
 
     def _build_env(self, keg: Path) -> dict[str, str]:
-        env = os.environ.copy()
-        prefix = self.config.prefix
-        paths = [str(prefix / "bin"), str(prefix / "sbin")]
-        env["PATH"] = os.pathsep.join(paths + [env.get("PATH", "/usr/bin:/bin")])
-        env["HOMEBREW_PREFIX"] = str(prefix)
-        env["HOMEBREW_CELLAR"] = str(self.config.cellar)
-        env["HOMEBREW_REPOSITORY"] = str(prefix)
-        env["PKG_CONFIG_PATH"] = os.pathsep.join(
-            [str(prefix / "lib" / "pkgconfig"), str(prefix / "share" / "pkgconfig")]
-        )
-        env["CMAKE_PREFIX_PATH"] = str(prefix)
-        env["ACLOCAL_PATH"] = str(prefix / "share" / "aclocal")
-        env["CPPFLAGS"] = f"-I{prefix / 'include'}"
-        env["CFLAGS"] = f"-I{prefix / 'include'}"
-        env["CXXFLAGS"] = f"-I{prefix / 'include'}"
-        env["LDFLAGS"] = f"-L{prefix / 'lib'}"
-        env["MAKEFLAGS"] = env.get("MAKEFLAGS", f"-j{max(1, (os.cpu_count() or 2))}")
-        return env
+        prepared = build_environment(self.config, self.environment)
+        if prepared.compiler.warning:
+            print(f"warning: {prepared.compiler.warning}", file=sys.stderr)
+        return prepared.env
 
     # -- AST evaluation --------------------------------------------------
     def _execute(self, action: Action, ctx: BuildContext) -> None:
@@ -1659,5 +1828,12 @@ def build_source(
     keg: Path,
     verbose: bool = False,
     downloader: Optional[Any] = None,
+    environment: Optional[Mapping[str, str]] = None,
 ) -> None:
-    SourceBuilder(formula, config, verbose=verbose, downloader=downloader).build(build_root, keg)
+    SourceBuilder(
+        formula,
+        config,
+        verbose=verbose,
+        downloader=downloader,
+        environment=environment,
+    ).build(build_root, keg)

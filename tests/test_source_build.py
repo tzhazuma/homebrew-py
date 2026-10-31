@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import hashlib
 import io
+import os
 import tarfile
 from pathlib import Path
 
 import pytest
 
 from pybrew.installer import InstallOptions, Installer
+from pybrew.models import Formula
 from pybrew.paths import Config
 from pybrew.taps import FormulaLoader, discover_taps
 
@@ -480,3 +482,294 @@ def test_unknown_install_condition_is_explicit() -> None:
     )
     with pytest.raises(UnsupportedInstall, match="unsupported install condition"):
         InstallParser(formula).parse()
+
+
+# ---------------------------------------------------------------------------
+# compiler selection / build environment
+# ---------------------------------------------------------------------------
+
+_FAKE_COMPILER_SCRIPT = """#!/bin/sh
+{
+  printf 'argv=%s\\n' "$*"
+  printf 'CC=%s\\n' "${CC:-}"
+  printf 'CXX=%s\\n' "${CXX:-}"
+  printf 'CFLAGS=%s\\n' "${CFLAGS:-}"
+  printf 'CXXFLAGS=%s\\n' "${CXXFLAGS:-}"
+  printf 'LDFLAGS=%s\\n' "${LDFLAGS:-}"
+} > "$PWD/__REPORT__"
+"""
+
+
+def _source_config(tmp_path: Path) -> Config:
+    config = Config.default(prefix=tmp_path / "prefix", taps=[], cache=tmp_path / "cache")
+    config.ensure()
+    return config
+
+
+def _fake_compiler(directory: Path, name: str, report: str) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / name
+    path.write_text(
+        _FAKE_COMPILER_SCRIPT.replace("__REPORT__", report), encoding="utf-8"
+    )
+    path.chmod(0o755)
+    return path
+
+
+def _compiler_report(path: Path) -> dict[str, str]:
+    return dict(
+        line.split("=", 1)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if "=" in line
+    )
+
+
+def test_build_environment_defaults_are_unchanged(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    prefix = config.prefix
+    prepared = source_builder.build_environment(config, {"PATH": "/usr/bin:/bin"})
+    env = prepared.env
+    assert env["CPPFLAGS"] == f"-I{prefix / 'include'}"
+    assert env["CFLAGS"] == f"-I{prefix / 'include'}"
+    assert env["CXXFLAGS"] == f"-I{prefix / 'include'}"
+    assert env["LDFLAGS"] == f"-L{prefix / 'lib'}"
+    assert env["HOMEBREW_PREFIX"] == str(prefix)
+    assert env["HOMEBREW_CELLAR"] == str(config.cellar)
+    assert env["HOMEBREW_REPOSITORY"] == str(prefix)
+    assert env["CMAKE_PREFIX_PATH"] == str(prefix)
+    assert env["PKG_CONFIG_PATH"] == os.pathsep.join(
+        [str(prefix / "lib" / "pkgconfig"), str(prefix / "share" / "pkgconfig")]
+    )
+    assert env["PATH"].startswith(
+        f"{prefix / 'bin'}{os.pathsep}{prefix / 'sbin'}{os.pathsep}"
+    )
+    assert "CC" not in env
+    assert "CXX" not in env
+    assert prepared.compiler == source_builder.CompilerSelection()
+
+
+def test_build_environment_preserves_explicit_compilers_and_flags(
+    tmp_path: Path,
+) -> None:
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    prefix = config.prefix
+    base = {
+        "PATH": "/usr/bin:/bin",
+        "CC": "user-cc",
+        "CXX": "user-cxx",
+        "CFLAGS": "-O2 -g",
+        "CXXFLAGS": "-O3",
+        "CPPFLAGS": "-DUSER=1",
+        "LDFLAGS": "-L/opt/user/lib",
+        "MAKEFLAGS": "-j1",
+    }
+    env = source_builder.build_environment(config, base).env
+    assert env["CC"] == "user-cc"
+    assert env["CXX"] == "user-cxx"
+    assert env["CFLAGS"] == f"-O2 -g -I{prefix / 'include'}"
+    assert env["CXXFLAGS"] == f"-O3 -I{prefix / 'include'}"
+    assert env["CPPFLAGS"] == f"-DUSER=1 -I{prefix / 'include'}"
+    assert env["LDFLAGS"] == f"-L/opt/user/lib -L{prefix / 'lib'}"
+    assert env["MAKEFLAGS"] == "-j1"
+
+
+def test_build_environment_does_not_duplicate_prefix_flags(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    prefix = config.prefix
+    include = f"-I{prefix / 'include'}"
+    library = f"-L{prefix / 'lib'}"
+    env = source_builder.build_environment(
+        config,
+        {
+            "PATH": "/usr/bin:/bin",
+            "CFLAGS": include,
+            "CPPFLAGS": include,
+            "CXXFLAGS": include,
+            "LDFLAGS": library,
+        },
+    ).env
+    assert env["CFLAGS"] == include
+    assert env["CPPFLAGS"] == include
+    assert env["CXXFLAGS"] == include
+    assert env["LDFLAGS"] == library
+
+
+def test_pybrew_cc_and_cxx_override_plain_cc(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    env = source_builder.build_environment(
+        config,
+        {
+            "PATH": "/usr/bin:/bin",
+            "CC": "plain-cc",
+            "CXX": "plain-cxx",
+            "PYBREW_CC": "brew-cc",
+            "PYBREW_CXX": "brew-cxx",
+        },
+    ).env
+    assert env["CC"] == "brew-cc"
+    assert env["CXX"] == "brew-cxx"
+
+
+def test_pybrew_compiler_selects_available_clang(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    fake_bin = tmp_path / "fake-bin"
+    clang = _fake_compiler(fake_bin, "clang", "unused.txt")
+    clangxx = _fake_compiler(fake_bin, "clang++", "unused.txt")
+    prepared = source_builder.build_environment(
+        config, {"PATH": str(fake_bin), "PYBREW_COMPILER": "clang"}
+    )
+    assert prepared.compiler.family == "clang"
+    assert prepared.compiler.warning is None
+    assert prepared.env["CC"] == str(clang)
+    assert prepared.env["CXX"] == str(clangxx)
+
+
+def test_explicit_compilers_win_over_pybrew_compiler(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    fake_bin = tmp_path / "fake-bin"
+    _fake_compiler(fake_bin, "clang", "unused.txt")
+    clangxx = _fake_compiler(fake_bin, "clang++", "unused.txt")
+
+    both = source_builder.build_environment(
+        config,
+        {
+            "PATH": str(fake_bin),
+            "PYBREW_COMPILER": "clang",
+            "CC": "user-cc",
+            "CXX": "user-cxx",
+        },
+    )
+    assert both.env["CC"] == "user-cc"
+    assert both.env["CXX"] == "user-cxx"
+    assert both.compiler.family == "clang"
+
+    partial = source_builder.build_environment(
+        config,
+        {"PATH": str(fake_bin), "PYBREW_COMPILER": "clang", "CC": "user-cc"},
+    )
+    assert partial.env["CC"] == "user-cc"
+    assert partial.env["CXX"] == str(clangxx)
+
+
+def test_missing_pybrew_compiler_falls_back_with_clear_warning(
+    tmp_path: Path,
+) -> None:
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+    prepared = source_builder.build_environment(
+        config, {"PATH": str(empty_bin), "PYBREW_COMPILER": "gcc"}
+    )
+    assert "CC" not in prepared.env
+    assert "CXX" not in prepared.env
+    assert prepared.compiler.family is None
+    assert prepared.compiler.warning is not None
+    assert "gcc" in prepared.compiler.warning
+    assert "not available" in prepared.compiler.warning
+
+
+def test_unknown_pybrew_compiler_value_falls_back(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    prepared = source_builder.build_environment(
+        config, {"PATH": "/usr/bin:/bin", "PYBREW_COMPILER": "icc"}
+    )
+    assert "CC" not in prepared.env
+    assert prepared.compiler.warning is not None
+    assert "not supported" in prepared.compiler.warning
+
+
+def test_missing_cxx_driver_keeps_cc_and_warns(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    fake_bin = tmp_path / "fake-bin"
+    clang = _fake_compiler(fake_bin, "clang", "unused.txt")
+    prepared = source_builder.build_environment(
+        config, {"PATH": str(fake_bin), "PYBREW_COMPILER": "clang"}
+    )
+    assert prepared.env["CC"] == str(clang)
+    assert "CXX" not in prepared.env
+    assert prepared.compiler.warning is not None
+    assert "clang++" in prepared.compiler.warning
+
+
+def test_source_builder_reports_compiler_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    empty_bin = tmp_path / "empty-bin"
+    empty_bin.mkdir()
+    monkeypatch.setenv("PATH", str(empty_bin))
+    monkeypatch.setenv("PYBREW_COMPILER", "gcc")
+    builder = source_builder.SourceBuilder(
+        Formula(name="warn-fixture", version="1.0"), config
+    )
+    env = builder._build_env(tmp_path / "keg")
+    captured = capsys.readouterr()
+    assert "PYBREW_COMPILER=gcc" in captured.err
+    assert "not available" in captured.err
+    assert "CC" not in env
+
+
+def test_source_build_passes_selected_compiler_env_and_argv(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_bin = tmp_path / "fake-bin"
+    _fake_compiler(fake_bin, "clang", "cc-report.txt")
+    _fake_compiler(fake_bin, "clang++", "cxx-report.txt")
+    monkeypatch.setenv("PATH", f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("PYBREW_COMPILER", "clang")
+    monkeypatch.setenv("CFLAGS", "-O2 -g")
+    monkeypatch.setenv("CXXFLAGS", "-O3")
+    monkeypatch.setenv("LDFLAGS", "-L/opt/explicit")
+    for name in ("PYBREW_CC", "CC", "PYBREW_CXX", "CXX"):
+        monkeypatch.delenv(name, raising=False)
+
+    project = tmp_path / "compiler-src"
+    project.mkdir()
+    (project / "README").write_text("compiler fixture\n", encoding="utf-8")
+    tap, _ = _make_tap(
+        tmp_path,
+        "compiler-fixture",
+        "1.0",
+        project,
+        "\n".join(
+            [
+                '    system ENV["CC"], "--c-probe", "one"',
+                '    system ENV["CXX"], "--cxx-probe"',
+                '    bin.install "cc-report.txt"',
+                '    bin.install "cxx-report.txt"',
+            ]
+        ),
+    )
+    config, result = _install(tmp_path, tap, "compiler-fixture")
+    prefix = config.prefix
+
+    cc = _compiler_report(result.keg / "bin" / "cc-report.txt")
+    assert cc["argv"] == "--c-probe one"
+    assert cc["CC"] == str(fake_bin / "clang")
+    assert cc["CFLAGS"] == f"-O2 -g -I{prefix / 'include'}"
+    assert cc["LDFLAGS"] == f"-L/opt/explicit -L{prefix / 'lib'}"
+
+    cxx = _compiler_report(result.keg / "bin" / "cxx-report.txt")
+    assert cxx["argv"] == "--cxx-probe"
+    assert cxx["CXX"] == str(fake_bin / "clang++")
+    assert cxx["CXXFLAGS"] == f"-O3 -I{prefix / 'include'}"

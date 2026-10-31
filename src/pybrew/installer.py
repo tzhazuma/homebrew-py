@@ -12,7 +12,7 @@ import tarfile
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Mapping, Optional
 
 from .cellar import Cellar, Linker, read_receipt, receipt_path, write_receipt
 from .download import Downloader, sha256_file
@@ -456,6 +456,7 @@ class Installer:
         loader: FormulaLoader,
         downloader: Optional[Downloader] = None,
         verbose: bool = False,
+        environment: Optional[Mapping[str, str]] = None,
     ):
         self.config = config
         self.loader = loader
@@ -463,6 +464,10 @@ class Installer:
         self.linker = Linker(config, verbose)
         self.cellar = Cellar(config)
         self.verbose = verbose
+        # Base environment for source builds; ``None`` inherits ``os.environ``.
+        # Callers/tests can inject a controlled environment without mutating
+        # the process environment.
+        self.environment = environment
 
     # -- dependency resolution ------------------------------------------
     def resolve(self, formula: Formula, with_dependencies: bool = True) -> list[Formula]:
@@ -669,6 +674,7 @@ class Installer:
                     staging,
                     verbose=self.verbose or options.verbose,
                     downloader=self.downloader,
+                    environment=self.environment,
                 )
                 self._commit_keg(staging, keg)
             finally:
