@@ -3621,3 +3621,45 @@ def test_formula_no_linkage_and_local_patch_checksums(
     formula.dependencies.append(Dependency(name="dep", tags=frozenset({"no_linkage"})))
     keg = _build(tmp_path, formula)
     assert (keg / "upstream.txt").read_text().splitlines() == ["true", "dep"]
+
+
+def test_formulary_loads_formula_source_from_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-formulary-source",
+        "1.0",
+        (
+            '  path = prefix/"loaded-formula.rb"\n'
+            '  path.write <<~RUBY\n'
+            '    class LoadedFixture < Formula\n'
+            '      desc "loaded fixture"\n'
+            '      homepage "https://example.com/loaded"\n'
+            '      url "https://example.com/loaded-2.0.tar.gz"\n'
+            '      sha256 "abc"\n'
+            '      version "2.0"\n'
+            '      depends_on "dep" => :build\n'
+            '      test do\n'
+            '        "loaded test"\n'
+            '      end\n'
+            '    end\n'
+            '  RUBY\n'
+            '  klass = Formulary.load_formula_from_path("loaded-fixture", path)\n'
+            '  (prefix/"formulary-loaded.txt").write [\n'
+            '    klass.loaded_name,\n'
+            '    klass.loaded_version,\n'
+            '    klass.loaded_desc,\n'
+            '    klass.new.dependencies.map(&:name).join(","),\n'
+            '    klass.loaded_test_block.nil?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "formulary-loaded.txt").read_text().splitlines() == [
+        "loaded-fixture",
+        "2.0",
+        "loaded fixture",
+        "dep",
+        "false",
+    ]

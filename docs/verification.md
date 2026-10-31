@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-639 passed, 4 skipped in 203.95s
+640 passed, 4 skipped in 263.16s
 ```
 
 Breakdown of the feature slices:
@@ -723,6 +723,14 @@ local remote, commits a change, and confirms the CLI updates it.
 - Added `socket_path`/`socket_text`/`write_socket` and wired socket services to
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
+
+## Formulary source loader
+
+- `Formulary.load_formula_from_path` now evaluates a real formula file in an
+  isolated module with a metadata-only `PybrewLoadedFormula` base class,
+  returning the loaded class with desc/homepage/url/sha256/version/license/
+  dependencies/test/install/caveats blocks. Missing paths still fall back to
+  the metadata ref for compatibility.
 
 ## Upstream sync (2026-10-30)
 

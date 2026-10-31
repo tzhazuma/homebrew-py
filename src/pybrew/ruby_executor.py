@@ -5407,6 +5407,309 @@ module Formula
   end
 end
 
+class PybrewLoadedFormula
+  class << self
+    def loaded_classes
+      @loaded_classes ||= []
+    end
+
+    def inherited(subclass)
+      PybrewLoadedFormula.loaded_classes << subclass
+      super
+    end
+
+    attr_accessor :loaded_name, :loaded_desc, :loaded_homepage, :loaded_url,
+                  :loaded_sha256, :loaded_license, :loaded_version,
+                  :loaded_revision, :loaded_version_scheme,
+                  :loaded_test_block, :loaded_install_block,
+                  :loaded_caveats_block, :loaded_post_install_block
+
+    def name
+      @loaded_name || super
+    end
+
+    def formula_name
+      @loaded_name
+    end
+
+    def desc(value = nil)
+      return @loaded_desc if value.nil?
+
+      @loaded_desc = value.to_s
+    end
+
+    def homepage(value = nil)
+      return @loaded_homepage if value.nil?
+
+      @loaded_homepage = value.to_s
+    end
+
+    def url(value = nil)
+      return @loaded_url if value.nil?
+
+      @loaded_url = value.to_s
+    end
+
+    def sha256(value = nil)
+      return @loaded_sha256 if value.nil?
+
+      @loaded_sha256 = value.to_s
+    end
+
+    def version(value = nil)
+      return @loaded_version if value.nil?
+
+      @loaded_version = value.to_s
+    end
+
+    def license(value = nil)
+      return @loaded_license if value.nil?
+
+      @loaded_license = value.to_s
+    end
+
+    def revision(value = nil)
+      return @loaded_revision if value.nil?
+
+      @loaded_revision = value.to_i
+    end
+
+    def version_scheme(value = nil)
+      return @loaded_version_scheme if value.nil?
+
+      @loaded_version_scheme = value.to_i
+    end
+
+    def depends_on(name, *tags)
+      @loaded_dependencies ||= []
+      if name.is_a?(Hash)
+        name.each do |dep_name, dep_tags|
+          @loaded_dependencies << [dep_name.to_s, Array(dep_tags).flatten.map(&:to_s)]
+        end
+      else
+        @loaded_dependencies << [name.to_s, tags.flatten.map(&:to_s)]
+      end
+      nil
+    end
+
+    def dependencies
+      @loaded_dependencies ||= []
+    end
+
+    def uses_from_macos(name, *_args)
+      depends_on(name, "uses_from_macos")
+    end
+
+    def test(&block)
+      @loaded_test_block = block
+    end
+
+    def install(&block)
+      @loaded_install_block = block
+    end
+
+    def caveats(&block)
+      @loaded_caveats_block = block
+    end
+
+    def post_install(&block)
+      @loaded_post_install_block = block
+    end
+
+    def service(&_block)
+      nil
+    end
+
+    def bottle(&_block)
+      nil
+    end
+
+    def livecheck(&_block)
+      nil
+    end
+
+    def head(*_args, &_block)
+      nil
+    end
+
+    def stable(&_block)
+      yield if block_given?
+      nil
+    end
+
+    def resource(*_args, &_block)
+      nil
+    end
+
+    def patch(*_args, &_block)
+      nil
+    end
+
+    def option(*_args)
+      nil
+    end
+
+    def fails_with(*_args, &_block)
+      nil
+    end
+
+    def keg_only(*_args)
+      nil
+    end
+
+    def conflicts_with(*_args)
+      nil
+    end
+
+    def skip_clean(*_args)
+      nil
+    end
+
+    def preserve_rpath(*_args)
+      nil
+    end
+
+    def deny_network_access!(*_args)
+      nil
+    end
+
+    def on_macos(&block)
+      yield if OS.mac? && block
+      nil
+    end
+
+    def on_linux(&block)
+      yield if OS.linux? && block
+      nil
+    end
+
+    def on_arm(&block)
+      yield if Hardware::CPU.arm? && block
+      nil
+    end
+
+    def on_intel(&block)
+      yield if Hardware::CPU.intel? && block
+      nil
+    end
+  end
+
+  def initialize(name = nil, version = nil)
+    @name = name
+    @version = version
+  end
+
+  def name
+    (@name || self.class.loaded_name).to_s
+  end
+
+  def version
+    (@version || self.class.loaded_version || "HEAD").to_s
+  end
+
+  def desc
+    self.class.loaded_desc
+  end
+
+  def homepage
+    self.class.loaded_homepage
+  end
+
+  def url
+    self.class.loaded_url
+  end
+
+  def sha256
+    self.class.loaded_sha256
+  end
+
+  def license
+    self.class.loaded_license
+  end
+
+  def revision
+    (self.class.loaded_revision || 0).to_i
+  end
+
+  def version_scheme
+    (self.class.loaded_version_scheme || 0).to_i
+  end
+
+  def dependencies
+    (self.class.dependencies || []).map do |dep_name, tags|
+      PybrewDependencyRef.new(dep_name, tags)
+    end
+  end
+
+  def prefix
+    Pathname.new(HOMEBREW_PREFIX)/"Cellar"/name/version
+  end
+
+  def opt_prefix
+    Pathname.new(HOMEBREW_PREFIX)/"opt"/name
+  end
+
+  def rack
+    Pathname.new(HOMEBREW_PREFIX)/"Cellar"/name
+  end
+
+  def bin
+    prefix/"bin"
+  end
+
+  def sbin
+    prefix/"sbin"
+  end
+
+  def lib
+    prefix/"lib"
+  end
+
+  def include
+    prefix/"include"
+  end
+
+  def share
+    prefix/"share"
+  end
+
+  def etc
+    Pathname.new(HOMEBREW_PREFIX)/"etc"/name
+  end
+
+  def var
+    Pathname.new(HOMEBREW_PREFIX)/"var"
+  end
+
+  def libexec
+    prefix/"libexec"
+  end
+
+  def test
+    block = self.class.loaded_test_block
+    instance_eval(&block) if block
+  end
+
+  def install
+    block = self.class.loaded_install_block
+    instance_eval(&block) if block
+  end
+
+  def caveats
+    block = self.class.loaded_caveats_block
+    block.nil? ? nil : instance_eval(&block)
+  end
+
+  def post_install
+    block = self.class.loaded_post_install_block
+    instance_eval(&block) if block
+  end
+
+  def to_s
+    name
+  end
+end
+
 module Formulary
   module_function
 
@@ -5418,12 +5721,25 @@ module Formulary
     Formula[name]
   end
 
-  def load_formula(name, _path = nil, _contents = nil, _namespace = nil)
-    Formula[name]
+  def load_formula(name, path = nil, contents = nil, _namespace = nil, **_kwargs)
+    return Formula[name] if contents.nil?
+
+    module_object = Module.new
+    module_object.const_set(:Formula, PybrewLoadedFormula)
+    before = PybrewLoadedFormula.loaded_classes.length
+    module_object.module_eval(contents.to_s, path.to_s, 1)
+    klass = PybrewLoadedFormula.loaded_classes[before]
+    return Formula[name] if klass.nil?
+
+    klass.loaded_name ||= name.to_s
+    klass
   end
 
-  def load_formula_from_path(name, *_args, **_kwargs)
-    Formula[name]
+  def load_formula_from_path(name, path = nil, *_args, **_kwargs)
+    return Formula[name] if path.nil? || !Pathname.new(path.to_s).file?
+
+    contents = Pathname.new(path.to_s).read
+    load_formula(name, path, contents)
   end
 
   def load_formula_from_struct!(name, *_args, **_kwargs)
