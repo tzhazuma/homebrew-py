@@ -114,6 +114,7 @@ require "json"
 require "open3"
 require "pathname"
 require "rbconfig"
+require "tmpdir"
 
 class FormulaTestFailure < StandardError
 end
@@ -394,7 +395,8 @@ class FormulaTestContext
 
     # Homebrew exposes the formula's ``test`` method (defined by ``test do``).
     # Dependency test bodies are loaded from the configured local taps on a
-    # best-effort basis; the parent test's testpath and environment are reused.
+    # best-effort basis and run with their own throw-away testpath, cwd and
+    # environment; the parent context is restored in ``ensure``.
     def test
       if @name == @context.name
         raise FormulaTestFailure,
@@ -419,12 +421,36 @@ class FormulaTestContext
               "block (#{load_error})"
       end
 
-      previous = FormulaTestContext.current
+      previous_context = FormulaTestContext.current
+      previous_dir = Dir.pwd
+      saved_env = {}
+      dependency_testpath = nil
       begin
-        context = @context.dependency_test_context(@info)
+        dependency_testpath = @context.dependency_testpath(@name)
+        @context.dependency_test_environment(@info, dependency_testpath).each do |key, value|
+          saved_env[key] = ENV[key]
+          ENV[key] = value.to_s
+        end
+        Dir.chdir(dependency_testpath)
+        context = @context.dependency_test_context(@info, dependency_testpath)
         FormulaTestContext.evaluate_source(context, source, "(formula #{@name} test)")
       ensure
-        FormulaTestContext.current = previous
+        FormulaTestContext.current = previous_context
+        begin
+          Dir.chdir(previous_dir)
+        rescue StandardError
+          # The original directory should still exist; keep going if it does not.
+        end
+        saved_env.each do |key, value|
+          value.nil? ? ENV.delete(key) : ENV[key] = value
+        end
+        if dependency_testpath && File.directory?(dependency_testpath)
+          begin
+            FileUtils.remove_entry(dependency_testpath)
+          rescue StandardError
+            # The throw-away test root is removed after the whole run anyway.
+          end
+        end
       end
     end
 
@@ -558,14 +584,37 @@ class FormulaTestContext
     Formula.new(self, canonical_name, info)
   end
 
-  # Build the context used to execute a dependency's test body.  It shares the
-  # parent test's testpath and environment and resolves nested ``Formula[...]``
-  # lookups through the same metadata map.
-  def dependency_test_context(info)
+  # Create an isolated throw-away testpath for a dependency's test body.
+  def dependency_testpath(name)
+    require "tmpdir"
+    prefix = "pybrew-#{name.to_s.gsub(/[^A-Za-z0-9_.-]/, "-")}-test-"
+    parent = @testpath.parent
+    if parent.directory?
+      Dir.mktmpdir(prefix, parent.to_s)
+    else
+      Dir.mktmpdir(prefix)
+    end
+  end
+
+  # Environment for a dependency test: its own prefix/testpath/cwd/tmpdir.
+  def dependency_test_environment(info, testpath)
+    {
+      "PYBREW_PREFIX" => info["prefix"].to_s,
+      "PYBREW_FORMULA_PREFIX" => info["prefix"].to_s,
+      "PYBREW_TESTPATH" => testpath.to_s,
+      "PWD" => testpath.to_s,
+      "TMPDIR" => testpath.to_s,
+    }
+  end
+
+  # Build the context used to execute a dependency's test body.  It uses the
+  # dependency's own testpath and resolves nested ``Formula[...]`` lookups
+  # through the shared metadata map.
+  def dependency_test_context(info, testpath = @testpath)
     FormulaTestContext.new(
       "name" => info["name"].to_s,
       "version" => info["version"].to_s,
-      "testpath" => @testpath.to_s,
+      "testpath" => testpath.to_s,
       "prefix" => info["prefix"].to_s,
       "homebrew_prefix" => @homebrew_prefix.to_s,
       "cellar" => @cellar.to_s,
@@ -1946,7 +1995,8 @@ def run_formula_test(
     ``Formula["dep"].test`` executes a dependency's captured test body when the
     dependency is installed and its formula source is available in the
     configured local taps; otherwise it fails with a clear error.  Dependency
-    tests reuse the parent test's ``testpath`` and environment.
+    tests run with their own throw-away ``testpath``, cwd and environment, and
+    the parent context is restored afterwards.
 
     ``Formula[...]`` lookups resolve the formula under test, its declared
     dependencies, formulae referenced literally in loaded test bodies, and

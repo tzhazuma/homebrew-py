@@ -1129,6 +1129,7 @@ def test_dependency_test_body_executes(tmp_path: Path) -> None:
     assert_equal "dep-lib", name
     assert_equal "dep-ok", shell_output("#{bin}/dep-lib").strip
     (testpath/"dep-marker").write "marker"
+    assert_path_exists testpath/"dep-marker"
   end''',
     )
     formula, config = _installed_formula(
@@ -1137,8 +1138,7 @@ def test_dependency_test_body_executes(tmp_path: Path) -> None:
   Formula["dep-lib"].test
   assert Formula["dep-lib"].test_defined?
   assert_equal "hello-test", Formula["hello-test"].name
-  assert_path_exists testpath/"dep-marker"
-  assert_equal "marker", (testpath/"dep-marker").read
+  refute_path_exists testpath/"dep-marker"
 end
 """,
         taps=[tap],
@@ -1188,7 +1188,21 @@ def test_dependency_test_failure_propagates(tmp_path: Path) -> None:
         tap, "dep-lib", '  test do\n    assert_equal "expected", "actual"\n  end'
     )
     formula, config = _installed_formula(
-        tmp_path, 'do\n  Formula["dep-lib"].test\nend', taps=[tap]
+        tmp_path,
+        """do
+  parent_testpath = testpath.to_s
+  (testpath/"parent-marker").write "parent"
+  begin
+    Formula["dep-lib"].test
+  ensure
+    assert_equal parent_testpath, Dir.pwd
+    assert_path_exists testpath/"parent-marker"
+    assert_equal parent_testpath, ENV["PYBREW_TESTPATH"]
+    assert_equal "hello-test", name
+  end
+end
+""",
+        taps=[tap],
     )
     formula.dependencies = [Dependency(name="dep-lib")]
     _install_keg(config, "dep-lib")
@@ -1207,7 +1221,23 @@ def test_dependency_test_skip_propagates(tmp_path: Path) -> None:
         tap, "dep-lib", '  test do\n    skip "dep not applicable"\n  end'
     )
     formula, config = _installed_formula(
-        tmp_path, 'do\n  Formula["dep-lib"].test\nend', taps=[tap]
+        tmp_path,
+        """do
+  parent_testpath = testpath.to_s
+  parent_prefix = ENV["PYBREW_PREFIX"]
+  parent_tmpdir = ENV["TMPDIR"]
+  begin
+    Formula["dep-lib"].test
+  ensure
+    assert_equal parent_testpath, Dir.pwd
+    assert_equal parent_prefix, ENV["PYBREW_PREFIX"]
+    assert_equal parent_testpath, ENV["PYBREW_TESTPATH"]
+    assert_equal parent_tmpdir, ENV["TMPDIR"]
+    assert_equal "hello-test", name
+  end
+end
+""",
+        taps=[tap],
     )
     formula.dependencies = [Dependency(name="dep-lib")]
     _install_keg(config, "dep-lib")
@@ -1319,6 +1349,7 @@ def test_installed_tap_formula_lookup_without_literal_reference(tmp_path: Path) 
         """  test do
     assert_equal "tool-y", name
     (testpath/"tool-y-marker").write "marker"
+    assert_path_exists testpath/"tool-y-marker"
   end""",
     )
     formula, config = _installed_formula(
@@ -1330,7 +1361,7 @@ def test_installed_tap_formula_lookup_without_literal_reference(tmp_path: Path) 
   assert_equal "1.0", ref.version
   assert_equal "tool-y-ok", shell_output("#{ref.bin}/tool-y").strip
   ref.test
-  assert_path_exists testpath/"tool-y-marker"
+  refute_path_exists testpath/"tool-y-marker"
 end
 """,
         taps=[tap],
@@ -1663,5 +1694,58 @@ end
 """,
         version="1.2.3",
     )
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_dependency_test_uses_isolated_testpath_and_environment(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(
+        tap,
+        "dep-lib",
+        '''  test do
+    assert_equal "dep-lib", name
+    assert_equal prefix.to_s, ENV["PYBREW_PREFIX"]
+    assert_equal prefix.to_s, ENV["PYBREW_FORMULA_PREFIX"]
+    assert_equal testpath.to_s, ENV["PYBREW_TESTPATH"]
+    assert_equal testpath.to_s, ENV["PWD"]
+    assert_equal testpath.to_s, ENV["TMPDIR"]
+    assert_equal testpath.to_s, Dir.pwd
+    refute_equal ENV["PYBREW_PARENT_TESTPATH"], testpath.to_s
+    (testpath/"dep-only").write "dep"
+    File.write("relative-dep", "dep")
+    assert_path_exists testpath/"dep-only"
+    assert_path_exists testpath/"relative-dep"
+    File.write(File.join(ENV["PYBREW_PARENT_TESTPATH"], "dep-testpath.txt"), testpath.to_s)
+  end''',
+    )
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  parent_testpath = testpath.to_s
+  parent_prefix = ENV["PYBREW_PREFIX"]
+  parent_tmpdir = ENV["TMPDIR"]
+  (testpath/"parent-marker").write "parent"
+  ENV["PYBREW_PARENT_TESTPATH"] = parent_testpath
+  Formula["dep-lib"].test
+  assert_path_exists testpath/"parent-marker"
+  refute_path_exists testpath/"dep-only"
+  refute_path_exists testpath/"relative-dep"
+  assert_equal parent_testpath, Dir.pwd
+  assert_equal parent_prefix, ENV["PYBREW_PREFIX"]
+  assert_equal parent_testpath, ENV["PYBREW_TESTPATH"]
+  assert_equal parent_tmpdir, ENV["TMPDIR"]
+  assert_equal "hello-test", name
+  dep_testpath = Pathname.new((testpath/"dep-testpath.txt").read)
+  refute_equal parent_testpath, dep_testpath.to_s
+  assert_equal Pathname.new(parent_testpath).parent.to_s, dep_testpath.parent.to_s
+  refute_path_exists dep_testpath
+end
+""",
+        taps=[tap],
+    )
+    formula.dependencies = [Dependency(name="dep-lib")]
+    _install_keg(config, "dep-lib", output="dep-ok")
     result = run_formula_test(formula, config, ruby=_REAL_RUBY)
     assert result.success is True
