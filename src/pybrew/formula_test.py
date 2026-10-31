@@ -167,6 +167,126 @@ class FormulaTestContext
     end
   end
 
+  # Lightweight, String-compatible formula version (Homebrew's ``Version``).
+  class Version < String
+    include Comparable
+
+    def initialize(value)
+      super(value.to_s)
+    end
+
+    # Numeric/alphabetic tokens, e.g. "1.2.3-beta" => [1, 2, 3, "beta"].
+    def segments
+      @segments ||= to_s.scan(/\d+|[A-Za-z]+/).map do |part|
+        part =~ /\A\d+\z/ ? part.to_i : part
+      end
+    end
+
+    def major
+      segment_at(0)
+    end
+
+    def minor
+      segment_at(1)
+    end
+
+    def patch
+      segment_at(2)
+    end
+
+    def major_minor
+      self.class.new(segments.first(2).join("."))
+    end
+
+    def major_minor_patch
+      self.class.new(segments.first(3).join("."))
+    end
+
+    def <=>(other)
+      other = self.class.new(other.to_s) unless other.is_a?(Version)
+      left = segments
+      right = other.segments
+      length = [left.length, right.length].max
+      length.times do |index|
+        comparison = compare_segment(left[index] || 0, right[index] || 0)
+        return comparison unless comparison.zero?
+      end
+      0
+    end
+
+    private
+
+    def segment_at(index)
+      segments[index] || 0
+    end
+
+    def compare_segment(left, right)
+      if left.is_a?(Integer) && right.is_a?(Integer)
+        left <=> right
+      elsif left.is_a?(Integer)
+        1
+      elsif right.is_a?(Integer)
+        -1
+      else
+        left.to_s <=> right.to_s
+      end
+    end
+  end
+
+  # Formula version plus Homebrew's revision suffix (for example ``1.0_1``).
+  class PkgVersion < Version
+    attr_reader :version, :revision
+
+    def self.parse(text)
+      match = text.to_s.match(/\A(.+?)(?:_(\d+))?\z/)
+      return new(Version.new(""), 0) if match.nil?
+
+      new(Version.new(match[1].to_s), match[2].to_i)
+    end
+
+    def initialize(version, revision = 0)
+      @version = version.is_a?(Version) ? version : Version.new(version.to_s)
+      @revision = revision.to_i
+      super(@revision.positive? ? "#{@version}_#{@revision}" : @version.to_s)
+    end
+
+    def segments
+      @version.segments
+    end
+
+    def major
+      @version.major
+    end
+
+    def minor
+      @version.minor
+    end
+
+    def patch
+      @version.patch
+    end
+
+    def major_minor
+      @version.major_minor
+    end
+
+    def major_minor_patch
+      @version.major_minor_patch
+    end
+
+    def <=>(other)
+      other = self.class.parse(other.to_s) unless other.is_a?(PkgVersion)
+      comparison = @version <=> other.version
+      return nil if comparison.nil?
+
+      comparison.nonzero? || (@revision <=> other.revision)
+    end
+
+    def to_s
+      @revision.positive? ? "#{@version}_#{@revision}" : @version.to_s
+    end
+  end
+
   # Stand-in for Homebrew's ``Formula`` class.  The test runner knows the
   # formula under test plus its declared dependencies (path metadata and, when
   # available from the configured local taps, test sources are passed in from
@@ -221,16 +341,36 @@ class FormulaTestContext
     end
 
     def version
-      raw = @info["version"]
-      raw.nil? || raw.to_s.empty? ? nil : raw.to_s
-    end
+      return @version if defined?(@version)
 
-    def pkg_version
-      version
+      @version = begin
+        raw = @info["version"]
+        if raw.nil? || raw.to_s.empty?
+          pkg = @info["pkg_version"].to_s
+          pkg.empty? ? nil : PkgVersion.parse(pkg).version
+        else
+          Version.new(raw.to_s)
+        end
+      end
     end
 
     def revision
-      0
+      raw = @info["revision"]
+      raw.nil? ? 0 : raw.to_i
+    end
+
+    def pkg_version
+      return @pkg_version if defined?(@pkg_version)
+
+      @pkg_version = begin
+        raw = @info["pkg_version"]
+        if raw.nil? || raw.to_s.empty?
+          base = version
+          base.nil? ? nil : PkgVersion.new(base, revision)
+        else
+          PkgVersion.parse(raw.to_s)
+        end
+      end
     end
 
     def full_name
@@ -445,7 +585,7 @@ class FormulaTestContext
   end
 
   def version
-    @config["version"].to_s
+    @version ||= Version.new(@config["version"].to_s)
   end
 
   def formula
@@ -1449,6 +1589,15 @@ def _test_paths(name: str, config: Config, keg: Path) -> dict[str, str]:
     return {name: str(path) for name, path in mapping.items()}
 
 
+def _split_pkg_version(pkg_version: str) -> tuple[str, int]:
+    """Split ``1.0_2`` into ``("1.0", 2)`` (best-effort)."""
+
+    match = re.match(r"\A(.+?)_(\d+)\Z", pkg_version)
+    if match is None:
+        return pkg_version, 0
+    return match.group(1), int(match.group(2))
+
+
 def _declared_dependency_names(formula: Formula) -> list[str]:
     """Return the dependency names declared by ``formula`` (deduplicated)."""
 
@@ -1587,21 +1736,30 @@ def _formula_entry(
 
     keg = Cellar(config).keg(name)
     if loaded is not None:
-        version = keg.name if keg is not None else loaded.pkg_version
+        base_version = loaded.version
+        revision = int(loaded.revision or 0)
+        pkg_version = loaded.pkg_version
         dependencies = _declared_dependency_names(loaded)
         test_source = loaded.test_source or ""
         test_defined = bool(test_source.strip())
         full_name = loaded.full_name
     else:
-        version = keg.name if keg is not None else None
+        base_version = None
+        revision = 0
+        pkg_version = None
         dependencies = []
         test_source = ""
         test_defined = False
         full_name = name
+    if keg is not None:
+        pkg_version = keg.name
+        base_version, revision = _split_pkg_version(keg.name)
     entry: dict[str, object] = {
         "name": name,
         "full_name": full_name,
-        "version": version,
+        "version": base_version,
+        "revision": revision,
+        "pkg_version": pkg_version,
         "prefix": str(keg) if keg is not None else None,
         "opt_prefix": str(config.opt_path(name)),
         "installed": keg is not None,
@@ -1635,7 +1793,9 @@ def _formula_entries(
     self_entry: dict[str, object] = {
         "name": formula.name,
         "full_name": formula.full_name,
-        "version": formula.pkg_version,
+        "version": formula.version,
+        "revision": int(formula.revision or 0),
+        "pkg_version": formula.pkg_version,
         "prefix": str(keg),
         "opt_prefix": str(opt),
         "installed": True,
@@ -1822,7 +1982,7 @@ def run_formula_test(
     config_path = root / "config.json"
     payload = {
         "name": formula.name,
-        "version": formula.pkg_version,
+        "version": formula.version or "HEAD",
         "testpath": str(testpath),
         "prefix": str(keg),
         "homebrew_prefix": str(config.prefix),

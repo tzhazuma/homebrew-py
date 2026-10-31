@@ -1535,3 +1535,133 @@ end
     )
     result = run_formula_test(formula, config, ruby=_REAL_RUBY)
     assert result.success is True
+
+
+# ---------------------------------------------------------------------------
+# Version / revision objects (String-compatible, best-effort)
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_formula_version_object_semantics(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  ref = Formula["hello-test"]
+  version = ref.version
+  assert version.is_a?(String)
+  assert_kind_of Version, version
+  assert_equal "1.2.3", version
+  assert_equal "1.2.3", version.to_s
+  assert_equal "1.2.3", version.to_str
+  assert_equal "v1.2.3", "v" + version
+  assert_equal "1.2.3", "#{version}"
+  assert_equal 1, version.major
+  assert_equal 2, version.minor
+  assert_equal 3, version.patch
+  assert_equal [1, 2, 3], version.segments
+  assert_equal "1.2", version.major_minor.to_s
+  assert_equal "1.2.3", version.major_minor_patch.to_s
+  assert version > "1.2"
+  assert version < "1.10"
+  assert version > 1
+  assert_equal 0, version <=> "1.2.3"
+  assert_equal 0, version <=> "1.2.3.0"
+  assert_equal 0, version <=> Version.new("1.2.3")
+end
+""",
+        version="1.2.3",
+    )
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_formula_pkg_version_and_revision(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  ref = Formula["hello-test"]
+  assert_equal 2, ref.revision
+  assert_equal "1.2.3", ref.version.to_s
+  pkg = ref.pkg_version
+  assert pkg.is_a?(String)
+  assert_kind_of Version, pkg
+  assert_equal "1.2.3_2", pkg
+  assert_equal "1.2.3_2", pkg.to_s
+  assert_equal "1.2.3_2", pkg.to_str
+  assert_equal 2, pkg.revision
+  assert_equal "1.2.3", pkg.version.to_s
+  assert_equal 1, pkg.major
+  assert_equal 2, pkg.minor
+  assert_equal 3, pkg.patch
+  assert_equal [1, 2, 3], pkg.segments
+  assert pkg > "1.2.3_1"
+  assert_equal pkg, PkgVersion.parse("1.2.3_2")
+end
+""",
+        version="1.2.3",
+    )
+    formula.revision = 2
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_dependency_version_and_revision_from_installed_keg(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(tap, "dep-lib", None, version="1.0")
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  dep = Formula["dep-lib"]
+  assert_equal "1.0", dep.version.to_s
+  assert_equal 1, dep.revision
+  pkg = dep.pkg_version
+  assert_equal "1.0_1", pkg.to_s
+  assert_equal 1, pkg.revision
+  assert_equal "1.0", pkg.version.to_s
+end
+""",
+        taps=[tap],
+    )
+    formula.dependencies = [Dependency(name="dep-lib")]
+    _install_keg(config, "dep-lib", version="1.0_1")
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_formula_version_falls_back_to_pkg_version(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  ref = Formula["hello-test"]
+  assert_equal "HEAD", ref.version.to_s
+  assert_equal "HEAD", ref.pkg_version.to_s
+  assert_equal 0, ref.revision
+end
+""",
+    )
+    formula.version = None
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_context_version_is_string_compatible(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  assert version.is_a?(String)
+  assert_equal "1.2.3", version
+  assert_equal "1.2.3", version.to_s
+  assert_equal 1, version.major
+  assert_equal 2, version.minor
+  assert_equal 3, version.patch
+end
+""",
+        version="1.2.3",
+    )
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
