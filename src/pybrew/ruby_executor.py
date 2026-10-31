@@ -2745,6 +2745,10 @@ class PybrewServiceRef
     @info["run_type"] || "immediate"
   end
 
+  def warnings
+    Array(@info["warnings"])
+  end
+
   def environment_variables
     @info["environment_variables"] || {}
   end
@@ -5921,7 +5925,8 @@ class PybrewLoadedFormula
                   :loaded_bottle, :loaded_service, :loaded_livecheck,
                   :loaded_resources, :loaded_patches, :loaded_options,
                   :loaded_head, :loaded_stable, :loaded_fetch_block,
-                  :loaded_fails_with, :loaded_namespace, :loaded_class_name
+                  :loaded_fails_with, :loaded_namespace, :loaded_class_name,
+                  :loaded_dependencies
 
     def name
       @loaded_name || super
@@ -6295,12 +6300,60 @@ end
 module Formulary
   module_function
 
-  def factory(name, *_args, **_kwargs)
-    Formula[name]
+  # Accessors understood by the bounded API-struct mapping.
+  FORMULA_STRUCT_ATTRIBUTES = %i[desc homepage url sha256 version license dependencies].freeze
+
+  # Homebrew's factory returns a Formula.  When the metadata reference points at
+  # a local formula file (tap source), evaluate it with
+  # ``load_formula_from_path`` and return the loaded class; otherwise fall back
+  # to the metadata reference.  Broken/unsupported source also falls back.
+  def factory(ref, *args, **options)
+    cache_key = factory_cache_key(ref, args, options)
+    if factory_cached? && (@factory_cache ||= {}).key?(cache_key)
+      return @factory_cache[cache_key]
+    end
+
+    reference = Formula[ref]
+    formula = factory_load_source(reference, options)
+    formula = reference if formula.nil?
+    (@factory_cache ||= {})[cache_key] = formula if factory_cached?
+    formula
   end
 
-  def resolve(name, *_args, **_kwargs)
-    Formula[name]
+  def resolve(ref, *args, **options)
+    factory(ref, *args, **options)
+  end
+
+  def factory_cache_key(ref, args, options)
+    spec = args.empty? ? :stable : args.first
+    "#{ref}-#{spec}-#{options[:alias_path]}-#{options[:from]}"
+  end
+
+  def factory_load_source(reference, options = {})
+    return nil unless reference.respond_to?(:path)
+
+    path = reference.path
+    return nil if path.nil? || !path.file?
+
+    # A formula class body must not recursively load itself through
+    # Formulary.factory; fall back to the metadata reference while loading.
+    @factory_loading ||= []
+    name = reference.name.to_s
+    return nil if @factory_loading.include?(name)
+
+    @factory_loading << name
+    begin
+      load_formula_from_path(
+        name,
+        path,
+        flags: options[:flags] || [],
+        ignore_errors: options[:ignore_errors] || false
+      )
+    rescue ScriptError, StandardError
+      nil
+    ensure
+      @factory_loading.delete(name)
+    end
   end
 
   # Evaluate formula source inside a real namespace module, like Homebrew's
@@ -6394,8 +6447,69 @@ module Formulary
     klass
   end
 
-  def load_formula_from_struct!(name, *_args, **_kwargs)
-    Formula[name]
+  # Build a Formulary-loaded class from an API-style formula struct.  The
+  # mapping is deliberately bounded to the accessors the shim understands and
+  # never populates an API cache (API loading remains unavailable).
+  def load_formula_from_struct!(name, formula_struct = nil, *_args, **_options)
+    return Formula[name] if formula_struct.nil?
+
+    unless formula_struct_like?(formula_struct)
+      raise PybrewFormulaUnavailableError,
+            "Formulary.load_formula_from_struct! expects an API formula struct " \
+            "responding to #{FORMULA_STRUCT_ATTRIBUTES.join('/')} for " \
+            "#{name.inspect}; got #{formula_struct.class}"
+    end
+
+    klass = Class.new(PybrewLoadedFormula)
+    klass.loaded_name = name.to_s
+    %i[desc homepage url sha256 version license].each do |attribute|
+      next unless formula_struct.respond_to?(attribute)
+
+      value = formula_struct.public_send(attribute)
+      klass.public_send("loaded_#{attribute}=", formula_struct_text(value))
+    end
+    if formula_struct.respond_to?(:dependencies)
+      klass.loaded_dependencies = formula_struct_dependencies(formula_struct.dependencies)
+    end
+    klass
+  end
+
+  def formula_struct_like?(object)
+    return false if object.nil?
+
+    FORMULA_STRUCT_ATTRIBUTES.any? { |attribute| object.respond_to?(attribute) }
+  end
+
+  def formula_struct_text(value)
+    return nil if value.nil?
+
+    if value.is_a?(Hash)
+      fallback = value["default"] || value[:default] || value.values.first
+      return fallback.nil? ? nil : fallback.to_s
+    end
+    value.to_s
+  end
+
+  def formula_struct_dependencies(raw)
+    dependencies = []
+    append = lambda do |dep_name, tags|
+      dependencies << [dep_name.to_s, Array(tags).flatten.map(&:to_s)]
+    end
+    if raw.is_a?(Hash)
+      raw.each { |dep_name, tags| append.call(dep_name, tags) }
+    else
+      Array(raw).each do |dependency|
+        if dependency.is_a?(Hash)
+          dependency.each { |dep_name, tags| append.call(dep_name, tags) }
+        elsif dependency.respond_to?(:name)
+          tags = dependency.respond_to?(:tags) ? dependency.tags : []
+          append.call(dependency.name, tags)
+        else
+          append.call(dependency, [])
+        end
+      end
+    end
+    dependencies
   end
 
   def class_s(name)
@@ -6460,14 +6574,17 @@ module Formulary
     end
     @namespace_constants = []
     @path_cache = {}
+    @factory_cache = {}
     nil
   end
 
   def factory_cached?
-    false
+    !!@factory_cache_enabled
   end
 
   def enable_factory_cache!
+    @factory_cache_enabled = true
+    @factory_cache ||= {}
     nil
   end
 end
@@ -7333,6 +7450,7 @@ def _service_metadata(formula: Formula, config: Config) -> Optional[dict[str, An
         "input_path": spec.input_path,
         "cron": dict(spec.cron),
         "sockets": dict(spec.sockets),
+        "warnings": list(spec.warnings),
     }
 
 

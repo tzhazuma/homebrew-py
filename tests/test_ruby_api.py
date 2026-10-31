@@ -4259,3 +4259,227 @@ def test_env_superenv_setup_and_compiler_helpers(
     assert lines[24] == "true"
     assert lines[25] == "clang"
     assert lines[26] in ("arm64", "x86_64", "i386", "arm", "dunno")
+
+
+# ---------------------------------------------------------------------------
+# Formulary factory source loading / factory cache and API-struct mapping
+# ---------------------------------------------------------------------------
+
+
+def test_formulary_factory_loads_local_source_and_caches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    source = tmp_path / "factory-source.rb"
+    source.write_text(
+        'class FactorySource < Formula\n'
+        '  desc "factory source desc"\n'
+        '  homepage "https://example.com/factory"\n'
+        '  url "https://example.com/factory-2.0.tar.gz"\n'
+        '  sha256 "factory-sha"\n'
+        '  version "2.0"\n'
+        '  depends_on "dep" => :build\n'
+        'end\n'
+    )
+    formula = _formula(
+        "ruby-factory-source",
+        "1.0",
+        (
+            '  path = Formula["ruby-factory-source"].path\n'
+            '  before_cache = Formulary.factory_cached?.to_s\n'
+            '  factory = Formulary.factory("ruby-factory-source")\n'
+            '  defined_after_load = Formulary.formula_class_defined_from_path?(path).to_s\n'
+            '  resolved = Formulary.resolve("ruby-factory-source")\n'
+            '  Formulary.enable_factory_cache!\n'
+            '  cached = Formulary.factory("ruby-factory-source")\n'
+            '  cached_again = Formulary.factory("ruby-factory-source")\n'
+            '  missing_first = Formulary.factory("missing-factory-formula")\n'
+            '  missing_again = Formulary.factory("missing-factory-formula")\n'
+            '  missing_api = Formulary.factory("missing-factory-formula", :stable, from: :api)\n'
+            '  missing_api_again = Formulary.factory("missing-factory-formula", :stable, from: :api)\n'
+            '  Formulary.clear_cache\n'
+            '  after_clear = Formulary.factory("missing-factory-formula")\n'
+            '  path.write "raise \\"broken factory source\\"\\n"\n'
+            '  broken = Formulary.factory("ruby-factory-source")\n'
+            '  Formulary.clear_cache\n'
+            '  path.write <<~RUBY\n'
+            '    class FactorySource < Formula\n'
+            '      version "3.0"\n'
+            '      Formulary.factory("ruby-factory-source")\n'
+            '    end\n'
+            '  RUBY\n'
+            '  recursive = Formulary.factory("ruby-factory-source")\n'
+            '  (prefix/"factory.txt").write [\n'
+            '    before_cache,\n'
+            '    factory.is_a?(Class).to_s,\n'
+            '    factory.name,\n'
+            '    factory.loaded_desc,\n'
+            '    factory.loaded_homepage,\n'
+            '    factory.loaded_version,\n'
+            '    factory.new.name,\n'
+            '    factory.new.dependencies.map(&:name).join(","),\n'
+            '    resolved.is_a?(Class).to_s,\n'
+            '    defined_after_load,\n'
+            '    Formulary.factory_cached?.to_s,\n'
+            '    cached_again.equal?(cached).to_s,\n'
+            '    missing_again.equal?(missing_first).to_s,\n'
+            '    missing_api_again.equal?(missing_api).to_s,\n'
+            '    missing_api.equal?(missing_first).to_s,\n'
+            '    after_clear.equal?(missing_first).to_s,\n'
+            '    broken.is_a?(Class).to_s,\n'
+            '    broken.name,\n'
+            '    recursive.is_a?(Class).to_s,\n'
+            '    recursive.loaded_version,\n'
+            '    Formulary.formula_class_defined_from_path?(path).to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.path = source
+    keg = _build(tmp_path, formula)
+    assert (keg / "factory.txt").read_text().splitlines() == [
+        "false",
+        "true",
+        "ruby-factory-source",
+        "factory source desc",
+        "https://example.com/factory",
+        "2.0",
+        "ruby-factory-source",
+        "dep",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "false",
+        "false",
+        "false",
+        "ruby-factory-source",
+        "true",
+        "3.0",
+        "true",
+    ]
+
+
+def test_formulary_load_formula_from_struct_mapping(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-struct-mapping",
+        "1.0",
+        (
+            '  dep_struct = Struct.new(:name, :tags)\n'
+            '  dep = dep_struct.new("dep", ["build"])\n'
+            '  struct = Struct.new(\n'
+            '    :desc, :homepage, :url, :sha256, :version, :license, :dependencies\n'
+            '  ).new(\n'
+            '    "struct desc", "https://example.com/struct",\n'
+            '    "https://example.com/struct-4.2.tar.gz", "struct-sha",\n'
+            '    "4.2", "MIT", [dep, {"dep2" => "test"}]\n'
+            '  )\n'
+            '  klass = Formulary.load_formula_from_struct!("struct-fixture", struct)\n'
+            '  instance = klass.new\n'
+            '  partial = Struct.new(:desc, :version).new("partial desc", "1.0")\n'
+            '  partial_klass = Formulary.load_formula_from_struct!("partial-fixture", partial)\n'
+            '  fallback = Formulary.load_formula_from_struct!("fallback-fixture")\n'
+            '  begin\n'
+            '    Formulary.load_formula_from_struct!("bad-struct", Object.new)\n'
+            '    bad_error = "none"\n'
+            '  rescue => error\n'
+            '    bad_error = error.class.name + ":" + error.message.include?("formula struct").to_s\n'
+            '  end\n'
+            '  hash_klass = Formulary.load_formula_from_struct!(\n'
+            '    "hash-license", Struct.new(:license).new({"default" => "Apache-2.0"})\n'
+            '  )\n'
+            '  (prefix/"struct.txt").write [\n'
+            '    klass.is_a?(Class).to_s,\n'
+            '    klass.name,\n'
+            '    klass.loaded_name,\n'
+            '    klass.loaded_desc,\n'
+            '    klass.loaded_homepage,\n'
+            '    klass.loaded_url,\n'
+            '    klass.loaded_sha256,\n'
+            '    klass.loaded_version,\n'
+            '    klass.loaded_license,\n'
+            '    instance.desc,\n'
+            '    instance.homepage,\n'
+            '    instance.version,\n'
+            '    instance.license,\n'
+            '    instance.dependencies.map(&:name).join(","),\n'
+            '    instance.dependencies.first.build?.to_s,\n'
+            '    instance.dependencies[1].test?.to_s,\n'
+            '    partial_klass.loaded_desc,\n'
+            '    partial_klass.loaded_homepage.inspect,\n'
+            '    partial_klass.new.dependencies.empty?.to_s,\n'
+            '    fallback.name,\n'
+            '    fallback.is_a?(Class).to_s,\n'
+            '    bad_error,\n'
+            '    hash_klass.loaded_license\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "struct.txt").read_text().splitlines() == [
+        "true",
+        "struct-fixture",
+        "struct-fixture",
+        "struct desc",
+        "https://example.com/struct",
+        "https://example.com/struct-4.2.tar.gz",
+        "struct-sha",
+        "4.2",
+        "MIT",
+        "struct desc",
+        "https://example.com/struct",
+        "4.2",
+        "MIT",
+        "dep,dep2",
+        "true",
+        "true",
+        "partial desc",
+        "nil",
+        "true",
+        "fallback-fixture",
+        "false",
+        "PybrewFormulaUnavailableError:true",
+        "Apache-2.0",
+    ]
+
+
+def test_formulary_api_placeholders_remain_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-api-placeholders",
+        "1.0",
+        (
+            '  defined_before = Formulary.formula_class_defined_from_api?("api-fixture").to_s\n'
+            '  struct = Struct.new(:desc, :version).new("api desc", "1.0")\n'
+            '  Formulary.load_formula_from_struct!("api-fixture", struct)\n'
+            '  defined_after = Formulary.formula_class_defined_from_api?("api-fixture").to_s\n'
+            '  begin\n'
+            '    Formulary.formula_class_get_from_api("api-fixture")\n'
+            '    api_error = "none"\n'
+            '  rescue => error\n'
+            '    api_error = error.class.name + "|" + error.message.include?("API").to_s\n'
+            '  end\n'
+            '  begin\n'
+            '    Formulary.formula_class_get_from_api("missing-api")\n'
+            '    missing_api_error = "none"\n'
+            '  rescue => error\n'
+            '    missing_api_error = error.class.name + "|" + error.message.include?("API").to_s\n'
+            '  end\n'
+            '  (prefix/"api.txt").write [\n'
+            '    defined_before, defined_after, api_error, missing_api_error\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "api.txt").read_text().splitlines() == [
+        "false",
+        "false",
+        "PybrewFormulaUnavailableError|true",
+        "PybrewFormulaUnavailableError|true",
+    ]
