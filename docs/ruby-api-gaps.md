@@ -6,7 +6,7 @@ claiming full parity with every file under `Library/Homebrew`.
 
 ## Current baseline
 
-- Full test suite: 687 passed, 4 skipped (after the fourth parallel batch)
+- Full test suite: 701 passed, 4 skipped (after the fifth parallel batch)
 - CI: Ubuntu 3.9 / 3.12 + macOS 3.12
 - Optional Ruby bridge remains opt-in; default parser behavior is unchanged.
 
@@ -14,7 +14,7 @@ claiming full parity with every file under `Library/Homebrew`.
 
 | Item | Status | Notes |
 | --- | --- | --- |
-| Formulary source loader | Partial | `load_formula_from_path` evaluates a metadata-only `PybrewLoadedFormula`; namespace/cache/errors and `formula_class_get_from_path`/`defined_from_path?` exist; API-struct/factory tap-source loading missing |
+| Formulary source loader | Partial | `load_formula_from_path` evaluates a metadata-only `PybrewLoadedFormula`; namespace/cache/errors, `formula_class_get_from_path`/`defined_from_path?`, local-source `factory` cache and bounded struct mapping exist; API-struct loading and full tap/alias resolution missing |
 | Formulary class cache / reload semantics | Missing | No cache keyed by path/mtime |
 | FormulaInstaller fetch/build/deps/link/cleanup | Partial | Loaded-source flow runs fetch/build/deps/link/clean/finish; bottle pouring, Tab/service/SBOM, linkage checks and dependency installation missing |
 | Compiler selection / Superenv build env | Partial | `CompilerSelector`/`CompilerFailure` surface and env-only `Superenv.setup_build_environment`; no real compiler probing/sandbox |
@@ -29,7 +29,7 @@ claiming full parity with every file under `Library/Homebrew`.
 | Cask script shim | Partial | No sudo; `arch` is host arch unless cask arch env is set; MacOS naming static |
 | Test DSL arbitrary formula lookup | Partial | Bounded tap index (50 metadata entries/run); dynamic/uninstalled/unreferenced and alias-only lookups fail clearly |
 | Test DSL dependency test isolation | Partial | Dependency tests reuse parent testpath/env |
-| Test DSL version object / revision | Partial | `Formula#version` is a String; revision is always 0 |
+| Test DSL version object / revision | Partial | String-compatible `Version`/`PkgVersion` with revision-aware `pkg_version`; not Homebrew's full token parser |
 | Test DSL MacOS/OS/Hardware helpers | Partial | sdk_path/sdk_version/release names, OS.version, CPU flags/features exist; versioned SDK selection and Xcode/CLT modules missing |
 | Minitest surface | Partial | skip semantics, pattern assertions, assertion counter are approximate |
 
@@ -41,7 +41,7 @@ claiming full parity with every file under `Library/Homebrew`.
 | MacOS SDK/Xcode/CLT detection | Partial | best-effort/local-only |
 | Utils modules | Partial | `Utils::Path`/Git/Curl/Gzip/Tar/Zip/Cp/Popen; no Bottles/Svn/analytics |
 | SystemConfig host details | Partial | sections exist; host-specific output is minimal |
-| Service Ruby helpers | Partial | mirrors pybrew paths; unknown directives ignored |
+| Service Ruby helpers | Partial | mirrors pybrew paths; unknown directives recorded as warnings |
 | Patch/resource edge cases | Partial | exotic patch forms and dynamic resource iteration limited |
 
 ## P3 — Engineering

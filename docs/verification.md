@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-687 passed, 4 skipped in 213.07s
+701 passed, 4 skipped in 181.57s
 ```
 
 Breakdown of the feature slices:
@@ -723,6 +723,17 @@ local remote, commits a change, and confirms the CLI updates it.
 - Added `socket_path`/`socket_text`/`write_socket` and wired socket services to
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
+
+## Fifth parallel batch
+
+- Formulary: `factory` local-source loading with real cache,
+  `load_formula_from_struct!` bounded mapping, API placeholders tested.
+- Cask: `url_options`, `container_nested`/`container_options`, expanded
+  `rename` forms, hash-rocket parsing fix.
+- Test DSL: String-compatible `Version`/`PkgVersion` objects, revision and
+  pkg_version metadata.
+- Service: unknown directives now recorded in `ServiceSpec#warnings` and
+  exposed through the service ref/payload.
 
 ## Fourth parallel batch
 
