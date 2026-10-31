@@ -6569,9 +6569,9 @@ module Formulary
     klass
   end
 
-  # Build a Formulary-loaded class from an API-style formula struct.  The
-  # mapping is deliberately bounded to the accessors the shim understands and
-  # never populates an API cache (API loading remains unavailable).
+  # Build a Formulary-loaded class from an API-style formula struct and store
+  # it in the API cache for later formula_class_get_from_api lookups.  The
+  # mapping stays bounded to the accessors the shim understands.
   def load_formula_from_struct!(name, formula_struct = nil, *_args, **_options)
     return Formula[name] if formula_struct.nil?
 
@@ -6593,6 +6593,38 @@ module Formulary
     if formula_struct.respond_to?(:dependencies)
       klass.loaded_dependencies = formula_struct_dependencies(formula_struct.dependencies)
     end
+
+    cache_api_formula_class!(name, formula_struct, klass)
+    klass
+  end
+
+  # Cache keys for an API formula: the requested name, the struct's own
+  # name/full_name (when present) and the struct object itself.  Struct value
+  # equality means repeated loads of the same struct hit the same object key.
+  def api_cache_keys(name, formula_struct)
+    keys = [name.to_s]
+    if formula_struct.respond_to?(:name) && !formula_struct.name.to_s.empty?
+      keys << formula_struct.name.to_s
+    end
+    if formula_struct.respond_to?(:full_name) && !formula_struct.full_name.to_s.empty?
+      keys << formula_struct.full_name.to_s
+    end
+    keys << formula_struct
+    keys.compact
+  end
+
+  def api_cache_key(value)
+    return nil if value.nil?
+    return value.to_s if value.is_a?(String) || value.is_a?(Symbol) || value.is_a?(Pathname)
+
+    value
+  end
+
+  def cache_api_formula_class!(name, formula_struct, klass)
+    @api_cache ||= {}
+    previous = @api_cache[name.to_s]
+    @api_cache.delete_if { |_key, value| value.equal?(previous) } unless previous.nil?
+    api_cache_keys(name, formula_struct).each { |key| @api_cache[key] = klass }
     klass
   end
 
@@ -6657,8 +6689,11 @@ module Formulary
     (@path_cache ||= {}).key?(path.to_s)
   end
 
-  def formula_class_defined_from_api?(_name)
-    false
+  def formula_class_defined_from_api?(name)
+    key = api_cache_key(name)
+    return false if key.nil?
+
+    (@api_cache ||= {}).key?(key)
   end
 
   def formula_class_get_from_path(path)
@@ -6670,9 +6705,14 @@ module Formulary
           "call Formulary.load_formula_from_path first"
   end
 
-  def formula_class_get_from_api(_name)
+  def formula_class_get_from_api(name)
+    key = api_cache_key(name)
+    cached = key.nil? ? nil : (@api_cache ||= {})[key]
+    return cached unless cached.nil?
+
     raise PybrewFormulaUnavailableError,
-          "API formula loading is not available in the pybrew Ruby shim"
+          "API formula class is not available for #{name.inspect} in the pybrew " \
+          "Ruby shim; load it with Formulary.load_formula_from_struct! first"
   end
 
   def namespace_key(identifier)
@@ -6697,6 +6737,7 @@ module Formulary
     @namespace_constants = []
     @path_cache = {}
     @factory_cache = {}
+    @api_cache = {}
     nil
   end
 

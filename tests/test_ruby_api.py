@@ -4449,41 +4449,133 @@ def test_formulary_load_formula_from_struct_mapping(
     ]
 
 
-def test_formulary_api_placeholders_remain_unavailable(
+def test_formulary_api_struct_cache_lookup_and_clear(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv(ALLOW_ENV, "1")
     formula = _formula(
-        "ruby-api-placeholders",
+        "ruby-api-cache",
         "1.0",
         (
-            '  defined_before = Formulary.formula_class_defined_from_api?("api-fixture").to_s\n'
-            '  struct = Struct.new(:desc, :version).new("api desc", "1.0")\n'
-            '  Formulary.load_formula_from_struct!("api-fixture", struct)\n'
-            '  defined_after = Formulary.formula_class_defined_from_api?("api-fixture").to_s\n'
+            '  struct_class = Struct.new(\n'
+            '    :name, :full_name, :desc, :homepage, :url, :sha256, :version, :license, :dependencies\n'
+            '  )\n'
+            '  struct = struct_class.new(\n'
+            '    "api-cache-fixture", "homebrew/core/api-cache-fixture",\n'
+            '    "api cache desc", "https://example.com/api",\n'
+            '    "https://example.com/api-1.0.tar.gz", "api-sha", "1.0", "MIT", []\n'
+            '  )\n'
+            '  before = Formulary.formula_class_defined_from_api?("api-cache-fixture").to_s\n'
+            '  klass = Formulary.load_formula_from_struct!("api-cache-fixture", struct)\n'
+            '  defined_name = Formulary.formula_class_defined_from_api?("api-cache-fixture").to_s\n'
+            '  defined_full = Formulary.formula_class_defined_from_api?("homebrew/core/api-cache-fixture").to_s\n'
+            '  defined_struct = Formulary.formula_class_defined_from_api?(struct).to_s\n'
+            '  got = Formulary.formula_class_get_from_api("api-cache-fixture")\n'
+            '  got_full = Formulary.formula_class_get_from_api("homebrew/core/api-cache-fixture")\n'
+            '  got_struct = Formulary.formula_class_get_from_api(struct)\n'
+            '  fallback = Formulary.load_formula_from_struct!("api-fallback-fixture")\n'
+            '  partial = Struct.new(:desc).new("partial desc")\n'
+            '  partial_klass = Formulary.load_formula_from_struct!("api-partial-fixture", partial)\n'
+            '  fallback_defined = Formulary.formula_class_defined_from_api?("api-fallback-fixture").to_s\n'
+            '  partial_defined = Formulary.formula_class_defined_from_api?("api-partial-fixture").to_s\n'
             '  begin\n'
-            '    Formulary.formula_class_get_from_api("api-fixture")\n'
-            '    api_error = "none"\n'
+            '    Formulary.formula_class_get_from_api("api-unknown")\n'
+            '    unknown_error = "none"\n'
             '  rescue => error\n'
-            '    api_error = error.class.name + "|" + error.message.include?("API").to_s\n'
+            '    unknown_error = error.class.name + "|" + error.message.include?("API").to_s\n'
             '  end\n'
+            '  Formulary.clear_cache\n'
+            '  after_clear_name = Formulary.formula_class_defined_from_api?("api-cache-fixture").to_s\n'
+            '  after_clear_full = Formulary.formula_class_defined_from_api?("homebrew/core/api-cache-fixture").to_s\n'
+            '  after_clear_struct = Formulary.formula_class_defined_from_api?(struct).to_s\n'
             '  begin\n'
-            '    Formulary.formula_class_get_from_api("missing-api")\n'
-            '    missing_api_error = "none"\n'
+            '    Formulary.formula_class_get_from_api("api-cache-fixture")\n'
+            '    cleared_error = "none"\n'
             '  rescue => error\n'
-            '    missing_api_error = error.class.name + "|" + error.message.include?("API").to_s\n'
+            '    cleared_error = error.class.name + "|" + error.message.include?("API").to_s\n'
             '  end\n'
-            '  (prefix/"api.txt").write [\n'
-            '    defined_before, defined_after, api_error, missing_api_error\n'
+            '  (prefix/"api-cache.txt").write [\n'
+            '    before,\n'
+            '    defined_name, defined_full, defined_struct,\n'
+            '    got.equal?(klass).to_s, got_full.equal?(klass).to_s, got_struct.equal?(klass).to_s,\n'
+            '    klass.loaded_name, klass.loaded_desc, klass.loaded_version, klass.loaded_license,\n'
+            '    got.new.desc,\n'
+            '    fallback.is_a?(Class).to_s,\n'
+            '    fallback_defined,\n'
+            '    partial_klass.is_a?(Class).to_s,\n'
+            '    partial_defined,\n'
+            '    unknown_error,\n'
+            '    after_clear_name, after_clear_full, after_clear_struct, cleared_error\n'
             '  ].join("\\n")\n'
         ),
     )
     keg = _build(tmp_path, formula)
-    assert (keg / "api.txt").read_text().splitlines() == [
+    assert (keg / "api-cache.txt").read_text().splitlines() == [
+        "false",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "api-cache-fixture",
+        "api cache desc",
+        "1.0",
+        "MIT",
+        "api cache desc",
+        "false",
+        "false",
+        "true",
+        "true",
+        "PybrewFormulaUnavailableError|true",
+        "false",
         "false",
         "false",
         "PybrewFormulaUnavailableError|true",
-        "PybrewFormulaUnavailableError|true",
+    ]
+
+
+def test_formulary_api_struct_cache_reload_replaces_entries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-api-reload",
+        "1.0",
+        (
+            '  struct_class = Struct.new(:name, :full_name, :desc, :version)\n'
+            '  first = struct_class.new(\n'
+            '    "api-reload-fixture", "homebrew/core/api-reload-fixture", "first", "1.0"\n'
+            '  )\n'
+            '  second = struct_class.new(\n'
+            '    "api-reload-fixture", "homebrew/core/api-reload-fixture", "second", "2.0"\n'
+            '  )\n'
+            '  first_klass = Formulary.load_formula_from_struct!("api-reload-fixture", first)\n'
+            '  second_klass = Formulary.load_formula_from_struct!("api-reload-fixture", second)\n'
+            '  got = Formulary.formula_class_get_from_api("api-reload-fixture")\n'
+            '  got_full = Formulary.formula_class_get_from_api("homebrew/core/api-reload-fixture")\n'
+            '  (prefix/"api-reload.txt").write [\n'
+            '    got.equal?(second_klass).to_s,\n'
+            '    got.equal?(first_klass).to_s,\n'
+            '    got_full.equal?(second_klass).to_s,\n'
+            '    got.loaded_desc,\n'
+            '    got.loaded_version,\n'
+            '    Formulary.formula_class_defined_from_api?(first).to_s,\n'
+            '    Formulary.formula_class_defined_from_api?(second).to_s,\n'
+            '    Formulary.formula_class_defined_from_api?("api-reload-fixture").to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "api-reload.txt").read_text().splitlines() == [
+        "true",
+        "false",
+        "true",
+        "second",
+        "2.0",
+        "false",
+        "true",
+        "true",
     ]
 
 
