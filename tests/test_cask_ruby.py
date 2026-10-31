@@ -1509,3 +1509,77 @@ def test_cask_macos_version_sym_outdated_and_language(
         "sym=sonoma unknown=dunno outdated=true current=false "
         "lang=zh-Hans-CN langs=zh-Hans-CN"
     )
+
+
+# ---------------------------------------------------------------------------
+# url kwargs, container metadata and rename forms
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_cask_url_options_and_container_metadata(allow_ruby: None) -> None:
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  url "https://example.com/Tool-#{version}.dmg", '
+            'using: :homebrew_curl, user_agent: :default, '
+            'header: ["Accept: text/html"], referer: "https://example.com", '
+            'cookies: { "session" => "abc" }, verified: "example.com"\n'
+            '  container nested: "Tool-#{version}.dmg", type: :dmg\n'
+            '  app "Tool.app"\n'
+        )
+    )
+
+    # The URL string itself is unchanged by option capture (it is already
+    # interpolated by the Ruby evaluator, matching Homebrew).
+    assert cask.url == "https://example.com/Tool-1.0.dmg"
+    assert cask.resolved_url() == "https://example.com/Tool-1.0.dmg"
+    assert cask.url_options == {
+        "using": ":homebrew_curl",
+        "user_agent": ":default",
+        "header": ["Accept: text/html"],
+        "referer": "https://example.com",
+        "cookies": {"session": "abc"},
+        "verified": "example.com",
+    }
+    assert cask.container == "dmg"
+    assert cask.container_nested == "Tool-1.0.dmg"
+    assert cask.container_options == {
+        "nested": "Tool-1.0.dmg",
+        "type": ":dmg",
+    }
+
+
+@requires_ruby
+def test_cask_rename_multiple_and_keyword_forms(allow_ruby: None) -> None:
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  rename "Old1.app", "New1.app"\n'
+            '  rename "Old2.app", "New2.app"\n'
+            '  rename from: "Old3.app", to: "New3.app"\n'
+            '  rename [["Old4.app", "New4.app"], ["Old5.app", "New5.app"]]\n'
+            '  rename "Old6.app", "New6.app", "Old7.app", "New7.app"\n'
+        )
+    )
+    assert cask.renames == [
+        ("Old1.app", "New1.app"),
+        ("Old2.app", "New2.app"),
+        ("Old3.app", "New3.app"),
+        ("Old4.app", "New4.app"),
+        ("Old5.app", "New5.app"),
+        ("Old6.app", "New6.app"),
+        ("Old7.app", "New7.app"),
+    ]
+
+
+@requires_ruby
+def test_cask_malformed_rename_is_reported(allow_ruby: None) -> None:
+    cask = evaluate_cask_source(
+        _source('  version "1.0"\n  rename "OnlyOne"\n')
+    )
+    assert cask.renames == []
+    unsupported = cask.extra["ruby_unsupported"]
+    assert [entry["stanza"] for entry in unsupported] == ["rename"]
+    warnings = cask.extra["ruby_warnings"]
+    assert any("rename" in warning for warning in warnings)

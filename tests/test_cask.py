@@ -1339,3 +1339,88 @@ end
         run_scripts=True,
     )
     installer.install(CaskLoader(discover_taps([tap])).load("noarch"))
+
+
+# ---------------------------------------------------------------------------
+# url kwargs, container metadata and multiple renames (default parser)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_url_options_container_and_rename_metadata() -> None:
+    cask = parse_cask_source(
+        'cask "meta" do\n'
+        '  version "1.0"\n'
+        '  url "https://example.com/Tool-#{version}.dmg", '
+        'using: :homebrew_curl, user_agent: :default, '
+        'header: ["Accept: text/html"], referer: "https://example.com", '
+        'cookies: { "session" => "abc" }, verified: "example.com"\n'
+        '  container nested: "Tool-#{version}.dmg", type: :dmg\n'
+        '  rename "Old1.app", "New1.app"\n'
+        '  rename from: "Old3.app", to: "New3.app"\n'
+        '  rename [["Old4.app", "New4.app"], ["Old5.app", "New5.app"]]\n'
+        '  app "Tool.app"\n'
+        'end\n'
+    )
+
+    assert cask.url == "https://example.com/Tool-#{version}.dmg"
+    assert cask.resolved_url() == "https://example.com/Tool-1.0.dmg"
+    assert cask.url_options == {
+        "using": ":homebrew_curl",
+        "user_agent": ":default",
+        "header": ["Accept: text/html"],
+        "referer": "https://example.com",
+        "cookies": {"session": "abc"},
+        "verified": "example.com",
+    }
+    assert cask.container == "dmg"
+    assert cask.container_nested == "Tool-#{version}.dmg"
+    assert cask.container_options == {
+        "nested": "Tool-#{version}.dmg",
+        "type": ":dmg",
+    }
+    assert cask.renames == [
+        ("Old1.app", "New1.app"),
+        ("Old3.app", "New3.app"),
+        ("Old4.app", "New4.app"),
+        ("Old5.app", "New5.app"),
+    ]
+
+
+def test_install_multiple_renames_then_artifacts(tmp_path: Path) -> None:
+    archive = tmp_path / "Multirenamy.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("Old1.app/Contents/Info.plist", "<plist>1</plist>")
+        bundle.writestr("Old2.app/Contents/Info.plist", "<plist>2</plist>")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "m" / "multirenamy.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        f'''cask "multirenamy" do
+  version "1.0"
+  sha256 "{digest}"
+  url "{archive.as_uri()}"
+  rename "Old1.app", "New1.app"
+  rename "Old2.app", "New2.app"
+  app "New1.app"
+  app "New2.app"
+end
+'''
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    installer.install(CaskLoader(discover_taps([tap])).load("multirenamy"))
+
+    applications = tmp_path / "Applications"
+    assert (applications / "New1.app" / "Contents" / "Info.plist").is_file()
+    assert (applications / "New2.app" / "Contents" / "Info.plist").is_file()
+    assert not (applications / "Old1.app").exists()
+    assert not (applications / "Old2.app").exists()

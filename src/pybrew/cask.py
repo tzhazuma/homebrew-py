@@ -34,6 +34,8 @@ class Cask:
     sha256: Optional[str] = None
     sha256_map: dict[str, str] = field(default_factory=dict)
     url: Optional[str] = None
+    #: ``url`` stanza keyword metadata (using/user_agent/header/referer/...).
+    url_options: dict[str, Any] = field(default_factory=dict)
     name: Optional[str] = None
     desc: Optional[str] = None
     homepage: Optional[str] = None
@@ -48,6 +50,9 @@ class Cask:
     auto_updates: bool = False
     stage_only: bool = False
     container: Optional[str] = None
+    #: ``container nested:`` path and any other ``container`` kwargs.
+    container_nested: Optional[str] = None
+    container_options: dict[str, Any] = field(default_factory=dict)
     language: Optional[str] = None
     arch: Optional[str] = None
     arch_map: dict[str, str] = field(default_factory=dict)
@@ -564,6 +569,9 @@ class CaskParser:
                     continue
                 if self.peek().kind == "punct" and self.peek().value == ":":
                     self.advance()
+                elif self.peek().kind == "op" and self.peek().value == "=>":
+                    # Ruby hash-rocket form, common in ``url ... cookies:``.
+                    self.advance()
                 values[str(key.value)] = self._parse_value()
             return values
         self.advance()
@@ -641,8 +649,11 @@ class CaskParser:
                     cask.sha256 = cask.sha256_map["arm"]
                 elif arch != "arm64" and "intel" in cask.sha256_map:
                     cask.sha256 = cask.sha256_map["intel"]
-        elif name == "url" and args:
-            cask.url = str(args[0])
+        elif name == "url":
+            if args:
+                cask.url = str(args[0])
+            if kwargs:
+                cask.url_options = {str(key): value for key, value in kwargs.items()}
         elif name == "name" and args:
             cask.name = str(args[0]) if cask.name is None else f"{cask.name}, {args[0]}"
         elif name == "desc" and args:
@@ -670,6 +681,13 @@ class CaskParser:
             raw_type = kwargs.get("type") or kwargs.get(":type")
             if raw_type is not None:
                 cask.container = str(raw_type).lstrip(":")
+            nested = kwargs.get("nested") or kwargs.get(":nested")
+            if nested is not None:
+                cask.container_nested = str(nested)
+            if kwargs:
+                cask.container_options = {
+                    str(key): value for key, value in kwargs.items()
+                }
         elif name == "stage_only":
             if args:
                 cask.stage_only = not (
@@ -679,8 +697,22 @@ class CaskParser:
             else:
                 cask.stage_only = True
         elif name == "rename":
-            if len(args) >= 2:
-                cask.renames.append((str(args[0]), str(args[1])))
+            pairs: list[tuple[str, str]] = []
+            from_value = kwargs.get("from") or kwargs.get(":from")
+            to_value = kwargs.get("to") or kwargs.get(":to")
+            if from_value is not None and to_value is not None:
+                pairs.append((str(from_value), str(to_value)))
+            if len(args) == 1 and isinstance(args[0], list):
+                for entry in args[0]:
+                    if isinstance(entry, list) and len(entry) >= 2:
+                        pairs.append((str(entry[0]), str(entry[1])))
+            elif len(args) >= 2:
+                for index in range(0, len(args) - 1, 2):
+                    pairs.append((str(args[index]), str(args[index + 1])))
+            if pairs:
+                cask.renames.extend(pairs)
+            else:
+                cask.extra["rename"] = {"args": args, "kwargs": kwargs}
         elif name == "uninstall":
             cask.uninstall.update({str(k): v for k, v in kwargs.items()})
             if args:

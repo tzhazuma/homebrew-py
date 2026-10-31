@@ -610,6 +610,9 @@ def _cask_from_result(
         data.get("sha256_map"), ("arm", "intel", "arm64_linux", "x86_64_linux")
     )
     cask.url = _optional_text(data.get("url"))
+    url_options = data.get("url_options")
+    if isinstance(url_options, dict):
+        cask.url_options = dict(url_options)
     cask.desc = _optional_text(data.get("desc"))
     cask.homepage = _optional_text(data.get("homepage"))
     cask.homepage_browsed = _optional_text(data.get("homepage_browsed"))
@@ -711,6 +714,10 @@ def _cask_from_result(
     container = data.get("container")
     if container is not None and str(container).strip():
         cask.container = str(container).strip()
+    cask.container_nested = _optional_text(data.get("container_nested"))
+    container_options = data.get("container_options")
+    if isinstance(container_options, dict):
+        cask.container_options = dict(container_options)
 
     renames = data.get("renames") or []
     if isinstance(renames, list):
@@ -1152,6 +1159,7 @@ class PybrewCaskDSL
       "sha256" => nil,
       "sha256_map" => {},
       "url" => nil,
+      "url_options" => {},
       "names" => [],
       "desc" => nil,
       "homepage" => nil,
@@ -1167,6 +1175,8 @@ class PybrewCaskDSL
       "auto_updates" => false,
       "stage_only" => false,
       "container" => nil,
+      "container_nested" => nil,
+      "container_options" => {},
       "language" => nil,
       "arch" => nil,
       "arch_map" => {},
@@ -1282,6 +1292,8 @@ class PybrewCaskDSL
     @sha256
   end
 
+  # ``url`` keyword options (using/user_agent/header/referer/cookies/verified/
+  # ...) are inert metadata; the URL string itself is stored unchanged.
   def url(*args)
     positional, kwargs = PybrewCaskJSON.split_args(args)
     return @data["url"] if positional.empty? && kwargs.empty?
@@ -1289,6 +1301,7 @@ class PybrewCaskDSL
     unless positional.empty?
       @data["url"] = PybrewCaskJSON.value(positional[0]).to_s
     end
+    @data["url_options"] = kwargs unless kwargs.empty?
     @data["url"]
   end
 
@@ -1531,17 +1544,40 @@ class PybrewCaskDSL
     _positional, kwargs = PybrewCaskJSON.split_args(args)
     raw_type = kwargs["type"] || kwargs[:type]
     @data["container"] = raw_type.to_s.sub(/\A:/, "") unless raw_type.nil?
+    nested = kwargs["nested"] || kwargs[:nested]
+    @data["container_nested"] = nested.to_s unless nested.nil?
+    @data["container_options"] = kwargs unless kwargs.empty?
     @data["container"]
   end
 
   # -- uninstall / zap / dependencies -----------------------------------
 
+  # Homebrew's ``rename`` takes one from/to pair per stanza.  pybrew accepts
+  # that form plus, best effort, keyword (``from:``/``to:``), list-of-pairs and
+  # multiple positional pairs in a single call.
   def rename(*args)
     positional, kwargs = PybrewCaskJSON.split_args(args)
-    if positional.length == 2 && kwargs.empty?
-      @data["renames"] << positional.map(&:to_s)
+    pairs = []
+    from_value = kwargs["from"] || kwargs[:from]
+    to_value = kwargs["to"] || kwargs[:to]
+    if !from_value.nil? && !to_value.nil?
+      pairs << [from_value.to_s, to_value.to_s]
+    end
+    if positional.length == 1 && positional[0].is_a?(Array)
+      positional[0].each do |entry|
+        if entry.is_a?(Array) && entry.length >= 2
+          pairs << [entry[0].to_s, entry[1].to_s]
+        end
+      end
+    elsif positional.length >= 2
+      positional.each_slice(2) do |pair|
+        pairs << [pair[0].to_s, pair[1].to_s] if pair.length == 2
+      end
+    end
+    if pairs.empty?
+      record_unsupported("rename", positional, false, "rename expects from/to pairs")
     else
-      record_unsupported("rename", positional, false, "rename expects two paths")
+      @data["renames"].concat(pairs)
     end
     @data["renames"]
   end
