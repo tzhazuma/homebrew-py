@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-642 passed, 4 skipped in 191.42s
+654 passed, 4 skipped in 181.77s
 ```
 
 Breakdown of the feature slices:
@@ -723,6 +723,15 @@ local remote, commits a change, and confirms the CLI updates it.
 - Added `socket_path`/`socket_text`/`write_socket` and wired socket services to
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
+
+## Cask livecheck / MacOS helpers + Test DSL tap lookup
+
+- Cask: livecheck `url_options` and `strategy` block source capture (text-only),
+  script `caskroom_path`/`arch`/`language`, and MacOS `release_name`/
+  `pretty_name`/`release_version`.
+- Test DSL: bounded local-tap index, cached metadata loader, arbitrary
+  tap-qualified/alias/installed `Formula[...]` lookup and literal-reference
+  preloading. `tests/test_formula_test.py` + CLI: 81 passed.
 
 ## Formulary loaded metadata blocks
 
