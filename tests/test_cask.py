@@ -1451,6 +1451,18 @@ class _RecordingDownloader:
         return self.archive
 
 
+class _LegacyDownloader:
+    """Injected downloader whose ``fetch`` predates request headers."""
+
+    def __init__(self, archive: Path):
+        self.archive = archive
+        self.calls: list[tuple[str, str, str]] = []
+
+    def fetch(self, url: str, sha256: str, hint: str = "download") -> Path:
+        self.calls.append((url, sha256, hint))
+        return self.archive
+
+
 def _write_url_option_cask(
     tap: Path, archive: Path, digest: str, *, options: str = ""
 ) -> None:
@@ -1522,9 +1534,12 @@ def test_cask_url_options_passed_to_injectable_downloader(
     assert (tmp_path / "Applications" / "Optiony.app").is_dir()
 
 
-def test_cask_url_options_default_downloader_keeps_working(
-    tmp_path: Path,
+def test_cask_url_options_default_downloader_applies_headers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from pybrew import download as download_module
+    from pybrew.download import USER_AGENT
+
     archive = tmp_path / "Optiony.zip"
     with zipfile.ZipFile(archive, "w") as bundle:
         bundle.writestr("Optiony.app/Contents/Info.plist", "<plist/>")
@@ -1541,8 +1556,16 @@ def test_cask_url_options_default_downloader_keeps_working(
         prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
     )
     config.ensure()
-    # The stock Downloader does not accept headers; the install must still work
-    # and record that the options were not applied.
+    # The stock Downloader now accepts headers, so the cask options reach it
+    # and the receipt records them as applied.
+    captured: list[dict[str, str]] = []
+    original_fetch = download_module.Downloader.fetch
+
+    def recording_fetch(self, url, sha256, hint="download", headers=None):
+        captured.append(dict(headers) if headers is not None else {})
+        return original_fetch(self, url, sha256, hint=hint, headers=headers)
+
+    monkeypatch.setattr(download_module.Downloader, "fetch", recording_fetch)
     installer = CaskInstaller(
         config,
         appdir=tmp_path / "Applications",
@@ -1550,6 +1573,7 @@ def test_cask_url_options_default_downloader_keeps_working(
     )
     installer.install(CaskLoader(discover_taps([tap])).load("optiony"))
 
+    assert captured == [{"X-Test": "yes", "User-Agent": USER_AGENT}]
     receipt = json.loads(
         (
             tmp_path / "prefix" / "Caskroom" / "optiony" / "1.0" / ".metadata"
@@ -1557,9 +1581,47 @@ def test_cask_url_options_default_downloader_keeps_working(
         ).read_text()
     )
     assert receipt["url_options"] == {
-        "applied": False,
+        "applied": True,
         "keys": ["header", "user_agent"],
     }
+    assert (tmp_path / "Applications" / "Optiony.app").is_dir()
+
+
+def test_cask_url_options_legacy_injected_downloader_keeps_working(
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "Optiony.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("Optiony.app/Contents/Info.plist", "<plist/>")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    tap = tmp_path / "tap"
+    _write_url_option_cask(tap, archive, digest, options=', header: "X-Test: yes"')
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    # Injected downloaders whose fetch() has no headers parameter still work;
+    # they get the plain call and the receipt records the options as unapplied.
+    downloader = _LegacyDownloader(archive)
+    installer = CaskInstaller(
+        config,
+        downloader=downloader,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    installer.install(CaskLoader(discover_taps([tap])).load("optiony"))
+
+    assert len(downloader.calls) == 1
+    called_url, called_digest, _hint = downloader.calls[0]
+    assert (called_url, called_digest) == (archive.as_uri(), digest)
+    receipt = json.loads(
+        (
+            tmp_path / "prefix" / "Caskroom" / "optiony" / "1.0" / ".metadata"
+            / "receipt.json"
+        ).read_text()
+    )
+    assert receipt["url_options"] == {"applied": False, "keys": ["header"]}
     assert (tmp_path / "Applications" / "Optiony.app").is_dir()
 
 

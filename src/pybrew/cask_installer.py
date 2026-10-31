@@ -1066,7 +1066,8 @@ class CaskInstaller:
         self._system_pkg_before_ids: Optional[set[str]] = None
         self._script_results: dict[str, dict[str, Any]] = {}
         # Whether the cask ``url_options`` headers were actually handed to the
-        # injected downloader (the stock Downloader does not accept headers).
+        # downloader.  The stock Downloader accepts headers; older injected
+        # downloaders may not and then receive a plain fetch call.
         self._url_options_applied = False
 
     # -- paths -----------------------------------------------------------
@@ -1195,8 +1196,8 @@ class CaskInstaller:
         }
         if cask.url_options:
             # Only the option keys are recorded: header/cookie values can be
-            # sensitive.  ``applied`` is False for the stock Downloader, which
-            # does not accept request headers.
+            # sensitive.  ``applied`` reports whether the downloader accepted
+            # the request headers; it is False for older injected downloaders.
             receipt["url_options"] = {
                 "applied": self._url_options_applied,
                 "keys": sorted(str(key) for key in cask.url_options),

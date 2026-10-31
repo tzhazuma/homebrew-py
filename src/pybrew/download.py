@@ -11,7 +11,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Mapping, Optional
 
 from .errors import ChecksumMismatch, DownloadError
 
@@ -77,9 +77,12 @@ def _ghcr_repo(url: str) -> Optional[str]:
     return "/".join(repo_parts)
 
 
-def open_url(url: str, headers: Optional[dict[str, str]] = None):
+def open_url(url: str, headers: Optional[Mapping[str, str]] = None):
+    parsed = urllib.parse.urlparse(url)
     request_headers = {"User-Agent": USER_AGENT}
-    if headers:
+    # Local files have no HTTP request to attach headers to; ignore cask
+    # ``url_options`` headers instead of putting them on the Request.
+    if parsed.scheme != "file" and headers:
         request_headers.update(headers)
     repo = _ghcr_repo(url)
     if repo:
@@ -122,7 +125,13 @@ class Downloader:
         return None
 
     # -- fetching --------------------------------------------------------
-    def fetch(self, url: str, sha256: str, hint: str = "download") -> Path:
+    def fetch(
+        self,
+        url: str,
+        sha256: str,
+        hint: str = "download",
+        headers: Optional[Mapping[str, str]] = None,
+    ) -> Path:
         cached = self.find_cached(sha256)
         if cached is not None:
             if sha256_file(cached) == sha256:
@@ -133,7 +142,7 @@ class Downloader:
             return destination
         temporary = Path(tempfile.mkstemp(prefix=".pybrew-", dir=self.cache_dir)[1])
         try:
-            self._download(url, temporary)
+            self._download(url, temporary, headers=headers)
             actual = sha256_file(temporary)
             if actual != sha256:
                 raise ChecksumMismatch(
@@ -162,11 +171,22 @@ class Downloader:
                 temporary.unlink()
         return destination
 
-    def _download(self, url: str, destination: Path) -> None:
+    def _download(
+        self,
+        url: str,
+        destination: Path,
+        headers: Optional[Mapping[str, str]] = None,
+    ) -> None:
+        if headers and urllib.parse.urlparse(url).scheme == "file":
+            # A local file has no HTTP request; cask headers do not apply.
+            headers = None
         try:
-            with open_url(url) as response, open(destination, "wb") as handle:
+            # Keep the plain one-argument call for callers that replace
+            # ``open_url`` while forwarding cask request headers when present.
+            response = open_url(url, headers=headers) if headers else open_url(url)
+            with response as source, open(destination, "wb") as handle:
                 while True:
-                    chunk = response.read(CHUNK)
+                    chunk = source.read(CHUNK)
                     if not chunk:
                         break
                     handle.write(chunk)
