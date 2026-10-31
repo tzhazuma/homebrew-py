@@ -16,10 +16,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Mapping, Optional
@@ -28,7 +30,8 @@ from .cellar import Cellar
 from .errors import BuildError
 from .models import Formula
 from .paths import Config
-from .taps import FormulaLoader, discover_taps
+from .ruby_parser import parse_formula_file
+from .taps import Tap, discover_taps
 
 #: Environment variable overriding the Ruby interpreter used for tests.
 RUBY_ENV = "PYBREW_RUBY"
@@ -40,8 +43,18 @@ DEFAULT_RUBY = "/usr/bin/ruby"
 #: ``timeout=`` to :func:`run_formula_test`.
 DEFAULT_TIMEOUT = 300.0
 
-#: Maximum number of dependency formulae loaded for ``Formula[...]`` lookups.
+#: Maximum number of formula metadata entries loaded for one test run.
 MAX_FORMULA_ENTRIES = 50
+
+#: Maximum number of tap formula files indexed for ``Formula[...]`` lookups.
+MAX_TAP_FORMULA_INDEX = 20000
+
+#: Bounded in-process caches (parsed formulae and tap indexes).
+FORMULA_CACHE_LIMIT = 256
+TAP_INDEX_CACHE_LIMIT = 8
+
+_formula_cache: dict = {}
+_tap_index_cache: dict = {}
 
 
 class FormulaTestError(BuildError):
@@ -391,14 +404,18 @@ class FormulaTestContext
     name = name.to_s
     info = @formulae[name]
     if info.nil?
-      available = @formulae.keys.sort.join(", ")
+      available = @formulae.keys.sort
+      listing = available.first(20).join(", ")
+      listing += ", ..." if available.length > 20
       raise FormulaTestFailure,
-            "Formula[#{name.inspect}] is not available: this test runner only exposes " \
-            "the formula under test (#{self.name.inspect}) and its declared dependencies" \
-            "#{available.empty? ? "" : " (#{available})"}"
+            "Formula[#{name.inspect}] is not available: it is not the formula under test, " \
+            "a declared dependency, or a formula referenced by the loaded test bodies " \
+            "(available: #{listing.empty? ? "none" : listing})"
     end
 
-    Formula.new(self, name, info)
+    canonical_name = info["name"]
+    canonical_name = name if canonical_name.nil? || canonical_name.to_s.empty?
+    Formula.new(self, canonical_name, info)
   end
 
   # Build the context used to execute a dependency's test body.  It shares the
@@ -1264,50 +1281,147 @@ def _declared_dependency_names(formula: Formula) -> list[str]:
     return names
 
 
-def _formula_loader(config: Config) -> FormulaLoader:
-    """Loader over the configured local taps only (never the network)."""
+class _TapIndex:
+    """Cheap name index over formulae in the configured local taps."""
 
-    return FormulaLoader(discover_taps(config.taps))
+    def __init__(self, taps: list[Tap]) -> None:
+        self.taps = taps
+        self.by_name: dict[str, tuple[Tap, Path]] = {}
+        self.by_qualified_name: dict[str, tuple[Tap, Path]] = {}
+
+    def add(self, tap: Tap, path: Path) -> None:
+        name = path.stem
+        self.by_name.setdefault(name, (tap, path))
+        self.by_qualified_name[f"{tap.name}/{name}"] = (tap, path)
+
+    def resolve(self, name: str) -> Optional[tuple[Tap, Path]]:
+        candidates = [name]
+        parts = name.split("/")
+        if len(parts) > 1:
+            candidates.append(parts[-1])
+            candidates.append("/".join(parts[-2:]))
+        for candidate in candidates:
+            resolved = self.by_qualified_name.get(candidate)
+            if resolved is not None:
+                return resolved
+            resolved = self.by_name.get(candidate)
+            if resolved is not None:
+                return resolved
+        return None
 
 
-def _dependency_entry(
-    name: str, config: Config, loader: FormulaLoader
-) -> tuple[dict[str, object], Optional[Formula]]:
-    """Build one ``Formula[...]`` entry for a declared dependency.
+def _tap_index_key(config: Config) -> tuple[tuple[str, int], ...]:
+    parts: list[tuple[str, int]] = []
+    for path in config.taps:
+        try:
+            stamp = path.stat().st_mtime_ns
+        except OSError:
+            stamp = 0
+        parts.append((str(path), stamp))
+    return tuple(parts)
 
-    The dependency's source is read from the configured local taps so its
-    ``test do ... end`` body can be executed by ``Formula["dep"].test``.  When
-    loading fails, ``test_source_error`` records the reason so the Ruby side can
-    report a clear error instead of pretending the formula has no test.
-    """
 
-    dependency_keg = Cellar(config).keg(name)
-    entry: dict[str, object] = {
-        "name": name,
-        "full_name": name,
-        "version": dependency_keg.name if dependency_keg is not None else None,
-        "prefix": str(dependency_keg) if dependency_keg is not None else None,
-        "opt_prefix": str(config.opt_path(name)),
-        "installed": dependency_keg is not None,
-        "dependencies": [],
-        "test_source": "",
-        "test_source_error": None,
-        "test_defined": False,
-    }
-    if dependency_keg is not None:
-        entry["paths"] = _test_paths(name, config, dependency_keg)
+def _tap_index(config: Config) -> _TapIndex:
+    """Return a bounded, cached index of formulae in the local taps."""
+
+    key = _tap_index_key(config)
+    cached = _tap_index_cache.get(key)
+    if cached is not None:
+        return cached
+    index = _TapIndex(discover_taps(config.taps))
+    count = 0
+    for tap in index.taps:
+        for path in tap.formula_paths():
+            if count >= MAX_TAP_FORMULA_INDEX:
+                break
+            index.add(tap, path)
+            count += 1
+        if count >= MAX_TAP_FORMULA_INDEX:
+            break
+    if len(_tap_index_cache) >= TAP_INDEX_CACHE_LIMIT:
+        _tap_index_cache.clear()
+    _tap_index_cache[key] = index
+    return index
+
+
+def _load_tap_formula(path: Path, tap_name: str) -> Formula:
+    """Parse a local tap formula file, cached by path/mtime/size."""
 
     try:
-        loaded = loader.load(name)
-    except Exception as error:  # noqa: BLE001 - best-effort local lookup
-        entry["test_source_error"] = f"{type(error).__name__}: {error}"
-        return entry, None
+        stat = path.stat()
+        key = (str(path), stat.st_mtime_ns, stat.st_size)
+    except OSError:
+        key = None
+    if key is not None:
+        cached = _formula_cache.get(key)
+        if cached is not None:
+            return cached
+    formula = parse_formula_file(path, tap=tap_name)
+    if key is not None:
+        if len(_formula_cache) >= FORMULA_CACHE_LIMIT:
+            _formula_cache.clear()
+        _formula_cache[key] = formula
+    return formula
 
-    entry["full_name"] = loaded.full_name
-    entry["dependencies"] = _declared_dependency_names(loaded)
-    entry["test_source"] = loaded.test_source or ""
-    entry["test_defined"] = bool((loaded.test_source or "").strip())
-    return entry, loaded
+
+_FORMULA_REFERENCE_RE = re.compile(
+    r"""Formula\s*\[\s*["'](?P<bracket>[^"']+)["']\s*\]"""
+    r"""|(?:Formula|Formulary)\.factory\(\s*["'](?P<factory>[^"']+)["']\s*\)"""
+)
+
+
+def _referenced_formula_names(source: str) -> list[str]:
+    """Return literal ``Formula[...]``/``Formula.factory(...)`` names in source.
+
+    Dynamic lookups such as ``Formula[some_variable]`` cannot be resolved ahead
+    of time; those names stay unavailable and fail with a clear error.
+    """
+
+    names: list[str] = []
+    for match in _FORMULA_REFERENCE_RE.finditer(source or ""):
+        name = match.group("bracket") or match.group("factory")
+        if name:
+            names.append(name)
+    return names
+
+
+def _formula_entry(
+    name: str,
+    config: Config,
+    loaded: Optional[Formula] = None,
+    *,
+    load_error: Optional[str] = None,
+) -> dict[str, object]:
+    """Build one ``Formula[...]`` metadata entry for ``name``."""
+
+    keg = Cellar(config).keg(name)
+    if loaded is not None:
+        version = keg.name if keg is not None else loaded.pkg_version
+        dependencies = _declared_dependency_names(loaded)
+        test_source = loaded.test_source or ""
+        test_defined = bool(test_source.strip())
+        full_name = loaded.full_name
+    else:
+        version = keg.name if keg is not None else None
+        dependencies = []
+        test_source = ""
+        test_defined = False
+        full_name = name
+    entry: dict[str, object] = {
+        "name": name,
+        "full_name": full_name,
+        "version": version,
+        "prefix": str(keg) if keg is not None else None,
+        "opt_prefix": str(config.opt_path(name)),
+        "installed": keg is not None,
+        "dependencies": dependencies,
+        "test_source": test_source,
+        "test_source_error": load_error,
+        "test_defined": test_defined,
+    }
+    if keg is not None:
+        entry["paths"] = _test_paths(name, config, keg)
+    return entry
 
 
 def _formula_entries(
@@ -1315,44 +1429,97 @@ def _formula_entries(
 ) -> dict[str, dict[str, object]]:
     """Metadata for ``Formula[...]`` lookups inside the test body.
 
-    Homebrew's ``Formula[]`` can load any formula; pybrew exposes the formula
-    under test plus its declared dependencies, and (best-effort) their own
-    declared dependencies so nested ``Formula[...]`` lookups work.  Dependency
-    sources come from the configured local taps; loading failures are recorded
-    and surfaced by ``Formula#test``.
+    Beyond the formula under test and its declared dependency graph, formulae
+    referenced literally in captured test bodies and formulae with an installed
+    keg are loaded from the configured local taps (best-effort, bounded and
+    cached).  Tap-qualified names (``tap/name``) and aliases are exposed as
+    extra keys; dynamic ``Formula[expression]`` lookups cannot be preloaded and
+    fail with a clear error.
     """
 
     dependencies = _declared_dependency_names(formula)
     opt = config.opt_path(formula.name)
     if not opt.exists():
         opt = keg
-    entries: dict[str, dict[str, object]] = {
-        formula.name: {
-            "name": formula.name,
-            "full_name": formula.full_name,
-            "version": formula.pkg_version,
-            "prefix": str(keg),
-            "opt_prefix": str(opt),
-            "installed": True,
-            "dependencies": dependencies,
-            "test_defined": bool((formula.test_source or "").strip()),
-            "test_source": "",
-            "test_source_error": "re-entrant test execution is not supported",
-        }
+    self_entry: dict[str, object] = {
+        "name": formula.name,
+        "full_name": formula.full_name,
+        "version": formula.pkg_version,
+        "prefix": str(keg),
+        "opt_prefix": str(opt),
+        "installed": True,
+        "dependencies": dependencies,
+        "test_defined": bool((formula.test_source or "").strip()),
+        "test_source": "",
+        "test_source_error": "re-entrant test execution is not supported",
     }
-    if dependencies:
-        loader = _formula_loader(config)
-        queue = list(dependencies)
-        while queue and len(entries) < MAX_FORMULA_ENTRIES:
-            name = queue.pop(0)
-            if name in entries:
-                continue
-            entry, loaded = _dependency_entry(name, config, loader)
-            entries[name] = entry
-            if loaded is not None:
-                for child in _declared_dependency_names(loaded):
-                    if child not in entries:
-                        queue.append(child)
+    entries: dict[str, dict[str, object]] = {formula.name: self_entry}
+    tap_name = getattr(formula, "tap", None)
+    if tap_name:
+        entries.setdefault(f"{tap_name}/{formula.name}", self_entry)
+    for alias in getattr(formula, "aliases", None) or []:
+        entries.setdefault(str(alias), self_entry)
+
+    index = _tap_index(config)
+    queue: deque[tuple[str, bool]] = deque()
+    for dependency in dependencies:
+        queue.append((dependency, True))
+    for reference in _referenced_formula_names(formula.test_source):
+        queue.append((reference, False))
+    try:
+        installed_names = sorted(Cellar(config).installed())
+    except OSError:
+        installed_names = []
+    for installed_name in installed_names:
+        queue.append((installed_name, False))
+
+    taps_listing = ", ".join(tap.name for tap in index.taps) or "no taps configured"
+    seen: set[str] = {formula.name}
+    while queue and len(seen) < MAX_FORMULA_ENTRIES:
+        requested, required = queue.popleft()
+        if requested in seen or requested in entries:
+            continue
+        seen.add(requested)
+        resolved = index.resolve(requested)
+        if resolved is None:
+            if required:
+                entries[requested] = _formula_entry(
+                    requested,
+                    config,
+                    load_error=(
+                        f"no formula named {requested!r} in configured taps "
+                        f"({taps_listing})"
+                    ),
+                )
+            continue
+        tap, path = resolved
+        canonical = path.stem
+        seen.add(canonical)
+        loaded: Optional[Formula] = None
+        load_error: Optional[str] = None
+        try:
+            loaded = _load_tap_formula(path, tap.name)
+        except Exception as error:  # noqa: BLE001 - best-effort local lookup
+            load_error = f"{type(error).__name__}: {error}"
+        if loaded is None:
+            entry = _formula_entry(canonical, config, load_error=load_error)
+            keys = (requested, canonical, f"{tap.name}/{canonical}")
+        else:
+            entry = _formula_entry(canonical, config, loaded)
+            keys = (
+                requested,
+                canonical,
+                f"{tap.name}/{canonical}",
+                loaded.full_name,
+            )
+            keys += tuple(str(alias) for alias in (loaded.aliases or []))
+            for child in _declared_dependency_names(loaded):
+                queue.append((child, False))
+            for reference in _referenced_formula_names(loaded.test_source):
+                queue.append((reference, False))
+        for key in keys:
+            if key and key not in entries:
+                entries[key] = entry
     return entries
 
 
@@ -1429,6 +1596,12 @@ def run_formula_test(
     dependency is installed and its formula source is available in the
     configured local taps; otherwise it fails with a clear error.  Dependency
     tests reuse the parent test's ``testpath`` and environment.
+
+    ``Formula[...]`` lookups resolve the formula under test, its declared
+    dependencies, formulae referenced literally in loaded test bodies, and
+    installed formulae, using metadata from the configured local taps only
+    (never the network).  Dynamic lookups of formulae that were not preloaded
+    fail with a clear error.
 
     ``PYBREW_TEST_FIXTURES`` (directory used by the ``test_fixtures`` helper)
     and ``PYBREW_MACOS_VERSION`` (override used by ``MacOS.version`` inside

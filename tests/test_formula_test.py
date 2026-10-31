@@ -80,17 +80,20 @@ def _formula_source(
     test_block: str | None,
     *,
     depends_on: list[str] | None = None,
+    aliases: list[str] | None = None,
+    version: str = "1.0",
 ) -> str:
     class_name = "".join(part.capitalize() for part in name.replace("-", " ").split())
     deps = "".join(f'  depends_on "{dependency}"\n' for dependency in depends_on or [])
+    alias_lines = "".join(f'  alias "{alias}"\n' for alias in aliases or [])
     test = "" if test_block is None else "\n" + test_block + "\n"
     return f'''class {class_name} < Formula
   desc "synthetic formula test fixture"
   homepage "https://example.com/{name}"
-  url "https://example.com/{name}-1.0.tar.gz"
+  url "https://example.com/{name}-{version}.tar.gz"
   sha256 "{"0" * 64}"
   license "MIT"
-{deps}{test}end
+{deps}{alias_lines}{test}end
 '''
 
 
@@ -100,11 +103,20 @@ def _write_tap_formula(
     test_block: str | None,
     *,
     depends_on: list[str] | None = None,
+    aliases: list[str] | None = None,
+    version: str = "1.0",
 ) -> Path:
     path = tap / "Formula" / f"{name}.rb"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        _formula_source(name, test_block, depends_on=depends_on), encoding="utf-8"
+        _formula_source(
+            name,
+            test_block,
+            depends_on=depends_on,
+            aliases=aliases,
+            version=version,
+        ),
+        encoding="utf-8",
     )
     return path
 
@@ -1226,3 +1238,148 @@ def test_nested_dependency_test_body_executes(tmp_path: Path) -> None:
 
     result = run_formula_test(formula, config, ruby=_REAL_RUBY)
     assert result.success is True
+
+
+# ---------------------------------------------------------------------------
+# arbitrary local tap formula lookup (bounded, local files only)
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_arbitrary_tap_formula_metadata_lookup(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(tap, "tool-x", "  test do\n    assert true\n  end")
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  ref = Formula["tool-x"]
+  assert_equal "tool-x", ref.name
+  assert_equal "sample-tap/tool-x", ref.full_name
+  assert_equal "1.0", ref.version
+  refute ref.installed?
+  assert_equal (homebrew_prefix/"opt"/"tool-x").to_s, ref.opt_prefix.to_s
+  assert ref.test_defined?
+  assert_equal "tool-x", Formula.factory("tool-x").name
+end
+""",
+        taps=[tap],
+    )
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_tap_qualified_formula_lookup(tmp_path: Path) -> None:
+    tap = tmp_path / "Taps" / "homebrew-sample"
+    _write_tap_formula(tap, "tool-x", "  test do\n    assert true\n  end")
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  qualified = Formula["homebrew/sample/tool-x"]
+  assert_equal "tool-x", qualified.name
+  assert_equal "homebrew/sample/tool-x", qualified.full_name
+  assert_equal Formula["tool-x"], qualified
+end
+""",
+        taps=[tap],
+    )
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_tap_formula_alias_lookup(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(
+        tap,
+        "tool-x",
+        "  test do\n    assert true\n  end",
+        aliases=["tool-alias"],
+    )
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  assert_equal "tool-x", Formula["tool-x"].name
+  assert_equal "tool-x", Formula["tool-alias"].name
+  assert_equal Formula["tool-x"], Formula["tool-alias"]
+end
+""",
+        taps=[tap],
+    )
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_installed_tap_formula_lookup_without_literal_reference(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(
+        tap,
+        "tool-y",
+        """  test do
+    assert_equal "tool-y", name
+    (testpath/"tool-y-marker").write "marker"
+  end""",
+    )
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  ref = Formula[["tool", "y"].join("-")]
+  assert_equal "tool-y", ref.name
+  assert ref.installed?
+  assert_equal "1.0", ref.version
+  assert_equal "tool-y-ok", shell_output("#{ref.bin}/tool-y").strip
+  ref.test
+  assert_path_exists testpath/"tool-y-marker"
+end
+""",
+        taps=[tap],
+    )
+    _install_keg(config, "tool-y", output="tool-y-ok")
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_unknown_formula_with_taps_fails_clearly(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(tap, "tool-x", None)
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  Formula["missing-formula"].name\nend', taps=[tap]
+    )
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert "missing-formula" in excinfo.value.stderr
+    assert "not available" in excinfo.value.stderr
+
+
+@requires_ruby
+def test_uninstalled_arbitrary_formula_test_fails_clearly(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(tap, "tool-x", "  test do\n    assert true\n  end")
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  Formula["tool-x"].test\nend', taps=[tap]
+    )
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert "the formula is not installed" in excinfo.value.stderr
+
+
+@requires_ruby
+def test_tap_formula_metadata_cache_refreshes(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(tap, "tool-x", None, version="1.0")
+    formula, config = _installed_formula(
+        tmp_path,
+        'do\n  assert_equal "1.0", Formula["tool-x"].version\nend',
+        taps=[tap],
+    )
+    first = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert first.success is True
+
+    _write_tap_formula(tap, "tool-x", None, version="2.0.1")
+    formula.test_source = 'do\n  assert_equal "2.0.1", Formula["tool-x"].version\nend'
+    second = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert second.success is True
