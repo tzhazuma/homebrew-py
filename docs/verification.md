@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-701 passed, 4 skipped in 181.57s
+714 passed, 5 skipped in 178.54s
 ```
 
 Breakdown of the feature slices:
@@ -723,6 +723,16 @@ local remote, commits a change, and confirms the CLI updates it.
 - Added `socket_path`/`socket_text`/`write_socket` and wired socket services to
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
+
+## Sixth parallel batch
+
+- FormulaInstaller: recursive loaded-source dependency install, cycle/skip
+  tracking, bottle/pour compatibility; Keg linked-keg record semantics.
+- Cask: `url_options` propagated to injected downloaders (headers/user-agent/
+  referer/cookies; stock downloader unchanged), `container_nested` extraction
+  with nested zip/tar/pkg dispatch.
+- Test DSL: dependency tests now use isolated testpath/cwd/PYBREW_PREFIX/
+  TMPDIR and restore parent state.
 
 ## Fifth parallel batch
 
