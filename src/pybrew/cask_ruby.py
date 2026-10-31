@@ -27,8 +27,9 @@ Captured DSL (in addition to arbitrary Ruby control flow):
 * artifact stanzas (``app``, ``binary``, ``suite``, ``pkg``, ``font``, ...);
 * ``stage_only``, ``auto_updates``, ``uninstall``, ``zap trash:``,
   ``depends_on``, ``conflicts_with``, ``arch``/``arch_map``, ``language``;
-* ``livecheck`` metadata (``url``/``regex``/``strategy``/``skip``/``throttle``)
-  plus a best-effort copy of the raw block source;
+* ``livecheck`` metadata (``url`` + strategy options, ``regex``, ``strategy``,
+  ``skip``, ``throttle``) plus a best-effort copy of the raw block source and
+  the ``strategy do ... end`` block body;
 * ``on_macos``/``on_linux``/``on_arm``/``on_intel`` and the
   ``on_<macos release>`` blocks (with ``:or_older``/``:or_newer``);
 * the ``on_arch_conditional``/``on_system_conditional`` helpers used by older
@@ -290,6 +291,12 @@ _LIVECHECK_SOURCE_WARNING = (
     "still available"
 )
 
+_LIVECHECK_STRATEGY_WARNING = (
+    "cask `livecheck` strategy block source could not be recovered by the "
+    "opt-in Ruby evaluator; the strategy symbol and other livecheck metadata "
+    "are still available"
+)
+
 _SCRIPT_SOURCE_WARNING = (
     "cask `{stanza}` script source could not be recovered by the opt-in Ruby "
     "evaluator; the literal parser may still provide it when the cask is "
@@ -373,6 +380,22 @@ def _attach_livecheck_source(source: str, data: dict[str, Any]) -> None:
             warnings.append(_LIVECHECK_SOURCE_WARNING)
     else:
         data["livecheck_source"] = extracted
+    strategy_location = data.get("livecheck_strategy_location")
+    if strategy_location is None:
+        return
+    livecheck = data.get("livecheck")
+    if not isinstance(livecheck, dict):
+        livecheck = {}
+    if livecheck.get("strategy_source"):
+        return
+    extracted = _extract_stanza_source(source, strategy_location, "strategy")
+    if extracted is None:
+        warnings = data.setdefault("warnings", [])
+        if isinstance(warnings, list):
+            warnings.append(_LIVECHECK_STRATEGY_WARNING)
+        return
+    livecheck["strategy_source"] = extracted
+    data["livecheck"] = livecheck
 
 
 def _attach_script_sources(source: str, data: dict[str, Any]) -> None:
@@ -745,6 +768,22 @@ class PybrewCaskVersion < String
     "golden_gate" => "27",
   }.freeze
 
+  #: macOS release version -> human readable release name.
+  RELEASE_NAMES = {
+    "10.15" => "Catalina",
+    "10.14" => "Mojave",
+    "10.13" => "High Sierra",
+    "10.12" => "Sierra",
+    "10.11" => "El Capitan",
+    "11" => "Big Sur",
+    "12" => "Monterey",
+    "13" => "Ventura",
+    "14" => "Sonoma",
+    "15" => "Sequoia",
+    "26" => "Tahoe",
+    "27" => "Golden Gate",
+  }.freeze
+
   def self.parts(value)
     value.to_s.split(".").map(&:to_i)
   end
@@ -784,6 +823,21 @@ class PybrewCaskVersion < String
 
   def dots_to_hyphens
     tr(".", "-")
+  end
+
+  # Mirror Homebrew's MacOSVersion naming helpers.  Big Sur reports 10.16 under
+  # SYSTEM_VERSION_COMPAT, hence the alias.
+  def release_version
+    version = major.to_i >= 11 ? major : major_minor
+    version == "10.16" ? "11" : version
+  end
+
+  def release_name
+    RELEASE_NAMES[release_version]
+  end
+
+  def pretty_name
+    release_name || "Dunno"
   end
 end
 
@@ -890,6 +944,15 @@ module MacOS
     PYBREW_MACOS_VERSION_SYMBOLS.fetch(key, :unknown)
   end
 
+  # Convenience delegates matching the ``MacOS.version`` naming helpers.
+  def self.release_name
+    version.release_name
+  end
+
+  def self.pretty_name
+    version.pretty_name
+  end
+
   # Best-effort SDK lookup.  pybrew only knows about SDKs the host already has
   # on disk (or ``PYBREW_MACOS_SDK_PATH``); it never invokes Xcode tooling or
   # the network.  Returns nil when no matching SDK is available.
@@ -936,11 +999,12 @@ end
 # in its Livecheck DSL; pybrew records the common metadata without performing
 # any network access or livecheck work.
 class PybrewCaskLivecheck
-  attr_reader :data
+  attr_reader :data, :strategy_location
 
   def initialize
     @data = {
       "url" => nil,
+      "url_options" => nil,
       "regex" => nil,
       "strategy" => nil,
       "skip" => false,
@@ -950,10 +1014,17 @@ class PybrewCaskLivecheck
       "formula" => nil,
       "cask" => nil,
     }
+    @strategy_location = nil
   end
 
-  def url(value = nil, **_options)
+  # ``url`` accepts Homebrew's strategy options (header/user_agent/referer/
+  # cookies/homebrew_curl/...).  pybrew records them without performing any
+  # network request.
+  def url(value = nil, **options)
     @data["url"] = PybrewCaskJSON.value(value) unless value.nil?
+    unless options.empty?
+      @data["url_options"] = PybrewCaskJSON.value(options)
+    end
     @data["url"]
   end
 
@@ -966,8 +1037,11 @@ class PybrewCaskLivecheck
     @data["regex"]
   end
 
-  def strategy(symbol = nil, &_block)
+  # The strategy block is captured by location (and extracted from the cask
+  # source in Python); it is never executed here.
+  def strategy(symbol = nil, &block)
     @data["strategy"] = PybrewCaskJSON.value(symbol) unless symbol.nil?
+    @strategy_location = block.source_location unless block.nil?
     @data["strategy"]
   end
 
@@ -1073,6 +1147,7 @@ class PybrewCaskDSL
       "livecheck_defined" => false,
       "livecheck" => {},
       "livecheck_location" => nil,
+      "livecheck_strategy_location" => nil,
       "no_autobump_reason" => nil,
       "script_locations" => {},
       "scripts" => {},
@@ -1561,6 +1636,9 @@ class PybrewCaskDSL
     rescue StandardError => error
       @data["warnings"] << "cask `livecheck` block could not be fully " \
                            "evaluated: #{error.class}: #{error.message}"
+    end
+    unless collector.strategy_location.nil?
+      @data["livecheck_strategy_location"] = collector.strategy_location
     end
     @data["livecheck"] = collector.data
     @data["livecheck"]

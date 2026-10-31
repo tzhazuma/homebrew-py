@@ -177,6 +177,22 @@ module MacOS
 
   SYMBOL_VERSIONS = VERSION_SYMBOLS.invert.freeze
 
+  #: macOS release version -> human readable release name (read-only).
+  RELEASE_NAMES = {
+    "10.15" => "Catalina",
+    "10.14" => "Mojave",
+    "10.13" => "High Sierra",
+    "10.12" => "Sierra",
+    "10.11" => "El Capitan",
+    "11" => "Big Sur",
+    "12" => "Monterey",
+    "13" => "Ventura",
+    "14" => "Sonoma",
+    "15" => "Sequoia",
+    "26" => "Tahoe",
+    "27" => "Golden Gate",
+  }.freeze
+
   DARWIN_VERSIONS = {
     19 => "10.15",
     20 => "11",
@@ -202,6 +218,33 @@ module MacOS
       (self <=> other).zero?
     end
     alias eql? ==
+
+    def major
+      split(".")[0].to_s
+    end
+
+    def minor
+      split(".")[1].to_s
+    end
+
+    def major_minor
+      split(".")[0, 2].join(".")
+    end
+
+    # Mirror Homebrew's MacOSVersion naming helpers.  Big Sur reports 10.16
+    # under SYSTEM_VERSION_COMPAT, hence the alias.
+    def release_version
+      value = major.to_i >= 11 ? major : major_minor
+      value == "10.16" ? "11" : value
+    end
+
+    def release_name
+      MacOS::RELEASE_NAMES[release_version]
+    end
+
+    def pretty_name
+      release_name || "Dunno"
+    end
   end
 
   def self.version_string(value)
@@ -243,6 +286,14 @@ module MacOS
     parts = full_version.split(".")
     key = parts[0].to_i == 10 ? "10.#{parts[1]}" : parts[0].to_s
     VERSION_SYMBOLS.fetch(key, :unknown)
+  end
+
+  def self.release_name
+    version.release_name
+  end
+
+  def self.pretty_name
+    version.pretty_name
   end
 
   #: Directories searched for an installed macOS SDK (local filesystem only).
@@ -567,6 +618,30 @@ class PybrewCaskScriptContext
 
   def staged_path
     @staged_path
+  end
+
+  # Homebrew's cask script context delegates these to the cask.  pybrew derives
+  # them from the install context without changing the argv contract:
+  # ``caskroom_path`` from prefix+token, ``arch`` from the host, and
+  # ``language`` from ``PYBREW_CASK_LANGUAGE`` (set by CaskInstaller) with a
+  # locale fallback.
+  def caskroom_path
+    @caskroom_path ||= @prefix/"Caskroom"/token.to_s
+  end
+
+  def arch
+    @arch ||= RUBY_PLATFORM =~ /arm64|aarch64/ ? "arm64" : "intel"
+  end
+
+  def language
+    @language ||= begin
+      value = ENV["PYBREW_CASK_LANGUAGE"].to_s
+      if value.empty?
+        locale = ENV["LANG"].to_s
+        value = locale.split(".").first.to_s.split("_").first.to_s
+      end
+      value.empty? ? "en" : value
+    end
   end
 
   # Accepts the Homebrew keyword form (``args:``/``env:``/``chdir:``), a plain
@@ -1110,12 +1185,15 @@ class CaskInstaller:
                 str(self.config.prefix),
                 str(body_path),
             ]
+            script_env = dict(os.environ)
+            script_env["PYBREW_CASK_LANGUAGE"] = cask.language or ""
             try:
                 result = subprocess.run(
                     command,
                     text=True,
                     capture_output=True,
                     cwd=str(cwd) if cwd is not None else None,
+                    env=script_env,
                 )
             except OSError as error:
                 raise CaskError(

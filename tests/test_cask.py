@@ -971,12 +971,36 @@ def test_cask_script_shim_macos_and_command_helpers(
         '''cask "shimmy" do
   version "1.0"
   stage_only true
+  language "fr", default: true do
+    "French"
+  end
   preflight do
     if MacOS.version.to_s != "14.5"
       raise "bad version"
     end
     if MacOS.version_symbol != :sonoma
       raise "bad version symbol"
+    end
+    if caskroom_path != prefix/"Caskroom"/token
+      raise "bad caskroom_path"
+    end
+    if !%w[arm64 intel].include?(arch)
+      raise "bad arch"
+    end
+    if language != "fr"
+      raise "bad language"
+    end
+    if MacOS.version.release_name != "Sonoma"
+      raise "bad release_name"
+    end
+    if MacOS.version.pretty_name != "Sonoma"
+      raise "bad pretty_name"
+    end
+    if MacOS.release_name != "Sonoma"
+      raise "bad module release_name"
+    end
+    if MacOS.pretty_name != "Sonoma"
+      raise "bad module pretty_name"
     end
     if OS.mac?
       if MacOS.sdk_path.to_s != ENV["PYBREW_MACOS_SDK_PATH"]
@@ -1228,3 +1252,29 @@ def test_cask_script_shim_supports_input_timeout_and_popen_write() -> None:
         "Open3.popen2e",
     ):
         assert snippet in _CASK_SCRIPT_SHIM
+
+
+# ---------------------------------------------------------------------------
+# script shim: cask delegators and MacOS release names
+# ---------------------------------------------------------------------------
+
+
+def test_cask_script_shim_exposes_context_delegators_and_macos_names() -> None:
+    import inspect
+
+    from pybrew.cask_installer import CaskInstaller, _CASK_SCRIPT_SHIM
+
+    for snippet in (
+        "def caskroom_path",
+        "def arch",
+        "def language",
+        "def release_version",
+        "def release_name",
+        "def pretty_name",
+        "RELEASE_NAMES",
+    ):
+        assert snippet in _CASK_SCRIPT_SHIM
+    # The installer passes the cask language to the script process.
+    assert "PYBREW_CASK_LANGUAGE" in inspect.getsource(
+        CaskInstaller._run_cask_script
+    )

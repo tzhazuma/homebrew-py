@@ -1343,3 +1343,117 @@ end
     )
     assert receipt["scripts_requested"] is False
     assert receipt["script_results"] == {}
+
+
+# ---------------------------------------------------------------------------
+# livecheck strategy block and url kwargs
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_cask_livecheck_strategy_block_and_url_options(allow_ruby: None) -> None:
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  livecheck do\n'
+            '    url "https://example.com/download", '
+            'header: ["Accept: text/html"], user_agent: :default, '
+            'referer: "https://example.com"\n'
+            '    strategy :page_match do |page|\n'
+            '      page.scan(/lc-(\\d+)/).flatten\n'
+            '    end\n'
+            '  end\n'
+        )
+    )
+
+    assert cask.livecheck_defined is True
+    assert cask.livecheck["url"] == "https://example.com/download"
+    assert cask.livecheck["url_options"] == {
+        "header": ["Accept: text/html"],
+        "user_agent": ":default",
+        "referer": "https://example.com",
+    }
+    assert cask.livecheck["strategy"] == ":page_match"
+    assert cask.livecheck["strategy_source"] is not None
+    assert "page.scan" in cask.livecheck["strategy_source"]
+    assert cask.livecheck_source is not None
+    assert "strategy :page_match" in cask.livecheck_source
+
+
+@requires_ruby
+def test_livecheck_strategy_source_recovery_failure_is_documented(
+    allow_ruby: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "pybrew.cask_ruby._extract_stanza_source",
+        lambda *_args, **_kwargs: None,
+    )
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  livecheck do\n'
+            '    strategy :page_match do |page|\n'
+            '      page.scan(/lc-(\\d+)/)\n'
+            '    end\n'
+            '  end\n'
+        )
+    )
+
+    assert cask.livecheck_defined is True
+    assert cask.livecheck["strategy"] == ":page_match"
+    assert "strategy_source" not in cask.livecheck
+    warnings = cask.extra["ruby_warnings"]
+    assert any(
+        "strategy" in warning and "source" in warning for warning in warnings
+    )
+
+
+def test_extract_stanza_source_handles_strategy_block() -> None:
+    from pybrew.cask_ruby import _extract_stanza_source
+
+    source = (
+        'cask "tiny" do\n'
+        '  livecheck do\n'
+        '    strategy :page_match do |page|\n'
+        '      page.scan(/tiny/)\n'
+        '    end\n'
+        '  end\n'
+        'end\n'
+    )
+    line = source.splitlines().index(
+        "    strategy :page_match do |page|"
+    ) + 1
+    extracted = _extract_stanza_source(
+        source, ["cask.rb", line], "strategy"
+    )
+    assert extracted is not None
+    assert "page.scan(/tiny/)" in extracted
+
+
+# ---------------------------------------------------------------------------
+# MacOS release_name / pretty_name
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_cask_macos_release_name_helpers(
+    allow_ruby: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PYBREW_TARGET_OS", "darwin")
+    monkeypatch.setenv("HOMEBREW_MACOS_VERSION", "14.5")
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  caveats "release=#{MacOS.version.release_name} '
+            'pretty=#{MacOS.version.pretty_name} '
+            'module_release=#{MacOS.release_name} '
+            'module_pretty=#{MacOS.pretty_name} '
+            'catalina=#{MacOS::Version.new("10.15.7").release_name} '
+            'tahoe=#{MacOS::Version.new("26.1").release_name} '
+            'unknown=#{MacOS::Version.new("99").pretty_name}"\n'
+        )
+    )
+    assert cask.caveats == (
+        "release=Sonoma pretty=Sonoma module_release=Sonoma "
+        "module_pretty=Sonoma catalina=Catalina tahoe=Tahoe unknown=Dunno"
+    )
