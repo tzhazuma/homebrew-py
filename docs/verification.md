@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-655 passed, 4 skipped in 264.74s
+687 passed, 4 skipped in 213.07s
 ```
 
 Breakdown of the feature slices:
@@ -723,6 +723,17 @@ local remote, commits a change, and confirms the CLI updates it.
 - Added `socket_path`/`socket_text`/`write_socket` and wired socket services to
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
+
+## Fourth parallel batch
+
+- Ruby core: Formulary namespace/cache/error classes, FormulaInstaller loaded
+  fetch/build/link/clean flow, `CompilerSelector`/`CompilerFailure`/
+  `Superenv.setup_build_environment` compatibility surface.
+- Cask: script `MacOS.version.to_sym`/`outdated_release?`/`MacOS.language`,
+  cask-arch stanza in script env, livecheck url_options normalization.
+- Test DSL: MacOS SDK/release names, `OS.version`, CPU flags/features.
+- Python source build: `PYBREW_CC`/`CC`, `PYBREW_CXX`/`CXX`,
+  `PYBREW_COMPILER=clang|gcc`, flags preservation and injectable build env.
 
 ## Formulary loaded install helpers
 
