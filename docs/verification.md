@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-638 passed, 4 skipped in 388.13s
+639 passed, 4 skipped in 203.95s
 ```
 
 Breakdown of the feature slices:
@@ -723,6 +723,17 @@ local remote, commits a change, and confirms the CLI updates it.
 - Added `socket_path`/`socket_text`/`write_socket` and wired socket services to
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
+
+## Upstream sync (2026-10-30)
+
+- Fetched Homebrew `main` `fcdfa0476e` (2026-10-30) and compared the formula,
+  formulary, keg, service and cask DSL files.
+- Added `Dependency#no_linkage`/`PybrewDependencyRef#no_linkage?`,
+  `Formula#local_patch_checksums`, and `to_hash["no_linkage_dependencies"]` /
+  `to_hash["local_patch_checksums"]` for the new `:no_linkage` DSL.
+- Other upstream changes were docs-only or internal (Keg relative-path
+  handling, systemd `successful_exit` already matched, Formulary
+  `from_cache` kwargs already tolerated).
 
 ## Formula#install execution
 

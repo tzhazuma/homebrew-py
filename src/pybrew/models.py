@@ -85,6 +85,12 @@ class Dependency:
     def runtime(self) -> bool:
         return not self.build and not self.test
 
+    @property
+    def no_linkage(self) -> bool:
+        """True for ``depends_on "x" => :no_linkage`` declarations."""
+
+        return "no_linkage" in self.tags
+
     def __str__(self) -> str:  # pragma: no cover - diagnostics
         return self.name
 

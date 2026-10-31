@@ -2141,6 +2141,10 @@ class PybrewDependencyRef
     !build? && !test?
   end
 
+  def no_linkage?
+    @tags.include?("no_linkage")
+  end
+
   def to_s
     @name
   end
@@ -4077,6 +4081,14 @@ class PybrewFormulaRef
     }
   end
 
+  def local_patch_checksums
+    patches.each_with_object({}) do |patch, result|
+      next if patch.file.nil? || patch.sha256.nil?
+
+      result[patch.file.to_s] = patch.sha256.to_s
+    end
+  end
+
   def to_hash
     caveats_text = begin
       caveats
@@ -4110,6 +4122,8 @@ class PybrewFormulaRef
       "test_dependencies" => test_dependencies.map(&:name),
       "recommended_dependencies" => recommended_dependencies.map(&:name),
       "optional_dependencies" => optional_dependencies.map(&:name),
+      "no_linkage_dependencies" => deps.select(&:no_linkage?).map(&:name),
+      "local_patch_checksums" => local_patch_checksums,
       "uses_from_macos" => uses_from_macos.map(&:name),
       "requirements" => requirements.map(&:name),
       "conflicts_with" => conflicts_with,

@@ -3600,3 +3600,24 @@ def test_formula_install_method_guards_recursion(
     assert (keg / "install-count.txt").read_text() == "1"
     assert (keg / "caveats-ran.txt").read_text() == "ok"
     assert (keg / "caveats.txt").read_text() == "done"
+
+
+def test_formula_no_linkage_and_local_patch_checksums(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-upstream-sync",
+        "1.0",
+        (
+            '  ref = Formula["ruby-upstream-sync"]\n'
+            '  dep = ref.deps.find { |item| item.name == "dep" }\n'
+            '  (prefix/"upstream.txt").write [\n'
+            '    dep.no_linkage?.to_s,\n'
+            '    ref.to_hash["no_linkage_dependencies"].join(",")\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.dependencies.append(Dependency(name="dep", tags=frozenset({"no_linkage"})))
+    keg = _build(tmp_path, formula)
+    assert (keg / "upstream.txt").read_text().splitlines() == ["true", "dep"]
