@@ -196,6 +196,22 @@ def _target_arch() -> str:
     return "arm64" if machine in ("arm64", "aarch64") else "intel"
 
 
+def _target_macos_language() -> str:
+    """Return the macOS UI language used by ``MacOS.language`` (best effort)."""
+
+    override = (
+        os.environ.get("PYBREW_MACOS_LANGUAGE")
+        or os.environ.get("HOMEBREW_MACOS_LANGUAGE")
+        or ""
+    ).strip()
+    if override:
+        return override
+    locale = (os.environ.get("LANG") or "").split(".")[0].strip()
+    if locale:
+        return locale.replace("_", "-")
+    return "en-US"
+
+
 def _target_macos_version() -> str:
     """Return the macOS release used by ``on_<release>`` blocks."""
 
@@ -494,6 +510,7 @@ def _evaluate(source: str, path: Optional[Path]) -> dict[str, Any]:
             "arch": _target_arch(),
             "artifacts": artifacts,
             "filename": filename,
+            "macos_language": _target_macos_language(),
             "macos_version": _target_macos_version(),
             "output": str(output_path),
             "platform": _target_os(),
@@ -839,6 +856,21 @@ class PybrewCaskVersion < String
   def pretty_name
     release_name || "Dunno"
   end
+
+  def to_sym
+    SYMBOL_VERSIONS.key(release_version) || :dunno
+  end
+
+  # Homebrew exports HOMEBREW_MACOS_OLDEST_SUPPORTED; the fallback matches
+  # current brew.
+  def self.oldest_supported_version
+    value = ENV["HOMEBREW_MACOS_OLDEST_SUPPORTED"].to_s
+    value.empty? ? "15" : value
+  end
+
+  def outdated_release?
+    self < PybrewCaskVersion.oldest_supported_version
+  end
 end
 
 module PybrewCaskJSON
@@ -853,6 +885,8 @@ module PybrewCaskJSON
       ":#{object}"
     when Pathname
       object.to_s
+    when Regexp
+      object.source
     when Hash
       result = {}
       object.each { |key, item| result[key.to_s] = value(item) }
@@ -945,6 +979,15 @@ module MacOS
   end
 
   # Convenience delegates matching the ``MacOS.version`` naming helpers.
+  def self.language
+    value = (PYBREW_CASK_CONFIG["macos_language"] || "").to_s
+    value.empty? ? "en-US" : value
+  end
+
+  def self.languages
+    [language]
+  end
+
   def self.release_name
     version.release_name
   end

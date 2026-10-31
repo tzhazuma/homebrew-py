@@ -1457,3 +1457,55 @@ def test_cask_macos_release_name_helpers(
         "release=Sonoma pretty=Sonoma module_release=Sonoma "
         "module_pretty=Sonoma catalina=Catalina tahoe=Tahoe unknown=Dunno"
     )
+
+
+# ---------------------------------------------------------------------------
+# livecheck url options: nested/Regexp values are JSON-friendly
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_cask_livecheck_url_options_json_friendly(allow_ruby: None) -> None:
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  livecheck do\n'
+            '    url "https://example.com/download", '
+            'header: ["Accept: text/html"], '
+            'post_json: { "a" => [1, 2], "pattern" => /x-(\\d+)/ }\n'
+            '  end\n'
+        )
+    )
+
+    assert cask.livecheck["url_options"] == {
+        "header": ["Accept: text/html"],
+        "post_json": {"a": [1, 2], "pattern": "x-(\\d+)"},
+    }
+
+
+# ---------------------------------------------------------------------------
+# MacOS.version.to_sym / outdated_release? / MacOS.language (evaluator)
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_cask_macos_version_sym_outdated_and_language(
+    allow_ruby: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PYBREW_TARGET_OS", "darwin")
+    monkeypatch.setenv("HOMEBREW_MACOS_VERSION", "14.5")
+    monkeypatch.setenv("PYBREW_MACOS_LANGUAGE", "zh-Hans-CN")
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  caveats "sym=#{MacOS.version.to_sym} '
+            'unknown=#{MacOS::Version.new("99").to_sym} '
+            'outdated=#{MacOS.version.outdated_release?} '
+            'current=#{MacOS::Version.new("27.2").outdated_release?} '
+            'lang=#{MacOS.language} langs=#{MacOS.languages.join(",")}"\n'
+        )
+    )
+    assert cask.caveats == (
+        "sym=sonoma unknown=dunno outdated=true current=false "
+        "lang=zh-Hans-CN langs=zh-Hans-CN"
+    )

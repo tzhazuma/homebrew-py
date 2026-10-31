@@ -177,6 +177,31 @@ module MacOS
 
   SYMBOL_VERSIONS = VERSION_SYMBOLS.invert.freeze
 
+  #: Oldest macOS release Homebrew still supports.  Homebrew exports
+  #: ``HOMEBREW_MACOS_OLDEST_SUPPORTED``; the fallback matches current brew.
+  def self.oldest_supported_version
+    value = ENV["HOMEBREW_MACOS_OLDEST_SUPPORTED"].to_s
+    value.empty? ? "15" : value
+  end
+
+  # Read-only best effort: explicit override, then the process locale.  pybrew
+  # does not parse ``defaults read -g AppleLanguages`` (no extra subprocess).
+  def self.language
+    @language ||= begin
+      value = ENV["PYBREW_MACOS_LANGUAGE"].to_s
+      value = ENV["HOMEBREW_MACOS_LANGUAGE"].to_s if value.empty?
+      if value.empty?
+        locale = ENV["LANG"].to_s.split(".").first.to_s
+        value = locale.tr("_", "-")
+      end
+      value.empty? ? "en-US" : value
+    end
+  end
+
+  def self.languages
+    [language]
+  end
+
   #: macOS release version -> human readable release name (read-only).
   RELEASE_NAMES = {
     "10.15" => "Catalina",
@@ -244,6 +269,14 @@ module MacOS
 
     def pretty_name
       release_name || "Dunno"
+    end
+
+    def to_sym
+      MacOS::VERSION_SYMBOLS.fetch(release_version, :dunno)
+    end
+
+    def outdated_release?
+      self < MacOS.oldest_supported_version
     end
   end
 
@@ -630,7 +663,13 @@ class PybrewCaskScriptContext
   end
 
   def arch
-    @arch ||= RUBY_PLATFORM =~ /arm64|aarch64/ ? "arm64" : "intel"
+    @arch ||= begin
+      value = ENV["PYBREW_CASK_ARCH"].to_s
+      if value.empty?
+        value = RUBY_PLATFORM =~ /arm64|aarch64/ ? "arm64" : "intel"
+      end
+      value
+    end
   end
 
   def language
@@ -1187,6 +1226,13 @@ class CaskInstaller:
             ]
             script_env = dict(os.environ)
             script_env["PYBREW_CASK_LANGUAGE"] = cask.language or ""
+            arch_value = ""
+            if cask.arch_map:
+                host_key = "arm" if cask.resolved_arch() == "arm64" else "intel"
+                arch_value = cask.arch_map.get(host_key) or ""
+            if not arch_value and cask.arch:
+                arch_value = cask.arch
+            script_env["PYBREW_CASK_ARCH"] = arch_value
             try:
                 result = subprocess.run(
                     command,

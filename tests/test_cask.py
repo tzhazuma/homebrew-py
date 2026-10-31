@@ -963,6 +963,12 @@ def test_cask_script_shim_macos_and_command_helpers(
     sdk.mkdir()
     monkeypatch.setenv("PYBREW_MACOS_VERSION", "14.5")
     monkeypatch.setenv("PYBREW_MACOS_SDK_PATH", str(sdk))
+    monkeypatch.setenv("PYBREW_MACOS_LANGUAGE", "zh-Hans-CN")
+    # Make the cask ``arch`` stanza selection deterministic on every host.
+    monkeypatch.setattr("pybrew.cask.platform.machine", lambda: "arm64")
+    monkeypatch.setattr(
+        "pybrew.cask_installer.platform.machine", lambda: "arm64"
+    )
 
     tap = tmp_path / "tap"
     cask_path = tap / "Casks" / "s" / "shimmy.rb"
@@ -971,6 +977,7 @@ def test_cask_script_shim_macos_and_command_helpers(
         '''cask "shimmy" do
   version "1.0"
   stage_only true
+  arch arm: "darwin-arm64", intel: "darwin-x64"
   language "fr", default: true do
     "French"
   end
@@ -981,11 +988,23 @@ def test_cask_script_shim_macos_and_command_helpers(
     if MacOS.version_symbol != :sonoma
       raise "bad version symbol"
     end
+    if MacOS.version.to_sym != :sonoma
+      raise "bad to_sym"
+    end
+    if !MacOS.version.outdated_release?
+      raise "bad outdated_release?"
+    end
+    if MacOS.language != "zh-Hans-CN"
+      raise "bad MacOS.language"
+    end
+    if MacOS.languages != ["zh-Hans-CN"]
+      raise "bad MacOS.languages"
+    end
     if caskroom_path != prefix/"Caskroom"/token
       raise "bad caskroom_path"
     end
-    if !%w[arm64 intel].include?(arch)
-      raise "bad arch"
+    if arch != "darwin-arm64"
+      raise "bad cask arch stanza"
     end
     if language != "fr"
       raise "bad language"
@@ -1268,13 +1287,55 @@ def test_cask_script_shim_exposes_context_delegators_and_macos_names() -> None:
         "def caskroom_path",
         "def arch",
         "def language",
+        "def self.language",
+        "def self.languages",
         "def release_version",
         "def release_name",
         "def pretty_name",
+        "def to_sym",
+        "outdated_release?",
+        "oldest_supported_version",
         "RELEASE_NAMES",
+        "PYBREW_CASK_ARCH",
     ):
         assert snippet in _CASK_SCRIPT_SHIM
-    # The installer passes the cask language to the script process.
-    assert "PYBREW_CASK_LANGUAGE" in inspect.getsource(
-        CaskInstaller._run_cask_script
+    # The installer passes the cask language and arch stanza to the script.
+    script_source = inspect.getsource(CaskInstaller._run_cask_script)
+    assert "PYBREW_CASK_LANGUAGE" in script_source
+    assert "PYBREW_CASK_ARCH" in script_source
+
+
+@requires_ruby
+def test_cask_script_arch_falls_back_to_host(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "n" / "noarch.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        '''cask "noarch" do
+  version "1.0"
+  stage_only true
+  preflight do
+    if !ENV["PYBREW_CASK_ARCH"].to_s.empty?
+      raise "arch env should be empty without an arch stanza"
+    end
+    if !%w[arm64 intel].include?(arch)
+      raise "bad host arch fallback"
+    end
+  end
+end
+''',
+        encoding="utf-8",
     )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+        run_scripts=True,
+    )
+    installer.install(CaskLoader(discover_taps([tap])).load("noarch"))
