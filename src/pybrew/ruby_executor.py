@@ -5655,7 +5655,7 @@ class Tab
     kegs = rack.children.select { |child| child.directory? }
     return empty if kegs.empty?
 
-    for_keg(kegs.max_by { |child| child.mtime })
+    for_keg(kegs.max_by { |child| PybrewFormulaRef.version_key(child.basename.to_s) })
   rescue StandardError
     empty
   end
