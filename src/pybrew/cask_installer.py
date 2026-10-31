@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import glob
+import inspect
 import json
 import os
 import platform
@@ -19,7 +20,7 @@ from typing import Any, Iterable, Optional
 
 from .api import cask_from_api, fetch_cask
 from .cask import Artifact, Cask, CaskError, parse_cask_file
-from .download import Downloader, sha256_file
+from .download import USER_AGENT, Downloader, sha256_file
 from .errors import ChecksumMismatch, DownloadError, PybrewError
 from .installer import safe_extract_tar
 from .paths import Config
@@ -926,6 +927,71 @@ def _archive_kind(path: Path) -> str:
     return "unknown"
 
 
+def _download_accepts_headers(downloader: Any) -> bool:
+    """Return true when the injected downloader accepts request headers."""
+
+    fetch = getattr(downloader, "fetch", None)
+    if fetch is None:
+        return False
+    try:
+        parameters = inspect.signature(fetch).parameters
+    except (TypeError, ValueError):  # pragma: no cover - builtins/C callables
+        return False
+    if "headers" in parameters:
+        return True
+    return any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+
+
+def cask_request_headers(cask: Cask) -> dict[str, str]:
+    """Translate ``Cask.url_options`` into HTTP request headers (best effort).
+
+    Supports Homebrew's ``header:`` (String or list of ``"Name: value"``),
+    ``user_agent:`` (String or ``:default``/``:fake`` symbol), ``referer:`` and
+    ``cookies:`` (Hash or String) options.  Other options (``using:``,
+    ``verified:``, ...) are metadata only and are not sent.
+    """
+
+    options = cask.url_options or {}
+    headers: dict[str, str] = {}
+
+    header_value = options.get("header")
+    if isinstance(header_value, str):
+        header_entries: list[Any] = [header_value]
+    elif isinstance(header_value, (list, tuple)):
+        header_entries = list(header_value)
+    else:
+        header_entries = []
+    for entry in header_entries:
+        name, separator, value = str(entry).partition(":")
+        if separator and name.strip():
+            headers[name.strip()] = value.strip()
+
+    user_agent = options.get("user_agent")
+    if user_agent is not None:
+        text = str(user_agent)
+        if text.startswith(":"):
+            headers.setdefault("User-Agent", USER_AGENT)
+        else:
+            headers.setdefault("User-Agent", text)
+
+    referer = options.get("referer")
+    if referer is not None:
+        headers.setdefault("Referer", str(referer))
+
+    cookies = options.get("cookies")
+    if isinstance(cookies, dict):
+        pairs = [f"{key}={value}" for key, value in cookies.items()]
+        if pairs:
+            headers.setdefault("Cookie", "; ".join(pairs))
+    elif isinstance(cookies, str) and cookies.strip():
+        headers.setdefault("Cookie", cookies.strip())
+
+    return headers
+
+
 class _MountedImage:
     def __init__(self, archive: Path, mountpoint: Path):
         self.archive = archive
@@ -999,6 +1065,9 @@ class CaskInstaller:
         self._system_pkg_attempted = False
         self._system_pkg_before_ids: Optional[set[str]] = None
         self._script_results: dict[str, dict[str, Any]] = {}
+        # Whether the cask ``url_options`` headers were actually handed to the
+        # injected downloader (the stock Downloader does not accept headers).
+        self._url_options_applied = False
 
     # -- paths -----------------------------------------------------------
     def room(self, cask: Cask, version: Optional[str] = None) -> Path:
@@ -1029,6 +1098,7 @@ class CaskInstaller:
         self._system_pkg_attempted = False
         self._system_pkg_before_ids = None
         self._script_results = {}
+        self._url_options_applied = False
         self._check_arch_dependency(cask)
         self._check_os_dependency(cask)
         self._check_macos_dependency(cask)
@@ -1057,7 +1127,14 @@ class CaskInstaller:
             if not digest:
                 raise CaskError(f"{cask.token}: no sha256 for {cask.resolved_arch()}")
             hint = f"{cask.token}-{version}.{Path(url.split('?', 1)[0]).suffix or 'download'}"
-            archive = self.downloader.fetch(url, digest, hint=hint)
+            request_headers = cask_request_headers(cask)
+            if request_headers and _download_accepts_headers(self.downloader):
+                archive = self.downloader.fetch(
+                    url, digest, hint=hint, headers=request_headers
+                )
+                self._url_options_applied = True
+            else:
+                archive = self.downloader.fetch(url, digest, hint=hint)
             kind = _archive_kind(archive)
             if cask.container in ("nupkg", "zip"):
                 kind = "zip"
@@ -1076,41 +1153,22 @@ class CaskInstaller:
         if not bookkeeping_only:
             with tempfile.TemporaryDirectory(prefix="pybrew-cask-") as temporary:
                 temp_root = Path(temporary)
-                if kind == "dmg":
-                    if not os.path.exists("/usr/bin/hdiutil"):
-                        raise CaskError("dmg casks require hdiutil (macOS)")
-                    with _MountedImage(archive, temp_root / "mount") as source_root:
-                        installed = self._install_artifacts_with_scripts(
-                            cask, source_root, room, version, force, cwd=source_root
+                try:
+                    if cask.container_nested:
+                        nested = self._extract_nested_container(
+                            cask, archive, kind, temp_root / "outer"
                         )
-                elif kind == "zip":
-                    _safe_extract_zip(archive, temp_root)
-                    installed = self._install_artifacts_with_scripts(
-                        cask, temp_root, room, version, force, cwd=temp_root
+                        kind = _archive_kind(nested)
+                        archive = nested
+                        source_root = temp_root / "payload"
+                    else:
+                        source_root = temp_root
+                    installed = self._install_archive(
+                        cask, archive, kind, room, version, force, source_root
                     )
-                elif kind == "tar":
-                    safe_extract_tar(archive, temp_root)
-                    installed = self._install_artifacts_with_scripts(
-                        cask, temp_root, room, version, force, cwd=temp_root
-                    )
-                elif kind == "7z":
-                    _extract_7z(archive, temp_root)
-                    installed = self._install_artifacts_with_scripts(
-                        cask, temp_root, room, version, force, cwd=temp_root
-                    )
-                elif kind == "rar":
-                    _extract_rar(archive, temp_root)
-                    installed = self._install_artifacts_with_scripts(
-                        cask, temp_root, room, version, force, cwd=temp_root
-                    )
-                elif kind == "pkg":
-                    installed = self._install_artifacts_with_scripts(
-                        cask, archive.parent, room, version, force,
-                        archive=archive, cwd=self.pkg_root,
-                    )
-                else:
+                except CaskError:
                     shutil.rmtree(room, ignore_errors=True)
-                    raise CaskError(f"{cask.token}: unsupported cask archive type for {url}")
+                    raise
         else:
             # A bare stage_only cask still runs its scripts (there are no
             # artifacts, so preflight and postflight are back to back).
@@ -1135,6 +1193,14 @@ class CaskInstaller:
             "scripts_requested": self.run_scripts,
             "script_results": dict(self._script_results),
         }
+        if cask.url_options:
+            # Only the option keys are recorded: header/cookie values can be
+            # sensitive.  ``applied`` is False for the stock Downloader, which
+            # does not accept request headers.
+            receipt["url_options"] = {
+                "applied": self._url_options_applied,
+                "keys": sorted(str(key) for key in cask.url_options),
+            }
         if self._system_pkg_used:
             # No payload paths are recorded for system-wide pkg installs: the
             # macOS installer owns the files on disk.  The package IDs
@@ -1148,6 +1214,101 @@ class CaskInstaller:
             json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
         return CaskInstallResult(cask.token, version, room, installed)
+
+    # -- archive dispatch -------------------------------------------------
+    def _install_archive(
+        self,
+        cask: Cask,
+        archive: Path,
+        kind: str,
+        room: Path,
+        version: str,
+        force: bool,
+        source_root: Path,
+    ) -> list[str]:
+        """Install artifacts from one archive/container into ``source_root``."""
+
+        if kind == "dmg":
+            if not os.path.exists("/usr/bin/hdiutil"):
+                raise CaskError("dmg casks require hdiutil (macOS)")
+            with _MountedImage(archive, source_root / "mount") as mounted:
+                return self._install_artifacts_with_scripts(
+                    cask, mounted, room, version, force, cwd=mounted
+                )
+        if kind == "zip":
+            _safe_extract_zip(archive, source_root)
+        elif kind == "tar":
+            safe_extract_tar(archive, source_root)
+        elif kind == "7z":
+            _extract_7z(archive, source_root)
+        elif kind == "rar":
+            _extract_rar(archive, source_root)
+        elif kind == "pkg":
+            return self._install_artifacts_with_scripts(
+                cask, archive.parent, room, version, force,
+                archive=archive, cwd=self.pkg_root,
+            )
+        else:
+            raise CaskError(
+                f"{cask.token}: unsupported cask archive type for {archive}"
+            )
+        return self._install_artifacts_with_scripts(
+            cask, source_root, room, version, force, cwd=source_root
+        )
+
+    def _extract_nested_container(
+        self, cask: Cask, archive: Path, kind: str, destination: Path
+    ) -> Path:
+        """Extract the outer archive and return its nested container file.
+
+        Only the outer zip/tar/7z/rar containers are supported; nested
+        containers inside a dmg cannot be mounted safely here and raise a clear
+        error.  The ``container nested:`` path is relative to the extracted
+        outer container, may use ``#{version}`` interpolation and, best effort,
+        a glob when it contains wildcard characters.
+        """
+
+        nested = cask._interpolate(cask.container_nested or "").strip()
+        if not nested:
+            raise CaskError(f"{cask.token}: container nested path is empty")
+        nested_path = Path(nested)
+        if nested_path.is_absolute() or ".." in nested_path.parts:
+            raise CaskError(
+                f"{cask.token}: unsafe container nested path {nested!r}"
+            )
+        destination.mkdir(parents=True, exist_ok=True)
+        if kind == "zip":
+            _safe_extract_zip(archive, destination)
+        elif kind == "tar":
+            safe_extract_tar(archive, destination)
+        elif kind == "7z":
+            _extract_7z(archive, destination)
+        elif kind == "rar":
+            _extract_rar(archive, destination)
+        elif kind == "dmg":
+            raise CaskError(
+                f"{cask.token}: nested containers inside a dmg are not supported"
+            )
+        else:
+            raise CaskError(
+                f"{cask.token}: unsupported outer container for nested path "
+                f"{nested!r}"
+            )
+        candidate = destination / nested_path
+        if not candidate.is_file():
+            wildcard = any(character in nested for character in "*?[")
+            matches = (
+                sorted(path for path in destination.glob(nested) if path.is_file())
+                if wildcard
+                else []
+            )
+            if len(matches) != 1:
+                raise CaskError(
+                    f"{cask.token}: nested container {nested!r} not found in "
+                    f"{archive.name}"
+                )
+            candidate = matches[0]
+        return candidate
 
     # -- opt-in cask scripts --------------------------------------------
     def _install_artifacts_with_scripts(

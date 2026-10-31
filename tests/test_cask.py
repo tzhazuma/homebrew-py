@@ -1424,3 +1424,333 @@ end
     assert (applications / "New2.app" / "Contents" / "Info.plist").is_file()
     assert not (applications / "Old1.app").exists()
     assert not (applications / "Old2.app").exists()
+
+
+# ---------------------------------------------------------------------------
+# cask url_options -> download request headers
+# ---------------------------------------------------------------------------
+
+
+class _RecordingDownloader:
+    """Injected downloader that records how the cask archive was fetched."""
+
+    def __init__(self, archive: Path):
+        self.archive = archive
+        self.calls: list[dict[str, object]] = []
+
+    def fetch(
+        self,
+        url: str,
+        sha256: str,
+        hint: str = "download",
+        headers: dict[str, str] | None = None,
+    ) -> Path:
+        self.calls.append(
+            {"url": url, "sha256": sha256, "hint": hint, "headers": headers}
+        )
+        return self.archive
+
+
+def _write_url_option_cask(
+    tap: Path, archive: Path, digest: str, *, options: str = ""
+) -> None:
+    cask_path = tap / "Casks" / "o" / "optiony.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        f'''cask "optiony" do
+  version "1.0"
+  sha256 "{digest}"
+  url "{archive.as_uri()}"{options}
+  app "Optiony.app"
+end
+'''
+    )
+
+
+def test_cask_url_options_passed_to_injectable_downloader(
+    tmp_path: Path,
+) -> None:
+    from pybrew.download import USER_AGENT
+
+    archive = tmp_path / "Optiony.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("Optiony.app/Contents/Info.plist", "<plist/>")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    tap = tmp_path / "tap"
+    _write_url_option_cask(
+        tap,
+        archive,
+        digest,
+        options=(
+            ', header: ["Accept: application/octet-stream", "X-Test: yes"], '
+            'user_agent: :default, referer: "https://example.com", '
+            'cookies: { "a" => "b", "c" => "d" }'
+        ),
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    downloader = _RecordingDownloader(archive)
+    installer = CaskInstaller(
+        config,
+        downloader=downloader,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    installer.install(CaskLoader(discover_taps([tap])).load("optiony"))
+
+    assert len(downloader.calls) == 1
+    assert downloader.calls[0]["headers"] == {
+        "Accept": "application/octet-stream",
+        "X-Test": "yes",
+        "User-Agent": USER_AGENT,
+        "Referer": "https://example.com",
+        "Cookie": "a=b; c=d",
+    }
+    receipt = json.loads(
+        (
+            tmp_path / "prefix" / "Caskroom" / "optiony" / "1.0" / ".metadata"
+            / "receipt.json"
+        ).read_text()
+    )
+    assert receipt["url_options"] == {
+        "applied": True,
+        "keys": ["cookies", "header", "referer", "user_agent"],
+    }
+    assert (tmp_path / "Applications" / "Optiony.app").is_dir()
+
+
+def test_cask_url_options_default_downloader_keeps_working(
+    tmp_path: Path,
+) -> None:
+    archive = tmp_path / "Optiony.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("Optiony.app/Contents/Info.plist", "<plist/>")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    tap = tmp_path / "tap"
+    _write_url_option_cask(
+        tap,
+        archive,
+        digest,
+        options=', header: ["X-Test: yes"], user_agent: :default',
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    # The stock Downloader does not accept headers; the install must still work
+    # and record that the options were not applied.
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    installer.install(CaskLoader(discover_taps([tap])).load("optiony"))
+
+    receipt = json.loads(
+        (
+            tmp_path / "prefix" / "Caskroom" / "optiony" / "1.0" / ".metadata"
+            / "receipt.json"
+        ).read_text()
+    )
+    assert receipt["url_options"] == {
+        "applied": False,
+        "keys": ["header", "user_agent"],
+    }
+    assert (tmp_path / "Applications" / "Optiony.app").is_dir()
+
+
+def test_cask_without_url_options_uses_plain_fetch(tmp_path: Path) -> None:
+    archive = tmp_path / "Plain.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("Plain.app/Contents/Info.plist", "<plist/>")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "p" / "plain.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        f'''cask "plain" do
+  version "1.0"
+  sha256 "{digest}"
+  url "{archive.as_uri()}"
+  app "Plain.app"
+end
+'''
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    downloader = _RecordingDownloader(archive)
+    installer = CaskInstaller(
+        config,
+        downloader=downloader,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    installer.install(CaskLoader(discover_taps([tap])).load("plain"))
+
+    assert downloader.calls[0]["headers"] is None
+    receipt = json.loads(
+        (
+            tmp_path / "prefix" / "Caskroom" / "plain" / "1.0" / ".metadata"
+            / "receipt.json"
+        ).read_text()
+    )
+    assert "url_options" not in receipt
+
+
+def test_cask_request_headers_builder() -> None:
+    from pybrew.cask_installer import cask_request_headers
+    from pybrew.download import USER_AGENT
+
+    cask = parse_cask_source(
+        '''cask "headers" do
+  version "1.0"
+  url "https://example.com/x.zip",
+      header: ["Accept: text/html", "X-One: 1"],
+      user_agent: "custom-agent",
+      referer: "https://example.com",
+      cookies: "session=abc",
+      using: :homebrew_curl,
+      verified: "example.com"
+end
+'''
+    )
+    assert cask_request_headers(cask) == {
+        "Accept": "text/html",
+        "X-One": "1",
+        "User-Agent": "custom-agent",
+        "Referer": "https://example.com",
+        "Cookie": "session=abc",
+    }
+
+    plain = parse_cask_source(
+        'cask "plain" do\n  version "1.0"\n  url "https://example.com/x.zip"\nend\n'
+    )
+    assert cask_request_headers(plain) == {}
+    symbol_agent = parse_cask_source(
+        'cask "ua" do\n  version "1.0"\n'
+        '  url "https://example.com/x.zip", user_agent: :default\nend\n'
+    )
+    assert cask_request_headers(symbol_agent)["User-Agent"] == USER_AGENT
+
+
+# ---------------------------------------------------------------------------
+# container nested: extraction path selection
+# ---------------------------------------------------------------------------
+
+
+def _write_nested_cask(
+    tap: Path, outer: Path, digest: str, nested: str
+) -> None:
+    cask_path = tap / "Casks" / "n" / "nestedy.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        f'''cask "nestedy" do
+  version "1.0"
+  sha256 "{digest}"
+  url "{outer.as_uri()}"
+  container nested: "{nested}"
+  app "Nested.app"
+end
+'''
+    )
+
+
+def test_install_nested_container_zip_in_zip(tmp_path: Path) -> None:
+    inner = tmp_path / "Inner-1.0.zip"
+    with zipfile.ZipFile(inner, "w") as bundle:
+        bundle.writestr("Nested.app/Contents/Info.plist", "<plist/>")
+    outer = tmp_path / "Outer.zip"
+    with zipfile.ZipFile(outer, "w") as bundle:
+        bundle.write(inner, "Inner-1.0.zip")
+    digest = hashlib.sha256(outer.read_bytes()).hexdigest()
+
+    tap = tmp_path / "tap"
+    _write_nested_cask(tap, outer, digest, "Inner-#{version}.zip")
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    installer.install(CaskLoader(discover_taps([tap])).load("nestedy"))
+
+    app = tmp_path / "Applications" / "Nested.app"
+    assert (app / "Contents" / "Info.plist").is_file()
+
+
+def test_install_nested_container_missing_is_a_clear_error(
+    tmp_path: Path,
+) -> None:
+    outer = tmp_path / "Outer.zip"
+    with zipfile.ZipFile(outer, "w") as bundle:
+        bundle.writestr("Other/thing.txt", "x")
+    digest = hashlib.sha256(outer.read_bytes()).hexdigest()
+
+    tap = tmp_path / "tap"
+    _write_nested_cask(tap, outer, digest, "Missing.zip")
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    with pytest.raises(CaskError, match="nested container"):
+        installer.install(CaskLoader(discover_taps([tap])).load("nestedy"))
+
+
+def test_install_nested_container_unsafe_path_is_rejected(
+    tmp_path: Path,
+) -> None:
+    outer = tmp_path / "Outer.zip"
+    with zipfile.ZipFile(outer, "w") as bundle:
+        bundle.writestr("Other/thing.txt", "x")
+    digest = hashlib.sha256(outer.read_bytes()).hexdigest()
+
+    tap = tmp_path / "tap"
+    _write_nested_cask(tap, outer, digest, "../evil.zip")
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    with pytest.raises(CaskError, match="unsafe container nested path"):
+        installer.install(CaskLoader(discover_taps([tap])).load("nestedy"))
+
+
+def test_nested_container_inside_dmg_is_documented(tmp_path: Path) -> None:
+    cask = parse_cask_source(
+        'cask "nesteddmg" do\n  version "1.0"\n'
+        '  url "https://example.com/outer.dmg"\n'
+        '  container nested: "inner.dmg"\n'
+        'end\n'
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    with pytest.raises(CaskError, match="inside a dmg are not supported"):
+        installer._extract_nested_container(
+            cask, tmp_path / "outer.dmg", "dmg", tmp_path / "outer"
+        )

@@ -1583,3 +1583,50 @@ def test_cask_malformed_rename_is_reported(allow_ruby: None) -> None:
     assert [entry["stanza"] for entry in unsupported] == ["rename"]
     warnings = cask.extra["ruby_warnings"]
     assert any("rename" in warning for warning in warnings)
+
+
+@requires_ruby
+def test_evaluator_cask_with_nested_container_installs(
+    tmp_path: Path, allow_ruby: None
+) -> None:
+    import hashlib
+    import zipfile
+
+    from pybrew.cask_installer import CaskInstaller
+    from pybrew.paths import Config
+
+    inner = tmp_path / "Inner-1.0.zip"
+    with zipfile.ZipFile(inner, "w") as bundle:
+        bundle.writestr("Nested.app/Contents/Info.plist", "<plist/>")
+    outer = tmp_path / "Outer.zip"
+    with zipfile.ZipFile(outer, "w") as bundle:
+        bundle.write(inner, "Inner-1.0.zip")
+    digest = hashlib.sha256(outer.read_bytes()).hexdigest()
+
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "n" / "ruby-nested.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        f'''cask "ruby-nested" do
+  version "1.0"
+  sha256 "{digest}"
+  url "{outer.as_uri()}"
+  container nested: "Inner-#{{version}}.zip"
+  app "Nested.app"
+end
+''',
+        encoding="utf-8",
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    installer.install(CaskLoader(discover_taps([tap])).load("ruby-nested"))
+
+    app = tmp_path / "Applications" / "Nested.app"
+    assert (app / "Contents" / "Info.plist").is_file()
