@@ -1171,9 +1171,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `904a273` (Formulary-loaded installer)
-- CI run for `904a273`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41177822138>
+- Latest feature commit: `5023f97` (cask/test-DSL batch)
+- CI run for `5023f97`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41179144597>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
