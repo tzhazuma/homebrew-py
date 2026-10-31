@@ -3794,3 +3794,28 @@ def test_formulary_loaded_formula_inreplace(
         / "data.txt"
     )
     assert installed.read_text() == "hello new"
+
+
+def test_development_tools_extra_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-devtools",
+        "1.0",
+        (
+            '  (prefix/"devtools.txt").write [\n'
+            '    DevelopmentTools.preferred_compiler.to_s,\n'
+            '    (DevelopmentTools.llvm_clang.nil? || DevelopmentTools.llvm_clang.is_a?(Pathname)).to_s,\n'
+            '    (DevelopmentTools.compiler_version.nil? || DevelopmentTools.compiler_version.is_a?(String)).to_s,\n'
+            '    DevelopmentTools.respond_to?(:clang_build).to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "devtools.txt").read_text().splitlines() == [
+        "clang",
+        "true",
+        "true",
+        "true",
+    ]

@@ -922,6 +922,34 @@ module DevelopmentTools
     :clang
   end
 
+  def preferred_compiler
+    default_compiler
+  end
+
+  def llvm_clang
+    Utils.which("llvm-clang") || clang
+  end
+
+  def clang_build
+    clang_build_version
+  end
+
+  def gcc_version
+    output = Utils.popen_read("gcc", "--version", safe: true) rescue ""
+    output[/gcc(?: \([^)]*\))?\s+(\d+(?:\.\d+)+)/, 1]
+  end
+
+  def compiler_version(compiler = default_compiler)
+    case compiler.to_s
+    when "clang"
+      clang_version
+    when "gcc"
+      gcc_version
+    else
+      nil
+    end
+  end
+
   def installed?
     !clang.nil?
   end
