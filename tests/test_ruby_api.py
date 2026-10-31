@@ -3573,3 +3573,30 @@ def test_formula_installer_compatibility_stub(
         "NotImplementedError",
         "true",
     ]
+
+
+def test_formula_install_method_guards_recursion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-install-method",
+        "1.0",
+        (
+            '  count = (prefix/"install-count.txt").exist? ? (prefix/"install-count.txt").read.to_i : 0\n'
+            '  (prefix/"install-count.txt").write((count + 1).to_s)\n'
+            '  if count.zero?\n'
+            '    (prefix/"caveats.txt").write Formula["ruby-install-method"].caveats\n'
+            '  end\n'
+        ),
+    )
+    formula.caveats = (
+        '  Formula["ruby-install-method"].install\n'
+        '  (prefix/"caveats-ran.txt").write("ok")\n'
+        '  "done"\n'
+    )
+    keg = _build(tmp_path, formula)
+    # The install body is already running, so Formula#install must not recurse.
+    assert (keg / "install-count.txt").read_text() == "1"
+    assert (keg / "caveats-ran.txt").read_text() == "ok"
+    assert (keg / "caveats.txt").read_text() == "done"

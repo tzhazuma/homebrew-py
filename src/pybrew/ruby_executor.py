@@ -4210,7 +4210,29 @@ class PybrewFormulaRef
   end
 
   def install
-    nil
+    source = (@info["install_body"] || @info["install_source"]).to_s
+    return nil if source.empty?
+    return nil if @installing || $pybrew_installing_formula == name
+
+    @installing = true
+    paths = {}
+    PybrewInstallContext::PATH_METHODS.each do |method_name|
+      next unless respond_to?(method_name)
+
+      paths[method_name] = public_send(method_name).to_s
+    end
+    context = PybrewInstallContext.new(
+      "paths" => paths,
+      "formula" => { "name" => name, "version" => version.to_s },
+      "verbose" => false
+    )
+    context.instance_eval(source, "install", 1)
+  ensure
+    @installing = false
+  end
+
+  def install_source
+    @info["install_source"].to_s
   end
 
   def depends_on(*_args)
@@ -6117,11 +6139,16 @@ class PybrewTestContext < PybrewInstallContext
 end
 
 context = PybrewInstallContext.new(PYBREW_CONFIG)
-context.instance_eval(
-  PYBREW_BODY,
-  "#{PYBREW_CONFIG['formula']['name']}.rb",
-  PYBREW_CONFIG["body_line"].to_i
-)
+$pybrew_installing_formula = PYBREW_CONFIG["formula"]["name"].to_s
+begin
+  context.instance_eval(
+    PYBREW_BODY,
+    "#{PYBREW_CONFIG['formula']['name']}.rb",
+    PYBREW_CONFIG["body_line"].to_i
+  )
+ensure
+  $pybrew_installing_formula = nil
+end
 '''
 
 
@@ -6362,6 +6389,16 @@ def _livecheck_metadata(formula: Formula) -> Optional[dict[str, Any]]:
     return data
 
 
+def _install_body_for_reference(formula: Formula) -> str:
+    """Return the bare ``def install`` body for ``Formula#install``."""
+
+    try:
+        body, _line = extract_install_body(formula)
+        return body
+    except Exception:
+        return ""
+
+
 def _formula_reference_map(
     formula: Formula, config: Config, keg: Path
 ) -> dict[str, dict[str, Any]]:
@@ -6451,6 +6488,8 @@ def _formula_reference_map(
         "caveats?": bool(formula.caveats),
         "caveats_source": formula.caveats or "",
         "test_source": formula.test_source or "",
+        "install_source": formula.install_source or "",
+        "install_body": _install_body_for_reference(formula),
         "livecheck_source": formula.livecheck_source or "",
         "post_install_source": formula.post_install_source or "",
         "fetch_source": formula.fetch_source or "",

@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-637 passed, 4 skipped in 198.32s
+638 passed, 4 skipped in 388.13s
 ```
 
 Breakdown of the feature slices:
@@ -723,6 +723,12 @@ local remote, commits a change, and confirms the CLI updates it.
 - Added `socket_path`/`socket_text`/`write_socket` and wired socket services to
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
+
+## Formula#install execution
+
+- `Formula#install` now executes the captured bare `def install` body in a
+  `PybrewInstallContext`, with a re-entrancy guard so a formula calling
+  `Formula["self"].install` from inside its own install block is a no-op.
 
 ## Third parallel batch
 
