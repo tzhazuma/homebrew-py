@@ -1383,3 +1383,155 @@ def test_tap_formula_metadata_cache_refreshes(tmp_path: Path) -> None:
     formula.test_source = 'do\n  assert_equal "2.0.1", Formula["tool-x"].version\nend'
     second = run_formula_test(formula, config, ruby=_REAL_RUBY)
     assert second.success is True
+
+
+# ---------------------------------------------------------------------------
+# read-only platform helpers (SDK, OS version, CPU features)
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_macos_sdk_helpers_use_configured_sdk(tmp_path: Path) -> None:
+    sdk = tmp_path / "sdk" / "MacOSX14.5.sdk"
+    sdk.mkdir(parents=True)
+    (sdk / "SDKSettings.json").write_text('{"Version": "14.5"}', encoding="utf-8")
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  path = MacOS.sdk_path
+  assert path.is_a?(Pathname)
+  assert_path_exists path
+  assert_equal "MacOSX14.5.sdk", path.basename.to_s
+  version = MacOS.sdk_version
+  assert_kind_of OS::Mac::Version, version
+  assert_equal "14.5", version.to_s
+  assert_equal "14.5", OS::Mac.sdk_version.to_s
+end
+""",
+    )
+    result = run_formula_test(
+        formula, config, ruby=_REAL_RUBY, env={"PYBREW_SDK_PATH": str(sdk)}
+    )
+    assert result.success is True
+
+
+@requires_ruby
+def test_macos_sdk_version_falls_back_to_directory_name(tmp_path: Path) -> None:
+    sdk = tmp_path / "sdk" / "MacOSX13.3.sdk"
+    sdk.mkdir(parents=True)
+    # A malformed SDKSettings.json must fall back to the directory name.
+    (sdk / "SDKSettings.json").write_text("{not-json", encoding="utf-8")
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  assert_equal "13.3", MacOS.sdk_version.to_s
+end
+""",
+    )
+    result = run_formula_test(
+        formula, config, ruby=_REAL_RUBY, env={"PYBREW_SDK_PATH": str(sdk)}
+    )
+    assert result.success is True
+
+
+@requires_ruby
+def test_macos_sdk_helpers_fall_back_when_missing(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  assert_nil MacOS.sdk_path
+  assert_nil MacOS.sdk_version
+end
+""",
+    )
+    result = run_formula_test(
+        formula,
+        config,
+        ruby=_REAL_RUBY,
+        env={"PYBREW_SDK_PATH": str(tmp_path / "missing-sdk")},
+    )
+    assert result.success is True
+
+
+@requires_ruby
+def test_macos_release_names(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  assert_equal :sonoma, MacOS.version.to_sym
+  assert_equal "Sonoma", MacOS.release_name
+  assert_equal "Sonoma", MacOS.pretty_name
+  assert_equal "Sonoma", MacOS.version.release_name
+  assert_equal "Sonoma", MacOS.version.pretty_name
+end
+""",
+    )
+    result = run_formula_test(
+        formula, config, ruby=_REAL_RUBY, env={"PYBREW_MACOS_VERSION": "14.5.1"}
+    )
+    assert result.success is True
+
+
+@requires_ruby
+def test_macos_release_names_for_unknown_version(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  assert_nil MacOS.release_name
+  assert_equal "Dunno", MacOS.pretty_name
+  assert_equal :dunno, MacOS.version.to_sym
+end
+""",
+    )
+    result = run_formula_test(
+        formula, config, ruby=_REAL_RUBY, env={"PYBREW_MACOS_VERSION": "99.1"}
+    )
+    assert result.success is True
+
+
+@requires_ruby
+def test_os_version_helper(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  if OS.mac?
+    assert_equal MacOS.version.to_s, OS.version.to_s
+  else
+    assert_kind_of String, OS.version
+    refute_empty OS.version
+  end
+  assert_kind_of String, OS.kernel_version
+  refute_empty OS.kernel_version
+end
+""",
+    )
+    result = run_formula_test(
+        formula, config, ruby=_REAL_RUBY, env={"PYBREW_MACOS_VERSION": "14.5.1"}
+    )
+    assert result.success is True
+
+
+@requires_ruby
+def test_hardware_cpu_features_and_flags(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  flags = Hardware::CPU.flags
+  features = Hardware::CPU.features
+  assert_kind_of Array, flags
+  assert_kind_of Array, features
+  assert flags.all? { |flag| flag.is_a?(String) }
+  assert features.all? { |feature| feature.is_a?(Symbol) }
+  assert_equal flags.map(&:to_sym), features
+  assert_equal features.include?(:sse4_2), Hardware::CPU.feature?(:sse4_2)
+  assert_includes [true, false], Hardware::CPU.sse4_2?
+  assert_includes [true, false], Hardware::CPU.avx512?
+  if flags.include?("sse4_2") || flags.include?("sse4.2")
+    assert Hardware::CPU.sse4_2?
+  end
+  assert Hardware::CPU.avx512? if flags.include?("avx512f")
+end
+""",
+    )
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True

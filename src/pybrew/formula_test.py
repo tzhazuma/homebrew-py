@@ -1024,8 +1024,8 @@ class FormulaTestContext
   end
 end
 
-# Minimal read-only platform helpers used by real formula test blocks.  They
-# intentionally cover only the common predicates (no network, no installs).
+# Read-only platform helpers used by real formula test blocks.  Everything here
+# is best-effort and local (no network, no installs).
 module OS
   def self.mac?
     RUBY_PLATFORM.include?("darwin")
@@ -1035,18 +1035,63 @@ module OS
     RUBY_PLATFORM.include?("linux")
   end
 
+  # Kernel release string (for example "25.0.0" on macOS or "6.8.0" on Linux).
+  def self.kernel_version
+    return @kernel_version if defined?(@kernel_version)
+
+    @kernel_version = begin
+      require "etc"
+      Etc.uname.fetch(:release, "unknown").to_s
+    rescue StandardError
+      "unknown"
+    end
+  end
+
+  # OS version: macOS exposes a MacOSVersion, Linux a distribution string.
+  def self.version
+    if mac?
+      Mac.version
+    elsif linux?
+      Linux.os_version
+    else
+      kernel_version
+    end
+  end
+
+  module Linux
+    def self.os_version
+      return @os_version if defined?(@os_version)
+
+      @os_version = begin
+        release_file = "/etc/os-release"
+        text = File.file?(release_file) ? File.read(release_file) : ""
+        pretty = text[/^PRETTY_NAME="?([^"\n]+)"?$/, 1]
+        version_id = text[/^VERSION_ID="?([^"\n]+)"?$/, 1]
+        pretty || version_id || OS.kernel_version
+      rescue StandardError
+        OS.kernel_version
+      end
+    end
+  end
+
   module Mac
     class Version
       include Comparable
 
+      # Named macOS releases (symbol => version prefix).
       SYMBOLS = {
-        ventura: "13",
-        sonoma: "14",
-        sequoia: "15",
+        golden_gate: "27",
         tahoe: "26",
+        sequoia: "15",
+        sonoma: "14",
+        ventura: "13",
         monterey: "12",
         big_sur: "11",
         catalina: "10.15",
+        mojave: "10.14",
+        high_sierra: "10.13",
+        sierra: "10.12",
+        el_capitan: "10.11",
       }.freeze
 
       attr_reader :major, :minor, :patch
@@ -1082,6 +1127,28 @@ module OS
         else
           self.class.new("#{major}.#{minor}")
         end
+      end
+
+      def release_version
+        stripped = strip_patch.to_s
+        SYMBOLS.each do |_name, raw|
+          return raw if self.class.new(raw) == self.class.new(stripped)
+        end
+        stripped
+      end
+
+      def release_name
+        release = release_version
+        SYMBOLS.each do |name, raw|
+          next unless self.class.new(raw) == self.class.new(release)
+
+          return name.to_s.split("_").map(&:capitalize).join(" ")
+        end
+        nil
+      end
+
+      def pretty_name
+        release_name || "Dunno"
       end
 
       def to_sym
@@ -1124,6 +1191,83 @@ module OS
     def self.version
       @version ||= full_version.strip_patch
     end
+
+    def self.release_name
+      version.release_name
+    end
+
+    def self.pretty_name
+      version.pretty_name
+    end
+
+    # Path to a usable macOS SDK (nil when none can be found).
+    def self.sdk_path
+      return @sdk_path if defined?(@sdk_path)
+
+      @sdk_path = begin
+        override = ENV["PYBREW_SDK_PATH"].to_s
+        if !override.empty?
+          candidate = Pathname.new(override)
+          candidate if candidate.directory?
+        elsif OS.mac?
+          raw = `/usr/bin/xcrun --show-sdk-path 2>/dev/null`.strip
+          if !raw.empty? && File.directory?(raw)
+            Pathname.new(raw)
+          else
+            fallback_sdk_path
+          end
+        end
+      rescue StandardError
+        nil
+      end
+    end
+
+    # Version of the selected SDK (nil when unavailable).
+    def self.sdk_version
+      return @sdk_version if defined?(@sdk_version)
+
+      @sdk_version = begin
+        override = ENV["PYBREW_SDK_VERSION"].to_s
+        if !override.empty?
+          Version.new(override)
+        else
+          path = sdk_path
+          path.nil? ? nil : sdk_version_for_path(path)
+        end
+      rescue StandardError
+        nil
+      end
+    end
+
+    def self.sdk_version_for_path(path)
+      settings = path/"SDKSettings.json"
+      if settings.file?
+        begin
+          data = JSON.parse(settings.read)
+          raw = data["Version"] || data["ProductVersion"]
+          if raw.nil? || raw.to_s.empty?
+            match = data["CanonicalName"].to_s.match(/([0-9]+(?:\.[0-9]+)*)/)
+            raw = match[1] unless match.nil?
+          end
+          return Version.new(raw.to_s) unless raw.nil? || raw.to_s.empty?
+        rescue StandardError
+          # Fall through to the directory name.
+        end
+      end
+      match = path.basename.to_s.match(/MacOSX([0-9.]+)\.sdk\z/)
+      match.nil? ? nil : Version.new(match[1])
+    end
+
+    def self.fallback_sdk_path
+      [
+        "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+        "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/" \
+          "Developer/SDKs/MacOSX.sdk",
+      ].each do |candidate|
+        return Pathname.new(candidate) if File.directory?(candidate)
+      end
+      nil
+    end
   end
 end
 
@@ -1148,6 +1292,53 @@ module Hardware
     def self.is_64_bit?
       host_cpu = RbConfig::CONFIG["host_cpu"].to_s
       ["x86_64", "amd64"].include?(host_cpu) || arch == :arm64
+    end
+
+    # Raw CPU feature strings reported by the OS (downcased, deduplicated).
+    def self.flags
+      return @flags if defined?(@flags)
+
+      @flags = begin
+        values = []
+        if OS.mac?
+          sysctl = "/usr/sbin/sysctl -n machdep.cpu.features " \
+                   "machdep.cpu.extfeatures machdep.cpu.leaf7_features"
+          output = `#{sysctl} 2>/dev/null`.to_s
+          values = output.split
+        elsif File.file?("/proc/cpuinfo")
+          text = File.read("/proc/cpuinfo")
+          match = text[/^(?:flags|Features)\s*:\s*(.*)$/, 1]
+          values = match.to_s.split
+        end
+        values.map { |value| value.to_s.downcase }.uniq
+      rescue StandardError
+        []
+      end
+    end
+
+    def self.features
+      @features ||= flags.map { |flag| flag.to_sym }
+    end
+
+    def self.feature?(name)
+      features.include?(name.to_sym)
+    end
+
+    def self.sse4_2?
+      feature?(:sse4_2) || feature?(:"sse4.2") || sysctl_bool?("hw.optional.sse4_2")
+    end
+
+    def self.avx512?
+      feature?(:avx512f) || sysctl_bool?("hw.optional.avx512f")
+    end
+
+    def self.sysctl_bool?(name)
+      return false unless OS.mac?
+
+      output = `/usr/sbin/sysctl -n #{name} 2>/dev/null`.strip
+      output == "1"
+    rescue StandardError
+      false
     end
 
     def self.cores
