@@ -1142,9 +1142,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `c36df9f` (third parallel cask/test-DSL batch)
-- CI run for `c36df9f`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41047927149>
+- Latest feature commit: `c2ab1a7` (Formula#install + upstream :no_linkage)
+- CI run for `c2ab1a7`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41176062917>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
