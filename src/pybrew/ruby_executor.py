@@ -2965,11 +2965,25 @@ class FormulaInstaller
       @fetched ||= []
     end
 
+    # Dependencies skipped because they have no install block or would
+    # recursively install a formula that is already being installed.
+    def skipped
+      @skipped ||= []
+    end
+
+    # Names of Formulary-loaded formulae currently being installed; used to
+    # break dependency cycles.
+    def installing
+      @installing ||= []
+    end
+
     # Test/embedding helper: forget per-process install bookkeeping.
     def reset_tracking!
       @attempted = []
       @installed = []
       @fetched = []
+      @skipped = []
+      @installing = []
       nil
     end
   end
@@ -2988,14 +3002,25 @@ class FormulaInstaller
             "formula sources in pybrew; use pybrew's Python installer for kegs"
     end
 
-    prelude
-    self.class.attempted << formula unless self.class.attempted.include?(formula)
-    fetch
-    install_dependencies
-    build
-    clean
-    finish
-    formula
+    name = formula.name.to_s
+    if self.class.installing.include?(name)
+      record_skipped_dependency(formula)
+      return nil
+    end
+
+    self.class.installing << name
+    begin
+      prelude
+      self.class.attempted << formula unless self.class.attempted.any? { |item| item.to_s == name }
+      fetch
+      install_dependencies
+      build
+      clean
+      finish
+      formula
+    ensure
+      self.class.installing.delete(name)
+    end
   end
 
   # Mirror Homebrew's install flow for Formulary-loaded sources: link the keg
@@ -3109,8 +3134,19 @@ class FormulaInstaller
     keg.link
   end
 
+  # The shim never pours bottles for Formulary-loaded sources: their bottle
+  # blocks are recorded as metadata only, so there is no local bottle to pour.
   def pour_bottle?(output_warning: false)
     false
+  end
+
+  def pour
+    return nil unless formula.is_a?(PybrewLoadedFormula)
+    return nil unless pour_bottle?
+
+    raise NotImplementedError,
+          "FormulaInstaller#pour cannot pour bottles for Formulary-loaded " \
+          "formula sources in pybrew; use pybrew's Python bottle installer"
   end
 
   def install_bottle_for?(_dep, _build)
@@ -3229,14 +3265,74 @@ class FormulaInstaller
     deps
   end
 
+  # Install Formulary-loaded dependencies recursively.  Dependencies without a
+  # loadable install block (or that would recurse into an in-progress install)
+  # are recorded in FormulaInstaller.skipped instead of failing the install.
   def install_dependencies(deps = nil)
     deps = compute_dependencies if deps.nil?
-    deps.each do |dep|
-      unless self.class.installed.any? { |item| item.to_s == dep.to_s }
-        self.class.installed << dep
-      end
-    end
+    deps.each { |dep| install_dependency(dep) }
     deps
+  end
+
+  def install_dependency(dep, dep_formula = nil)
+    dep_formula ||= dependency_formula(dep)
+    unless installable_dependency?(dep_formula)
+      record_skipped_dependency(dep, dep_formula)
+      return nil
+    end
+
+    name = dep_formula.name.to_s
+    if self.class.installing.include?(name)
+      record_skipped_dependency(dep, dep_formula)
+      return nil
+    end
+
+    FormulaInstaller.new(dep_formula, **@options).install
+    unless self.class.installed.any? { |item| item.to_s == dep.to_s }
+      self.class.installed << dep
+    end
+    dep_formula
+  end
+
+  def dependency_formula(dep)
+    candidate = Formulary.factory(dep.name)
+    if !candidate.is_a?(Class) && formula.respond_to?(:path)
+      sibling = sibling_dependency_formula(dep.name)
+      candidate = sibling unless sibling.nil?
+    end
+    return candidate.new if candidate.is_a?(Class) && candidate <= PybrewLoadedFormula
+
+    candidate
+  rescue ScriptError, StandardError
+    nil
+  end
+
+  def sibling_dependency_formula(name)
+    base_path = formula.respond_to?(:path) ? formula.path : nil
+    return nil if base_path.nil? || base_path.to_s.empty?
+
+    sibling = Pathname.new(base_path.to_s).dirname/"#{name}.rb"
+    return nil unless sibling.file?
+
+    Formulary.load_formula_from_path(name, sibling)
+  end
+
+  def installable_dependency?(dep_formula)
+    return false if dep_formula.nil?
+    return false unless dep_formula.is_a?(PybrewLoadedFormula)
+
+    klass = dep_formula.class
+    return true unless klass.loaded_install_block.nil?
+
+    klass.instance_method(:install).owner != PybrewLoadedFormula
+  end
+
+  def record_skipped_dependency(dep, dep_formula = nil)
+    record = dep_formula.nil? ? dep : dep_formula
+    unless self.class.skipped.any? { |item| item.to_s == record.to_s }
+      self.class.skipped << record
+    end
+    nil
   end
 
   def check_conflicts
@@ -5083,16 +5179,25 @@ class Keg
     optlink
   end
 
+  def linked_keg_record
+    homebrew_prefix/"var/homebrew/linked"/name
+  end
+
   def installed?
     @path.directory?
   end
 
   def linked?
+    return false unless File.symlink?(linked_keg_record.to_s)
+
+    File.identical?(linked_keg_record.to_s, @path.to_s)
+  end
+
+  def optlinked?
     return false unless File.symlink?(optlink.to_s)
 
     File.identical?(optlink.to_s, @path.to_s)
   end
-  alias optlinked? linked?
 
   def link
     raise "Keg does not exist: #{@path}" unless installed?
@@ -5117,6 +5222,13 @@ class Keg
       return false
     end
     FileUtils.ln_s(@path.to_s, optlink.to_s) unless optlink.exist?
+
+    record = linked_keg_record
+    FileUtils.mkdir_p(record.dirname.to_s)
+    if File.symlink?(record.to_s) && !File.identical?(record.to_s, @path.to_s)
+      FileUtils.rm_f(record.to_s)
+    end
+    FileUtils.ln_s(@path.to_s, record.to_s) unless File.symlink?(record.to_s)
 
     desired.each do |target, source|
       next if target.exist? || target.symlink?
@@ -5164,6 +5276,11 @@ class Keg
 
     if File.symlink?(optlink.to_s) && File.identical?(optlink.to_s, @path.to_s)
       FileUtils.rm_f(optlink.to_s)
+      removed = true
+    end
+
+    if linked?
+      remove_linked_keg_record
       removed = true
     end
     removed
@@ -5926,7 +6043,7 @@ class PybrewLoadedFormula
                   :loaded_resources, :loaded_patches, :loaded_options,
                   :loaded_head, :loaded_stable, :loaded_fetch_block,
                   :loaded_fails_with, :loaded_namespace, :loaded_class_name,
-                  :loaded_dependencies
+                  :loaded_dependencies, :loaded_path
 
     def name
       @loaded_name || super
@@ -6121,6 +6238,10 @@ class PybrewLoadedFormula
 
   def full_name
     name
+  end
+
+  def path
+    self.class.loaded_path
   end
 
   def version
@@ -6424,6 +6545,7 @@ module Formulary
     klass.loaded_name ||= name.to_s
     klass.loaded_namespace = module_object
     klass.loaded_class_name = expected
+    klass.loaded_path ||= Pathname.new(path.to_s) unless path.nil? || path.to_s.empty?
     klass
   end
 

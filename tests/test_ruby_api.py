@@ -4071,6 +4071,7 @@ def test_formula_installer_install_runs_full_loaded_flow(
             '    (HOMEBREW_PREFIX/"opt"/"loaded-flow").symlink?.to_s,\n'
             '    FormulaInstaller.attempted.map(&:name).join(","),\n'
             '    FormulaInstaller.installed.map(&:name).join(","),\n'
+            '    FormulaInstaller.skipped.map(&:name).join(","),\n'
             '    FormulaInstaller.fetched.map(&:name).join(",")\n'
             '  ].join("\\n")\n'
         ),
@@ -4083,6 +4084,7 @@ def test_formula_installer_install_runs_full_loaded_flow(
         "post",
         "true",
         "loaded-flow",
+        "",
         "dep",
         "dep,loaded-flow",
     ]
@@ -4482,4 +4484,235 @@ def test_formulary_api_placeholders_remain_unavailable(
         "false",
         "PybrewFormulaUnavailableError|true",
         "PybrewFormulaUnavailableError|true",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# FormulaInstaller recursive loaded dependencies, bottle/pour compatibility,
+# and Keg linked-keg record semantics
+# ---------------------------------------------------------------------------
+
+
+def test_formula_installer_recursive_loaded_dependencies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    tap = tmp_path / "dep-tap"
+    tap.mkdir()
+    root_source = tap / "ruby-dep-root.rb"
+    root_source.write_text(
+        'class RubyDepRoot < Formula\n'
+        '  version "1.0"\n'
+        '  depends_on "ruby-dep-child"\n'
+        '  depends_on "ruby-no-install"\n'
+        '  install do\n'
+        '    prefix.mkpath\n'
+        '    (prefix/"root-installed.txt").write("root")\n'
+        '  end\n'
+        'end\n'
+    )
+    (tap / "ruby-dep-child.rb").write_text(
+        'class RubyDepChild < Formula\n'
+        '  version "2.0"\n'
+        '  depends_on "ruby-dep-missing"\n'
+        '  install do\n'
+        '    prefix.mkpath\n'
+        '    (prefix/"child-installed.txt").write("child")\n'
+        '  end\n'
+        'end\n'
+    )
+    (tap / "ruby-no-install.rb").write_text(
+        'class RubyNoInstall < Formula\n'
+        '  version "3.0"\n'
+        'end\n'
+    )
+    formula = _formula(
+        "ruby-dep-root",
+        "1.0",
+        (
+            '  root_path = Formula["ruby-dep-root"].path\n'
+            '  klass = Formulary.load_formula_from_path("ruby-dep-root", root_path)\n'
+            '  FormulaInstaller.new(klass.new).install\n'
+            '  root_prefix = HOMEBREW_PREFIX/"Cellar"/"ruby-dep-root"/"1.0"\n'
+            '  child_prefix = HOMEBREW_PREFIX/"Cellar"/"ruby-dep-child"/"2.0"\n'
+            '  child_path = root_path.dirname/"ruby-dep-child.rb"\n'
+            '  no_install_path = root_path.dirname/"ruby-no-install.rb"\n'
+            '  (prefix/"recursive-deps.txt").write [\n'
+            '    (root_prefix/"root-installed.txt").read,\n'
+            '    (child_prefix/"child-installed.txt").read,\n'
+            '    FormulaInstaller.attempted.map(&:name).join(","),\n'
+            '    FormulaInstaller.installed.map(&:name).join(","),\n'
+            '    FormulaInstaller.skipped.map(&:name).join(","),\n'
+            '    Formulary.formula_class_defined_from_path?(child_path).to_s,\n'
+            '    Formulary.formula_class_defined_from_path?(no_install_path).to_s,\n'
+            '    FormulaInstaller.installing.empty?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.path = root_source
+    keg = _build(tmp_path, formula)
+    assert (keg / "recursive-deps.txt").read_text().splitlines() == [
+        "root",
+        "child",
+        "ruby-dep-root,ruby-dep-child",
+        "ruby-dep-child",
+        "ruby-dep-missing,ruby-no-install",
+        "true",
+        "true",
+        "true",
+    ]
+
+
+def test_formula_installer_loaded_dependency_cycle_guard(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    tap = tmp_path / "cycle-tap"
+    tap.mkdir()
+    cycle_source = tap / "ruby-cycle.rb"
+    cycle_source.write_text(
+        'class RubyCycle < Formula\n'
+        '  version "1.0"\n'
+        '  depends_on "ruby-cycle"\n'
+        '  install do\n'
+        '    prefix.mkpath\n'
+        '    count_file = prefix/"cycle-count.txt"\n'
+        '    count = count_file.exist? ? count_file.read.to_i : 0\n'
+        '    count_file.write((count + 1).to_s)\n'
+        '  end\n'
+        'end\n'
+    )
+    formula = _formula(
+        "ruby-cycle",
+        "1.0",
+        (
+            '  klass = Formulary.load_formula_from_path("ruby-cycle", Formula["ruby-cycle"].path)\n'
+            '  FormulaInstaller.new(klass.new).install\n'
+            '  cycle_prefix = HOMEBREW_PREFIX/"Cellar"/"ruby-cycle"/"1.0"\n'
+            '  (prefix/"cycle.txt").write [\n'
+            '    (cycle_prefix/"cycle-count.txt").read,\n'
+            '    FormulaInstaller.attempted.map(&:name).join(","),\n'
+            '    FormulaInstaller.installed.empty?.to_s,\n'
+            '    FormulaInstaller.skipped.map(&:name).join(","),\n'
+            '    FormulaInstaller.installing.empty?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.path = cycle_source
+    keg = _build(tmp_path, formula)
+    assert (keg / "cycle.txt").read_text().splitlines() == [
+        "1",
+        "ruby-cycle",
+        "true",
+        "ruby-cycle",
+        "true",
+    ]
+
+
+def test_formula_installer_loaded_bottle_pour_semantics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-bottle-fixture",
+        "1.0",
+        (
+            '  path = prefix/"bottle-fixture.rb"\n'
+            '  path.write <<~RUBY\n'
+            '    class BottleFixture < Formula\n'
+            '      version "2.0"\n'
+            '      bottle do\n'
+            '        sha256 "abc"\n'
+            '      end\n'
+            '      install do\n'
+            '        prefix.mkpath\n'
+            '        (prefix/"installed.txt").write("ok")\n'
+            '      end\n'
+            '    end\n'
+            '  RUBY\n'
+            '  klass = Formulary.load_formula_from_path("bottle-fixture", path)\n'
+            '  installer = FormulaInstaller.new(klass.new)\n'
+            '  dep = Object.new\n'
+            '  values = [\n'
+            '    klass.new.bottle?.to_s,\n'
+            '    installer.pour_bottle?.to_s,\n'
+            '    installer.pour_bottle?(output_warning: true).to_s,\n'
+            '    installer.pour.nil?.to_s,\n'
+            '    installer.install_bottle_for?(dep, false).to_s,\n'
+            '    installer.respond_to?(:pour).to_s\n'
+            '  ]\n'
+            '  installer.install\n'
+            '  (prefix/"bottle.txt").write values.join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "bottle.txt").read_text().splitlines() == [
+        "true",
+        "false",
+        "false",
+        "true",
+        "false",
+        "true",
+    ]
+    installed = (
+        tmp_path / "prefix" / "Cellar" / "bottle-fixture" / "2.0" / "installed.txt"
+    )
+    assert installed.read_text() == "ok"
+
+
+def test_keg_linked_keg_record_semantics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-kegrecord2",
+        "1.0",
+        (
+            '  keg_path = Pathname.new(ENV["HOMEBREW_CELLAR"])/"ruby-kegrecord/1.0"\n'
+            '  (keg_path/"bin").mkpath\n'
+            '  (keg_path/"bin"/"tool").write "#!/bin/sh\\n"\n'
+            '  keg = Keg.new(keg_path)\n'
+            '  record = keg.linked_keg_record\n'
+            '  before = [keg.linked?, keg.optlinked?]\n'
+            '  keg.link\n'
+            '  after_link = [keg.linked?, keg.optlinked?]\n'
+            '  record_target = record.symlink? && File.identical?(record.to_s, keg_path.to_s)\n'
+            '  opt_target = File.symlink?(keg.optlink.to_s) &&\n'
+            '               File.identical?(keg.optlink.to_s, keg_path.to_s)\n'
+            '  removed = keg.remove_linked_keg_record\n'
+            '  after_remove = [keg.linked?, keg.optlinked?]\n'
+            '  keg.link\n'
+            '  relinked = keg.linked?\n'
+            '  unlinked = keg.unlink\n'
+            '  (prefix/"kegrecord.txt").write [\n'
+            '    record.to_s,\n'
+            '    before[0].to_s, before[1].to_s,\n'
+            '    after_link[0].to_s, after_link[1].to_s,\n'
+            '    record_target.to_s, opt_target.to_s,\n'
+            '    removed.to_s,\n'
+            '    after_remove[0].to_s, after_remove[1].to_s,\n'
+            '    relinked.to_s,\n'
+            '    unlinked.to_s,\n'
+            '    record.symlink?.to_s,\n'
+            '    File.symlink?(keg.optlink.to_s).to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    prefix = tmp_path / "prefix"
+    assert (keg / "kegrecord.txt").read_text().splitlines() == [
+        str(prefix / "var" / "homebrew" / "linked" / "ruby-kegrecord"),
+        "false",
+        "false",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "false",
+        "true",
+        "true",
+        "true",
+        "false",
+        "false",
     ]
