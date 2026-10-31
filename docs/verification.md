@@ -1187,9 +1187,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `10d3e93` (loaded formula install helpers)
-- CI run for `10d3e93`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41179895501>
+- Latest feature commit: `fbe7f8c` (four-stream Ruby/cask/test/build batch)
+- CI run for `fbe7f8c`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41182191768>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
