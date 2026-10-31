@@ -3758,3 +3758,39 @@ def test_formulary_loaded_formula_metadata_blocks(
         "https://example.com/head",
         "false",
     ]
+
+
+def test_formulary_loaded_formula_inreplace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-loaded-inreplace",
+        "1.0",
+        (
+            '  path = prefix/"loaded-inreplace.rb"\n'
+            '  path.write <<~RUBY\n'
+            '    class LoadedInreplace < Formula\n'
+            '      version "2.0"\n'
+            '      install do\n'
+            '        prefix.mkpath\n'
+            '        (prefix/"data.txt").write("hello old")\n'
+            '        inreplace prefix/"data.txt", "old", "new"\n'
+            '        ohai "loaded install"\n'
+            '      end\n'
+            '    end\n'
+            '  RUBY\n'
+            '  klass = Formulary.load_formula_from_path("loaded-inreplace", path)\n'
+            '  FormulaInstaller.new(klass.new).install\n'
+        ),
+    )
+    _build(tmp_path, formula)
+    installed = (
+        tmp_path
+        / "prefix"
+        / "Cellar"
+        / "loaded-inreplace"
+        / "2.0"
+        / "data.txt"
+    )
+    assert installed.read_text() == "hello new"

@@ -5411,6 +5411,35 @@ module Formula
   end
 end
 
+class PybrewInreplaceHelper
+  attr_reader :inreplace_string
+
+  def initialize(string)
+    @inreplace_string = string.to_s
+  end
+
+  def gsub!(before, after)
+    @inreplace_string = @inreplace_string.gsub(before.to_s, after.to_s)
+    self
+  end
+
+  def sub!(before, after)
+    @inreplace_string = @inreplace_string.sub(before.to_s, after.to_s)
+    self
+  end
+
+  def change_make_var!(variable, value)
+    gsub!(/^#{Regexp.escape(variable.to_s)}\s*=.*$/, "#{variable}=#{value}")
+  end
+
+  def remove_make_var!(variable)
+    @inreplace_string = @inreplace_string.lines.reject do |line|
+      line.start_with?("#{variable}=")
+    end.join
+    self
+  end
+end
+
 class PybrewLoadedFormula
   class << self
     def loaded_classes
@@ -5730,6 +5759,30 @@ class PybrewLoadedFormula
   def install
     block = self.class.loaded_install_block
     instance_eval(&block) if block
+  end
+
+  def inreplace(path, before = nil, after = nil, &block)
+    path = Pathname.new(path.to_s)
+    text = path.read
+    if block
+      helper = PybrewInreplaceHelper.new(text)
+      block.call(helper)
+      text = helper.inreplace_string
+    else
+      text = text.gsub(before.to_s, after.to_s)
+    end
+    path.write(text)
+    nil
+  end
+
+  def ohai(*messages)
+    messages.each { |message| puts "==> #{message}" }
+    nil
+  end
+
+  def opoo(*messages)
+    messages.each { |message| puts "Warning: #{message}" }
+    nil
   end
 
   def caveats

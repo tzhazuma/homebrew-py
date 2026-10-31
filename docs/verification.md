@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-654 passed, 4 skipped in 181.77s
+655 passed, 4 skipped in 264.74s
 ```
 
 Breakdown of the feature slices:
@@ -723,6 +723,11 @@ local remote, commits a change, and confirms the CLI updates it.
 - Added `socket_path`/`socket_text`/`write_socket` and wired socket services to
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
+
+## Formulary loaded install helpers
+
+- `PybrewLoadedFormula` install blocks can use `inreplace` (string and block
+  forms with gsub!/sub!/make-var helpers), `ohai` and `opoo`.
 
 ## Cask livecheck / MacOS helpers + Test DSL tap lookup
 
