@@ -382,6 +382,9 @@ def _spec_from_result(data: dict[str, Any], formula: Formula) -> ServiceSpec:
             _apply_service_directive(spec, name, [value])
         except ServiceError as error:
             raise ServiceError(f"{formula.name}: {error}") from error
+    warnings = data.get("warnings")
+    if isinstance(warnings, list):
+        spec.warnings = [str(warning) for warning in warnings]
     return spec
 
 

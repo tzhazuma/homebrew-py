@@ -685,3 +685,12 @@ def test_service_custom_names(
     manager.backend = "systemd"
     assert manager.label(formula, spec) == "custom-svc"
     assert manager.unit_path(formula, spec).name == "custom-svc.service"
+
+
+def test_unknown_service_directive_is_warned(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula_with_service('run [opt_bin/"svc"]\nfrobnicate "x"')
+    spec = parse_service_block(formula, config)
+    assert spec.warnings == ["unsupported service directive `frobnicate`"]

@@ -75,6 +75,7 @@ class ServiceSpec:
     input_path: Optional[str] = None
     cron: dict[str, Any] = field(default_factory=dict)
     sockets: dict[str, dict[str, str]] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
 
 
 class _ServiceValueParser:
@@ -510,8 +511,10 @@ def _apply_service_directive(spec: ServiceSpec, name: str, args: list[Any]) -> N
         spec.cron = _parse_cron(args[0])
     elif name == "sockets":
         spec.sockets = _parse_sockets(args)
-    # Unknown directives (nice, run_type, cron, ...) are intentionally ignored
-    # so pybrew keeps reading formulae that use newer Homebrew DSL features.
+    else:
+        # Keep reading formulae that use newer Homebrew DSL features, but make
+        # the unsupported directive visible instead of silently dropping it.
+        spec.warnings.append(f"unsupported service directive `{name}`")
 
 
 class SystemctlRunner:

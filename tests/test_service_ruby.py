@@ -244,6 +244,7 @@ def test_fake_ruby_json_is_converted_to_service_spec(
     assert spec.sockets == {
         "http": {"host": "127.0.0.1", "port": "8080", "type": "tcp"}
     }
+    assert spec.warnings == ["unsupported service directive `nice`"]
 
 
 @pytest.mark.parametrize(
