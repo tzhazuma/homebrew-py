@@ -1208,9 +1208,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `b6afcbc` (fifth parallel batch)
-- CI run for `b6afcbc`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41184364649>
+- Latest feature commit: `4457df6` (sixth parallel batch)
+- CI run for `4457df6`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41185581692>
   - `test (ubuntu-latest, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
