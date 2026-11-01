@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-714 passed, 5 skipped in 178.54s
+728 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -724,6 +724,20 @@ local remote, commits a change, and confirms the CLI updates it.
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
 
+## Seventh parallel batch
+
+- Formulary API-struct cache: `load_formula_from_struct!` populates a cache
+  read by `formula_class_defined_from_api?` / `formula_class_get_from_api`;
+  `clear_cache` resets it.
+- Downloader now supports `headers:` for HTTP(S); cask `url_options` reach the
+  stock downloader and receipts record `applied=true`.
+- Service CLI: `services info` includes `warnings`; start/stop/restart/run
+  print them to stderr.
+- `Tab.for_name` selects the latest keg by version, not mtime; CI pins Python
+  3.9 to `ubuntu-22.04` (Ubuntu 26.04 no longer has 3.9).
+- Upstream sync `1f55ebf835` (2026-10-31): `determine_active_spec` prefers the
+  requested head/stable spec and `Keg#aliases` rejects unsafe names.
+
 ## Sixth parallel batch
 
 - FormulaInstaller: recursive loaded-source dependency install, cycle/skip
@@ -1208,10 +1222,10 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `4457df6` (sixth parallel batch)
-- CI run for `4457df6`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41185581692>
-  - `test (ubuntu-latest, py3.9)` — success
+- Latest feature commit: `740bd01` (seventh batch + upstream sync)
+- CI run for `740bd01`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41259825843>
+  - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
 - Upstream tracking workflow dispatch:
