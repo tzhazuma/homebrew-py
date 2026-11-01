@@ -4808,3 +4808,25 @@ def test_keg_linked_keg_record_semantics(
         "false",
         "false",
     ]
+
+
+def test_formula_active_spec_prefers_requested(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-active-spec",
+        "1.0",
+        (
+            '  ref = Formula["ruby-active-spec"]\n'
+            '  (prefix/"activespec.txt").write [\n'
+            '    ref.determine_active_spec(:stable).url.to_s,\n'
+            '    ref.determine_active_spec(:head).url.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.stable = SourceSpec(url="https://example.com/ruby-active-spec-1.0.tar.gz")
+    keg = _build(tmp_path, formula)
+    lines = (keg / "activespec.txt").read_text().splitlines()
+    assert lines[0] == "https://example.com/ruby-active-spec-1.0.tar.gz"
+    assert lines[1] == lines[0]

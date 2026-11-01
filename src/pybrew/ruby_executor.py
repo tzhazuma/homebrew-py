@@ -4105,7 +4105,10 @@ class PybrewFormulaRef
   end
 
   def determine_active_spec(requested)
-    send(requested) || stable || head
+    wanted_head = requested.to_sym == :head
+    preferred = wanted_head ? head : stable
+    fallback = wanted_head ? stable : head
+    preferred.url ? preferred : (fallback.url ? fallback : preferred)
   end
 
   def update_head_version
@@ -5441,7 +5444,9 @@ class Keg
   end
 
   def aliases
-    tab.aliases
+    Array(tab.aliases).map(&:to_s).reject do |alias_name|
+      alias_name.include?("/") || ["", ".", ".."].include?(alias_name)
+    end
   end
 
   def empty_installation?
