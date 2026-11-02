@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-754 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+755 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -724,6 +724,13 @@ local remote, commits a change, and confirms the CLI updates it.
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
 
+## Dynamic local formula lookup
+
+- Local taps with at most 200 indexed formulae are preloaded into the test
+  context, so dynamic `Formula[expression]` lookups resolve uninstalled
+  formulae from the same tap (clear "not installed" error instead of
+  "not available").
+
 ## Service object compatibility helpers
 
 - Added service-DSL compatibility methods for command/manual command,
@@ -1367,9 +1374,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `59c218b` (Service object compatibility helpers)
-- CI run for `59c218b`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41528918024>
+- Latest feature commit: `38f3756` (dynamic local formula lookup)
+- CI run for `38f3756`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41530816009>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
