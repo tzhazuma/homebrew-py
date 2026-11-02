@@ -854,6 +854,46 @@ module MacOS
     ""
   end
 
+  def self.full_version=(value)
+    @full_version = Version.new(value.to_s)
+    @version = nil
+    @version
+  end
+
+  def self.mdfind(query)
+    Utils.popen_read("mdfind", query.to_s).to_s
+  end
+
+  def self.mdfind_query(bundle_id)
+    "kMDItemCFBundleIdentifier == '#{bundle_id}'"
+  end
+
+  def self.app_with_bundle_id(*bundle_ids)
+    ids = bundle_ids.flatten.compact.map(&:to_s)
+    return nil if ids.empty?
+
+    query = ids.map { |bundle_id| mdfind_query(bundle_id) }.join(" || ")
+    output = mdfind(query).to_s
+    line = output.each_line.map(&:strip).reject(&:empty?).first
+    line.nil? ? nil : Pathname.new(line)
+  end
+
+  def self.pkgutil_info(pkg)
+    Utils.popen_read("/usr/sbin/pkgutil", "--pkg-info", pkg.to_s).to_s
+  end
+
+  def self.sdk_locator
+    self
+  end
+
+  def self.sdk_for_formula(_formula, version = nil)
+    sdk(version)
+  end
+
+  def self.sdk_path_if_needed(version = nil)
+    sdk_path(version)
+  end
+
   module CLT
     def self.installed?
       path = `/usr/bin/xcode-select -print-path 2>/dev/null`.to_s.strip

@@ -5416,3 +5416,40 @@ def test_resource_download_and_metadata_helpers(
         "ruby-resource-helpers",
         "0",
     ]
+
+
+def test_macos_mdfind_and_version_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    mdfind = bindir / "mdfind"
+    mdfind.write_text("#!/bin/sh\nprintf '/Applications/Example.app\\n'\n")
+    mdfind.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}:{os.environ.get('PATH', '')}")
+
+    formula = _formula(
+        "ruby-macos-helpers",
+        "1.0",
+        (
+            '  MacOS.full_version = "14.1"\n'
+            '  (prefix/"macos-helpers.txt").write [\n'
+            '    MacOS.mdfind("query").strip,\n'
+            '    MacOS.mdfind_query("com.example.app"),\n'
+            '    MacOS.app_with_bundle_id("com.example.app").to_s,\n'
+            '    MacOS.full_version.to_s,\n'
+            '    MacOS.pkgutil_info("missing.pkg").is_a?(String).to_s,\n'
+            '    MacOS.sdk_locator.equal?(MacOS).to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "macos-helpers.txt").read_text().splitlines() == [
+        "/Applications/Example.app",
+        "kMDItemCFBundleIdentifier == 'com.example.app'",
+        "/Applications/Example.app",
+        "14.1",
+        "true",
+        "true",
+    ]
