@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-742 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+743 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -724,6 +724,15 @@ local remote, commits a change, and confirms the CLI updates it.
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
 
+## FormulaInstaller method surface
+
+- Added the remaining Homebrew FormulaInstaller method names as bounded
+  compatibility methods (`downloadable`, `build_args`, `selected_bottle`,
+  `audit_installed`, `check_installation_already_attempted`, staging/fetch/
+  linkage/sandbox no-ops, etc.).
+- Method-name audit now reports 0 missing FormulaInstaller methods; real
+  bottle/pour/Tab/SBOM/linkage work remains Python-side.
+
 ## Formulary loader/rack helpers
 
 - Added `Formulary.to_rack`, `canonical_name`, `core_path`,
@@ -1292,9 +1301,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `003c1f9` (Formulary loader/rack helpers)
-- CI run for `003c1f9`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41500204696>
+- Latest feature commit: `46e9a66` (FormulaInstaller surface)
+- CI run for `46e9a66`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41502231032>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
