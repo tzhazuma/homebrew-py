@@ -7386,6 +7386,40 @@ module Formulary
   def load_from_api(name)
     formula_class_get_from_api(name)
   end
+
+  def from_contents(name, path, contents, spec = :stable, **options)
+    dir = Dir.mktmpdir("pybrew-from-contents-")
+    file = Pathname.new(dir)/"#{File.basename(name.to_s, ".rb")}.rb"
+    file.write(contents.to_s)
+    klass = load_formula_from_path(
+      name.to_s,
+      file,
+      flags: options[:flags] || [],
+      ignore_errors: options[:ignore_errors] || false
+    )
+    klass.new
+  ensure
+    FileUtils.remove_entry(dir) if dir && File.directory?(dir)
+  end
+
+  def get_formula(ref, spec = :stable, **options)
+    factory(ref, spec, **options)
+  end
+
+  def klass(ref, **options)
+    reference = Formula[ref]
+    loaded = factory_load_source(reference, options)
+    loaded || reference.class
+  end
+
+  def load_file(name, path, **options)
+    load_formula_from_path(
+      name.to_s,
+      Pathname.new(path.to_s),
+      flags: options[:flags] || [],
+      ignore_errors: options[:ignore_errors] || false
+    )
+  end
 end
 
 class PybrewResource

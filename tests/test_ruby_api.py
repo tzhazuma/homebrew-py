@@ -5269,3 +5269,36 @@ def test_formula_installer_internal_compatibility_surface(
         "true",
         "false",
     ]
+
+
+def test_formulary_from_contents_and_load_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-from-contents",
+        "1.0",
+        (
+            '  source = "class FromContents < Formula\\n'
+            '  desc \\"contents desc\\"\\n'
+            '  homepage \\"https://example.com/from-contents\\"\\n'
+            '  url \\"https://example.com/from-contents-1.0.tar.gz\\"\\n'
+            '  version \\"1.0\\"\\n'
+            '  def install; nil; end\\n'
+            'end\\n"\n'
+            '  loaded = Formulary.from_contents(\n'
+            '    "from-contents", Pathname.new("/tmp/from-contents.rb"), source\n'
+            '  )\n'
+            '  (prefix/"from-contents.txt").write [\n'
+            '    loaded.is_a?(PybrewLoadedFormula).to_s,\n'
+            '    loaded.desc.to_s,\n'
+            '    loaded.version.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "from-contents.txt").read_text().splitlines() == [
+        "true",
+        "contents desc",
+        "1.0",
+    ]
