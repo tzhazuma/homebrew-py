@@ -1987,3 +1987,39 @@ def test_cask_source_platform_and_pin_helpers(
     assert cask.pinned_version() == "2.0"
     cask.unpin()
     assert cask.pinned() is False
+
+
+def test_cask_serialization_and_ref_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOMEBREW_PREFIX", str(tmp_path / "prefix"))
+    source = tmp_path / "serial.rb"
+    source.write_text("cask 'serial'")
+    cask = Cask(
+        token="serial",
+        path=source,
+        version="3.0",
+        sha256="deadbeef",
+        url="https://example.com/serial.zip",
+        name="Serial",
+        desc="serial cask",
+        artifacts=[Artifact("app", "Serial.app")],
+        renames=[("old-serial", "serial")],
+        extra={"custom": "value"},
+    )
+    room = tmp_path / "prefix" / "Caskroom" / "serial" / "3.0"
+    room.mkdir(parents=True)
+    assert cask.to_s() == "serial"
+    assert cask.inspect() == "#<Cask:serial@3.0>"
+    assert cask.hash() == hash("serial")
+    assert cask.reloadable_ref() == source
+    assert cask.tap_git_head() is None
+    assert cask.new_download_sha() == "deadbeef"
+    assert cask.download_sha_path() == cask.caskroom_path / ".metadata" / "download_sha"
+    assert isinstance(cask.install_time(), float)
+    payload = cask.to_h()
+    assert payload["token"] == "serial"
+    assert payload["sha256"] == "deadbeef"
+    assert payload["artifacts"][0]["kind"] == "app"
+    assert payload["renames"] == [["old-serial", "serial"]]
+    assert payload["custom"] == "value"

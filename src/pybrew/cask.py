@@ -216,6 +216,59 @@ class Cask:
             return {}
         return payload if isinstance(payload, dict) else {}
 
+    def reloadable_ref(self) -> Optional[Path]:
+        return self.path
+
+    def tap_git_head(self) -> Optional[str]:
+        return None
+
+    def new_download_sha(self) -> Optional[str]:
+        return self.resolved_sha256()
+
+    def download_sha_path(self) -> Path:
+        return self.caskroom_path / ".metadata" / "download_sha"
+
+    def install_time(self) -> Optional[float]:
+        try:
+            return self.caskroom_path.stat().st_mtime
+        except OSError:
+            return None
+
+    def to_s(self) -> str:
+        return self.full_name
+
+    def inspect(self) -> str:
+        return f"#<Cask:{self.full_name}@{self.version or 'latest'}>"
+
+    def hash(self) -> int:
+        return hash(self.full_name)
+
+    def to_h(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "token": self.token,
+            "full_name": self.full_name,
+            "tap": self.tap,
+            "version": self.version,
+            "sha256": self.resolved_sha256(),
+            "url": self.url,
+            "name": self.name,
+            "desc": self.desc,
+            "homepage": self.homepage,
+            "artifacts": [
+                {
+                    "kind": artifact.kind,
+                    "source": artifact.source,
+                    "target": artifact.target,
+                    "kwargs": dict(artifact.kwargs),
+                }
+                for artifact in self.artifacts
+            ],
+            "renames": [list(rename) for rename in self.renames],
+            "caveats": self.caveats,
+        }
+        payload.update(self.extra)
+        return payload
+
     def ruby_source_path(self) -> Optional[Path]:
         return self.path if self.path is not None and self.path.is_file() else None
 
