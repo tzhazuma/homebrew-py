@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 from .errors import FormulaParseError, PybrewError
 from .models import is_linux, is_macos, macos_major_version
+from .version import compare_versions
 from .ruby_parser import Lexer, Token
 
 
@@ -186,6 +187,63 @@ class Cask:
 
     def checksumable(self) -> bool:
         return bool(self.sha256 or self.sha256_map)
+
+    @staticmethod
+    def compare_version_strings(first: str, second: str) -> int:
+        """Compare two cask version strings (Homebrew-like ordering)."""
+        return compare_versions(str(first), str(second))
+
+    def rename_list(self) -> list[tuple[str, str]]:
+        return list(self.renames)
+
+    def old_tokens(self) -> list[str]:
+        return [old for old, _new in self.renames]
+
+    def caveats_object(self) -> Optional[str]:
+        return self.caveats
+
+    def caveats_for_api(self) -> dict[str, Any]:
+        if self.caveats is None:
+            return {}
+        return {"caveats": self.caveats}
+
+    def loaded_from_metadata(self) -> bool:
+        return False
+
+    def platform_supported(self) -> bool:
+        os_stanza = self.os or {}
+        if not os_stanza:
+            return True
+        if is_macos():
+            return bool(os_stanza.get("macos", True))
+        if is_linux():
+            return bool(os_stanza.get("linux", True))
+        return True
+
+    def installable_artifact(self) -> Optional[Artifact]:
+        for artifact in self.artifacts:
+            if artifact.kind not in {"artifact", "stage_only"}:
+                return artifact
+        return None
+
+    def to_h_with_language_variations(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "token": self.token,
+            "full_token": self.full_name,
+            "version": self.version,
+            "url": self.url,
+            "homepage": self.homepage,
+            "name": self.name,
+        }
+        payload.update(self.extra)
+        return {key: value for key, value in payload.items() if value is not None}
+
+    def to_installed_json_hash(self) -> dict[str, Any]:
+        return {
+            "token": self.token,
+            "version": self.version,
+            "installed_versions": self.installed_versions(),
+        }
 
     def resolved_version(self) -> str:
         return self.version or "latest"

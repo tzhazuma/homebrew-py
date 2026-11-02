@@ -1894,3 +1894,35 @@ end
     with pytest.raises(CaskError, match="verified pattern"):
         mismatch.install(CaskLoader(discover_taps([tap])).load("verified"))
     assert not (mismatch_config.caskroom / "verified" / "1.0").exists()
+
+
+def test_cask_metadata_helper_methods(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOMEBREW_PREFIX", str(tmp_path / "prefix"))
+    cask = Cask(
+        token="meta",
+        version="1.10",
+        url="https://example.com/meta.zip",
+        name="Meta",
+        caveats="Use it.",
+        renames=[("old-meta", "meta")],
+        artifacts=[Artifact("app", "Meta.app")],
+        extra={"custom": "value"},
+    )
+    assert Cask.compare_version_strings("1.10", "1.9") > 0
+    assert Cask.compare_version_strings("1.0", "1.0") == 0
+    assert cask.rename_list() == [("old-meta", "meta")]
+    assert cask.old_tokens() == ["old-meta"]
+    assert cask.caveats_object() == "Use it."
+    assert cask.caveats_for_api() == {"caveats": "Use it."}
+    assert cask.loaded_from_metadata() is False
+    assert cask.platform_supported() is True
+    assert cask.installable_artifact().kind == "app"
+    payload = cask.to_h_with_language_variations()
+    assert payload["token"] == "meta"
+    assert payload["full_token"] == "meta"
+    assert payload["custom"] == "value"
+    assert cask.to_installed_json_hash() == {
+        "token": "meta",
+        "version": "1.10",
+        "installed_versions": [],
+    }
