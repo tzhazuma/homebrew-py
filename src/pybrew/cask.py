@@ -216,6 +216,24 @@ class Cask:
             return {}
         return payload if isinstance(payload, dict) else {}
 
+    @classmethod
+    def all(cls) -> list["Cask"]:
+        """Bounded placeholder: discovery requires a configured tap set."""
+        return []
+
+    def config_path(self) -> Path:
+        return self.caskroom_path / ".metadata" / "config.json"
+
+    def languages(self) -> list[str]:
+        return [self.language] if self.language else ["en"]
+
+    def download_strategy(self) -> Optional[str]:
+        value = (self.url_options or {}).get("using")
+        return str(value) if value is not None else None
+
+    def using(self) -> Optional[str]:
+        return self.download_strategy()
+
     def api_to_local_hash(self) -> dict[str, Any]:
         payload = {
             "token": self.token,

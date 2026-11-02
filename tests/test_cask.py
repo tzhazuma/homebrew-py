@@ -2062,3 +2062,21 @@ def test_cask_api_refresh_and_variation_helpers(
     assert populated.token == "populated"
     assert populated.version == "2.0"
     assert populated.artifacts[0].source == "Populated.app"
+
+
+def test_cask_config_language_and_strategy_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOMEBREW_PREFIX", str(tmp_path / "prefix"))
+    cask = Cask(
+        token="strategy",
+        version="1.0",
+        language="zh",
+        url_options={"using": ":curl"},
+    )
+    assert Cask.all() == []
+    assert cask.config_path() == cask.caskroom_path / ".metadata" / "config.json"
+    assert cask.languages() == ["zh"]
+    assert cask.download_strategy() == ":curl"
+    assert cask.using() == ":curl"
+    assert Cask(token="default").languages() == ["en"]
