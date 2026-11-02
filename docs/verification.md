@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-749 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+750 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -724,6 +724,12 @@ local remote, commits a change, and confirms the CLI updates it.
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
 
+## Cask installed app bundle helpers
+
+- Added `installed`, `installed_version`, `outdated`,
+  `installed_app_info_plist`, `installed_app_info`, `bundle_version`,
+  `bundle_short_version`, `bundle_long_version` (Info.plist based).
+
 ## Compiler GCC probing
 
 - `DevelopmentTools.gcc_version(cc)` now probes the requested compiler.
@@ -1338,9 +1344,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `4beafb5` (compiler GCC probing)
-- CI run for `4beafb5`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41518231814>
+- Latest feature commit: `c35f256` (Cask app bundle helpers)
+- CI run for `c35f256`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41522328884>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
