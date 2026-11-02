@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-736 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+738 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -724,6 +724,15 @@ local remote, commits a change, and confirms the CLI updates it.
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
 
+## Formula/Keg inventory + cleanup
+
+- Added `Formula.installed`, `names`, `full_names`, `aliases`,
+  `core_names`/`core_aliases`, `tap_names`/`tap_aliases`, `racks`,
+  `tap_files`, `installed_with_alias_path`, `alias_full_names`,
+  `fuzzy_search`.
+- Added `Keg#delete_pyc_files!`, `remove_alias_symlink`,
+  `consistent_reproducible_symlink_permissions!`, `normalize_pod2man_outputs!`.
+
 ## Eighth parallel batch
 
 - FormulaInstaller loaded-source installs write a minimal
@@ -1250,9 +1259,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `d0ca084` (loaded receipts + versioned SDK helpers)
-- CI run for `d0ca084`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41414562196>
+- Latest feature commit: `5e71d22` (inventory/cleanup helpers)
+- CI run for `5e71d22`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41491510866>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
