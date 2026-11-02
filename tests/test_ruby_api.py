@@ -4855,3 +4855,32 @@ def test_formula_rack_installed_class_helpers(
         "false",
         "true",
     ]
+
+
+def test_formula_specs_and_build_accessors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-spec-accessors",
+        "1.0",
+        (
+            '  ref = Formula["ruby-spec-accessors"]\n'
+            '  ref.active_spec = :head\n'
+            '  ref.build = :build_marker\n'
+            '  (prefix/"spec-accessors.txt").write [\n'
+            '    ref.spec_syms.join(","),\n'
+            '    ref.specs.map { |spec| spec.spec.to_s }.join(","),\n'
+            '    ref.active_spec.to_s,\n'
+            '    ref.build.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.stable = SourceSpec(url="https://example.com/spec-accessors-1.0.tar.gz")
+    keg = _build(tmp_path, formula)
+    assert (keg / "spec-accessors.txt").read_text().splitlines() == [
+        "stable,head",
+        "stable,head",
+        "stable",
+        "build_marker",
+    ]

@@ -4321,6 +4321,27 @@ class PybrewFormulaRef
     spec
   end
 
+  def active_spec=(sym)
+    @active_spec_sym = sym.to_sym
+    sym
+  end
+
+  def specs
+    [stable, head]
+  end
+
+  def spec_syms
+    [:stable, :head]
+  end
+
+  def spec_eval(*_args)
+    nil
+  end
+
+  def build=(tab)
+    @build = tab
+  end
+
   def stable
     PybrewSourceSpec.new(@info["stable"] || {}, :stable)
   end
@@ -5010,11 +5031,11 @@ class PybrewFormulaRef
   end
 
   def spec_syms
-    []
+    [:stable, :head]
   end
 
   def specs
-    {}
+    [stable, head]
   end
 
   def bottle_tab_attributes
