@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from pybrew.cask import CaskError, parse_cask_file, parse_cask_source
+from pybrew.cask import Artifact, Cask, CaskError, parse_cask_file, parse_cask_source
 from pybrew.cask_installer import CaskInstaller, CaskLoader
 from pybrew.paths import Config
 from pybrew.taps import discover_taps
@@ -1816,3 +1816,41 @@ def test_nested_container_inside_dmg_is_documented(tmp_path: Path) -> None:
         installer._extract_nested_container(
             cask, tmp_path / "outer.dmg", "dmg", tmp_path / "outer"
         )
+
+
+def test_cask_installed_inventory_helpers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOMEBREW_PREFIX", str(tmp_path / "prefix"))
+    cask = Cask(
+        token="demo",
+        version="2.0",
+        sha256="abc",
+        url="https://example.com/demo-2.0.zip",
+        artifacts=[
+            Artifact("app", "Demo.app"),
+            Artifact("font", "Demo.ttf"),
+        ],
+    )
+    room = tmp_path / "prefix" / "Caskroom" / "demo"
+    (room / "1.0").mkdir(parents=True)
+    (room / "2.0").mkdir()
+    metadata = room / ".metadata" / "2.0" / "20260101000000" / "Casks"
+    metadata.mkdir(parents=True)
+    (metadata / "demo.rb").write_text("cask 'demo'")
+
+    assert cask.full_token == "demo"
+    assert cask.caskroom_path == room
+    assert cask.installed_versions() == ["1.0", "2.0"]
+    assert cask.timestamped_versions() == ["1.0", "2.0"]
+    assert cask.installed_caskfile() == metadata / "demo.rb"
+    assert cask.outdated_version() == "1.0"
+    assert cask.outdated_info() == {
+        "token": "demo",
+        "current_version": "2.0",
+        "installed_version": "1.0",
+        "installed_versions": ["1.0", "2.0"],
+    }
+    assert cask.artifacts_list() == cask.artifacts
+    assert cask.single_app_artifact().source == "Demo.app"
+    assert cask.font()
+    assert cask.url_specs() == ["https://example.com/demo-2.0.zip"]
+    assert cask.checksumable()

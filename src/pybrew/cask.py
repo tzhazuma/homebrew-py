@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import platform
 import re
 from dataclasses import dataclass, field
@@ -117,6 +118,74 @@ class Cask:
     def autobump(self) -> bool:
         """Mirror Homebrew's ``autobump?``: false after ``no_autobump!``."""
         return not self.no_autobump
+
+    @property
+    def full_token(self) -> str:
+        return self.full_name
+
+    @property
+    def caskroom_path(self) -> Path:
+        prefix = Path(os.environ.get("HOMEBREW_PREFIX", "/usr/local"))
+        return prefix / "Caskroom" / self.token
+
+    def installed_versions(self) -> list[str]:
+        """Return version entries currently present in the Caskroom."""
+        root = self.caskroom_path
+        if not root.is_dir():
+            return []
+        versions = []
+        for entry in root.iterdir():
+            if entry.name.startswith("."):
+                continue
+            versions.append(entry.name)
+        return sorted(versions)
+
+    def timestamped_versions(self) -> list[str]:
+        """Homebrew-compatible alias for installed version entries."""
+        return self.installed_versions()
+
+    def installed_caskfile(self) -> Optional[Path]:
+        """Return the metadata copy of this cask's definition, when present."""
+        root = self.caskroom_path / ".metadata"
+        if not root.is_dir():
+            return None
+        for candidate in sorted(root.glob(f"**/Casks/{self.token}.rb")):
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def outdated_version(self) -> Optional[str]:
+        if (self.version or "latest") == "latest":
+            return None
+        versions = [value for value in self.installed_versions() if value != self.version]
+        return versions[-1] if versions else None
+
+    def outdated_info(self) -> Optional[dict[str, Any]]:
+        old = self.outdated_version()
+        if old is None:
+            return None
+        return {
+            "token": self.token,
+            "current_version": self.version,
+            "installed_version": old,
+            "installed_versions": self.installed_versions(),
+        }
+
+    def artifacts_list(self) -> list[Artifact]:
+        return list(self.artifacts)
+
+    def single_app_artifact(self) -> Optional[Artifact]:
+        apps = [artifact for artifact in self.artifacts if artifact.kind == "app"]
+        return apps[0] if len(apps) == 1 else None
+
+    def font(self) -> bool:
+        return any(artifact.kind == "font" for artifact in self.artifacts)
+
+    def url_specs(self) -> list[str]:
+        return [self.url] if self.url else []
+
+    def checksumable(self) -> bool:
+        return bool(self.sha256 or self.sha256_map)
 
     def resolved_version(self) -> str:
         return self.version or "latest"
