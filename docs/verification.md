@@ -1408,9 +1408,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `4c0a4d6` (Resource metadata fields)
-- CI run for `4c0a4d6`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41540038890>
+- Latest feature commit: `7dc2106` (Keg link error classes)
+- CI run for `7dc2106`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41541281817>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
