@@ -7535,11 +7535,11 @@ class PybrewResource
   end
 
   def download_strategy
-    @info["using"] || :Using
+    @info["download_strategy"] || @info["using"] || :Using
   end
 
   def using
-    @info["using"]
+    @info["using"] || @info["download_strategy"]
   end
 
   def downloaded_and_valid?
@@ -7559,7 +7559,7 @@ class PybrewResource
   end
 
   def directory
-    Pathname.new(".")
+    Pathname.new((@info["directory"] || ".").to_s)
   end
 
   def file
@@ -7571,23 +7571,23 @@ class PybrewResource
   end
 
   def path_exec_files
-    []
+    Array(@info["path_exec_files"]).map { |path| Pathname.new(path.to_s) }
   end
 
   def installed_size
-    0
+    (@info["installed_size"] || 0).to_i
   end
 
   def bottle_size
-    0
+    (@info["bottle_size"] || 0).to_i
   end
 
   def manifest_annotations
-    {}
+    @info["manifest_annotations"].is_a?(Hash) ? @info["manifest_annotations"] : {}
   end
 
   def sbom_supplement
-    nil
+    @info["sbom_supplement"]
   end
 
   def owner=(value)

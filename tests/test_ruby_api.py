@@ -5453,3 +5453,42 @@ def test_macos_mdfind_and_version_helpers(
         "true",
         "true",
     ]
+
+
+def test_resource_metadata_fields_from_info(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-resource-fields",
+        "1.0",
+        (
+            '  resource = PybrewResource.new(\n'
+            '    "data",\n'
+            '    {"directory" => "src", "path_exec_files" => ["bin/tool"],\n'
+            '     "installed_size" => 12, "bottle_size" => 34,\n'
+            '     "manifest_annotations" => {"license" => "MIT"},\n'
+            '     "sbom_supplement" => "supplement",\n'
+            '     "download_strategy" => ":curl"}\n'
+            '  )\n'
+            '  (prefix/"resource-fields.txt").write [\n'
+            '    resource.directory.to_s,\n'
+            '    resource.path_exec_files.join(","),\n'
+            '    resource.installed_size.to_s,\n'
+            '    resource.bottle_size.to_s,\n'
+            '    resource.manifest_annotations["license"].to_s,\n'
+            '    resource.sbom_supplement.to_s,\n'
+            '    resource.download_strategy.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "resource-fields.txt").read_text().splitlines() == [
+        "src",
+        "bin/tool",
+        "12",
+        "34",
+        "MIT",
+        "supplement",
+        ":curl",
+    ]
