@@ -5192,3 +5192,45 @@ def test_utils_development_tools_and_system_config_helpers(
         "true",
         "true",
     ]
+
+
+def test_formulary_module_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-formulary-extra",
+        "1.0",
+        (
+            '  cellar = Pathname.new(ENV["HOMEBREW_CELLAR"])\n'
+            '  (cellar/"rack-formulary"/"1.0").mkpath\n'
+            '  (cellar/"ruby-formulary-extra"/"1.0").mkpath\n'
+            '  rack = Formulary.to_rack("rack-formulary")\n'
+            '  loader = Formulary.loader_for("ruby-formulary-extra")\n'
+            '  keg = Keg.new(cellar/"ruby-formulary-extra"/"1.0")\n'
+            '  (prefix/"formulary-extra.txt").write [\n'
+            '    rack.basename.to_s,\n'
+            '    Formulary.canonical_name("user/tap/foo.rb"),\n'
+            '    Formulary.platform_cache_tag.include?("_").to_s,\n'
+            '    Formulary.platform_cache.is_a?(Hash).to_s,\n'
+            '    loader.name.to_s,\n'
+            '    Formulary.try_new("ruby-formulary-extra").name.to_s,\n'
+            '    Formulary.from_keg(keg).name.to_s,\n'
+            '    Formulary.tap_formula_name_type("foo", "homebrew/core").first.to_s,\n'
+            '    Formulary.core_path("foo").to_s.end_with?("/Formula/foo.rb").to_s,\n'
+            '    Formulary.find_formula_in_tap("foo", Pathname.new("/tmp/tap")).to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    lines = (keg / "formulary-extra.txt").read_text().splitlines()
+    assert lines[0] == "rack-formulary"
+    assert lines[1] == "foo"
+    assert lines[2] == "true"
+    assert lines[3] == "true"
+    assert lines[4] == "ruby-formulary-extra"
+    assert lines[5] == "ruby-formulary-extra"
+    assert lines[6] == "ruby-formulary-extra"
+    assert lines[7] == "foo"
+    assert lines[8] == "true"
+    assert lines[9] == "/tmp/tap/foo.rb"

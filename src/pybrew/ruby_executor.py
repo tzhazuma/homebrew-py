@@ -7190,6 +7190,64 @@ module Formulary
     @factory_cache ||= {}
     nil
   end
+
+  def factory_cache
+    @factory_cache ||= {}
+  end
+
+  def platform_cache
+    @platform_cache ||= {}
+  end
+
+  def platform_cache_tag
+    host = RUBY_PLATFORM.include?("darwin") ? "macos" : "linux"
+    "#{host}_#{RbConfig::CONFIG["host_cpu"]}"
+  end
+
+  def to_rack(ref)
+    name = File.basename(ref.to_s, ".rb")
+    rack = HOMEBREW_CELLAR/name
+    rack.directory? ? rack.realpath : nil
+  rescue StandardError
+    nil
+  end
+
+  def canonical_name(ref)
+    File.basename(ref.to_s, ".rb").split("/").last
+  end
+
+  def core_path(name)
+    HOMEBREW_PREFIX/"Library/Taps/homebrew/homebrew-core/Formula"/"#{File.basename(name.to_s, ".rb").downcase}.rb"
+  end
+
+  def find_formula_in_tap(name, tap)
+    base = tap.respond_to?(:formula_dir) ? tap.formula_dir : Pathname.new(tap.to_s)
+    base/"#{File.basename(name.to_s, ".rb")}.rb"
+  end
+
+  def from_keg(keg)
+    factory(keg.name.to_s, from: :keg, warn: false)
+  end
+
+  def try_new(ref, **options)
+    factory(ref, **options)
+  end
+
+  def loader_for(ref)
+    Formula[ref]
+  end
+
+  def loader_from_name_tap_type(name, _tap = nil, _type = nil)
+    Formula[name]
+  end
+
+  def tap_formula_name_type(name, tap = nil)
+    [name.to_s, tap, nil, nil]
+  end
+
+  def load_from_api(name)
+    formula_class_get_from_api(name)
+  end
 end
 
 class PybrewResource
