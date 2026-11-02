@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-747 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+748 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -724,6 +724,12 @@ local remote, commits a change, and confirms the CLI updates it.
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
 
+## ServiceSpec compatibility helpers
+
+- Added `ServiceSpec` helpers for command/manual command, keep-alive/timed/
+  root predicates, default service/plist names, path dirs, effective PATH
+  environment, cron defaults/parsing/weekday mapping, and `from_hash`.
+
 ## Cask metadata helpers
 
 - Added `compare_version_strings`, `rename_list`, `old_tokens`,
@@ -1325,9 +1331,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `d7092e5` (Cask metadata helpers)
-- CI run for `d7092e5`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41512276191>
+- Latest feature commit: `8ee195c` (ServiceSpec compatibility helpers)
+- CI run for `8ee195c`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41514109744>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
