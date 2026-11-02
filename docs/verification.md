@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-759 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+760 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -724,6 +724,11 @@ local remote, commits a change, and confirms the CLI updates it.
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
 
+## Cask config/language/strategy helpers
+
+- Added `Cask.all` (bounded placeholder), `config_path`, `languages`,
+  `download_strategy`, and `using`.
+
 ## Service manager render helpers
 
 - Added `ServiceManager.to_plist` and `to_systemd_unit`, reusing the real
@@ -1397,9 +1402,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `4dc2ead` (Service manager render helpers)
-- CI run for `4dc2ead`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41537407352>
+- Latest feature commit: `c81cf08` (Cask config/strategy helpers)
+- CI run for `c81cf08`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41538971867>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
