@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-745 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+746 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -724,6 +724,11 @@ local remote, commits a change, and confirms the CLI updates it.
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
 
+## Cask verified URL patterns
+
+- `url ..., verified: "regex"` is now enforced before download/extraction;
+  mismatch raises `CaskError` and leaves no Caskroom version.
+
 ## Caskroom inventory helpers
 
 - Added Cask `caskroom_path`, `installed_versions`, `timestamped_versions`,
@@ -1313,9 +1318,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `bdb3968` (Caskroom inventory helpers)
-- CI run for `bdb3968`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41508538328>
+- Latest feature commit: `1e51f49` (verified URL patterns)
+- CI run for `1e51f49`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41510539943>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
