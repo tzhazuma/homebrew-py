@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-744 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+745 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -724,6 +724,12 @@ local remote, commits a change, and confirms the CLI updates it.
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
 
+## Caskroom inventory helpers
+
+- Added Cask `caskroom_path`, `installed_versions`, `timestamped_versions`,
+  `installed_caskfile`, `outdated_version`/`outdated_info`, `artifacts_list`,
+  `single_app_artifact`, `font`, `url_specs`, `checksumable`, `full_token`.
+
 ## Formulary contents/loader methods
 
 - Added `Formulary.from_contents` (temporary-file evaluation, returns an
@@ -1307,9 +1313,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `297e275` (Formulary contents/loader methods)
-- CI run for `297e275`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41503651704>
+- Latest feature commit: `bdb3968` (Caskroom inventory helpers)
+- CI run for `bdb3968`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41508538328>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
