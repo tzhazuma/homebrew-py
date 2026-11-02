@@ -3624,6 +3624,144 @@ class FormulaInstaller
     nil
   end
 
+  # -- bounded compatibility surface for formula install hooks -------------
+  # These are Homebrew-internal steps; loaded-source installs either no-op or
+  # expose the same safe values so formula code can call them without a
+  # NoMethodError.  Real bottle/pour/linkage work remains Python-side.
+  def add_build_sandbox_rules
+    nil
+  end
+
+  def api_bottle
+    nil
+  end
+
+  def audit_installed
+    nil
+  end
+
+  def auto_link_versioned_keg_only?
+    false
+  end
+
+  def build_args
+    []
+  end
+
+  def build_bottle_postinstall
+    nil
+  end
+
+  def build_bottle_preinstall
+    nil
+  end
+
+  def check_installation_already_attempted
+    raise "Formula is already installed: #{formula.full_name}" if self.class.installed.any? { |item| item.to_s == formula.name.to_s }
+
+    nil
+  end
+
+  def create_staging_path
+    formula.respond_to?(:buildpath) ? formula.buildpath : formula.prefix
+  end
+
+  def determine_bottle_tab_attributes
+    {}
+  end
+
+  def downloadable
+    self
+  end
+
+  def effective_build_options_for(_formula = nil)
+    options
+  end
+
+  def enqueue_bottle_download
+    nil
+  end
+
+  def enqueue_fetch
+    nil
+  end
+
+  def expand_dependencies_for_formula(_formula = nil)
+    formula.respond_to?(:deps) ? formula.deps : []
+  end
+
+  def fetch_fetch_deps
+    nil
+  end
+
+  def fix_dynamic_linkage
+    nil
+  end
+
+  def forbidden_formula_check
+    nil
+  end
+
+  def forbidden_license_check
+    nil
+  end
+
+  def forbidden_tap_check
+    nil
+  end
+
+  def formula_path
+    formula.respond_to?(:path) ? formula.path : nil
+  end
+
+  def install_fetch_deps
+    nil
+  end
+
+  def install_service
+    nil
+  end
+
+  def link_manual_command_warning
+    nil
+  end
+
+  def locked
+    nil
+  end
+
+  def post_install_formula_path
+    formula_path
+  end
+
+  def previously_fetched_formula
+    nil
+  end
+
+  def problem_if_output(_output)
+    nil
+  end
+
+  def puts_requirement_messages
+    nil
+  end
+
+  def run_fetch
+    nil
+  end
+
+  def selected_bottle
+    nil
+  end
+
+  def unbottled_dependencies
+    formula.respond_to?(:deps) ? formula.deps.map(&:name) : []
+  end
+
+  def verify_bottle_attestation?
+    false
+  end
+
   private
 
   def option?(name)

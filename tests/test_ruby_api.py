@@ -5234,3 +5234,38 @@ def test_formulary_module_helpers(
     assert lines[7] == "foo"
     assert lines[8] == "true"
     assert lines[9] == "/tmp/tap/foo.rb"
+
+
+def test_formula_installer_internal_compatibility_surface(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-installer-surface",
+        "1.0",
+        (
+            '  ref = Formula["ruby-installer-surface"]\n'
+            '  installer = FormulaInstaller.new(ref)\n'
+            '  (prefix/"installer-surface.txt").write [\n'
+            '    installer.downloadable.equal?(installer).to_s,\n'
+            '    installer.build_args.empty?.to_s,\n'
+            '    installer.selected_bottle.nil?.to_s,\n'
+            '    installer.verify_bottle_attestation?.to_s,\n'
+            '    installer.unbottled_dependencies.empty?.to_s,\n'
+            '    installer.formula_path.nil?.to_s,\n'
+            '    installer.check_installation_already_attempted.nil?.to_s,\n'
+            '    installer.create_staging_path.to_s.empty?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "installer-surface.txt").read_text().splitlines() == [
+        "true",
+        "true",
+        "true",
+        "false",
+        "true",
+        "true",
+        "true",
+        "false",
+    ]
