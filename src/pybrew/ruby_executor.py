@@ -5519,6 +5519,32 @@ class PybrewLivecheck
 end
 
 class Keg
+  class LinkError < RuntimeError
+    attr_reader :keg, :src, :dst
+
+    def initialize(keg, src, dst, cause)
+      @keg = keg
+      @src = src
+      @dst = dst
+      super(cause.respond_to?(:message) ? cause.message : cause.to_s)
+    end
+  end
+
+  class ConflictError < LinkError
+    def suggestion
+      conflict = Keg.for(dst)
+      "is a symlink belonging to #{conflict.name}. You can unlink it:\n" \
+        "  brew unlink #{conflict.name}\n"
+    rescue StandardError
+      "already exists. You may want to remove it:\n  rm '#{dst}'\n"
+    end
+
+    def to_s
+      "Could not symlink #{src}\nTarget #{dst} #{suggestion}\n" \
+        "To force the link and overwrite all conflicting files:\n" \
+        "  brew link --overwrite #{keg.name}\n"
+    end
+  end
   LINK_DIRS = %w[bin etc include lib sbin share var].freeze
   KEEPME_FILE = ".keepme"
 
