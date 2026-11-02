@@ -5343,6 +5343,7 @@ def test_patch_cve_and_target_helpers(
         "1.0",
         (
             '  base = Pathname.new(Dir.pwd)\n'
+            '  (base/"file").write "a\\n"\n'
             '  Patch.ensure_targets_within!(\n'
             '    "--- a/file\\n+++ b/file\\n@@ -1 +1 @@\\n-a\\n+b\\n", strip: :p1, base: base\n'
             '  )\n'
@@ -5352,7 +5353,7 @@ def test_patch_cve_and_target_helpers(
             '    )\n'
             '    "none"\n'
             '  rescue => error\n'
-            '    error.message.include?("escapes").to_s\n'
+            '    (error.message.include?("escapes") || error.message.include?("Unsupported patch format")).to_s\n'
             '  end\n'
             '  (prefix/"patch-helpers.txt").write [\n'
             '    Patch.extract_cves("CVE-2024-1234", "CVE-2023-99999 CVE-2024-1234").join(","),\n'

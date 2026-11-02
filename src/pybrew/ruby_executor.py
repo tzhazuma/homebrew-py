@@ -7679,16 +7679,42 @@ class Patch
   def self.ensure_targets_within!(text, strip:, base:)
     return if text.to_s.strip.empty?
 
-    targets = []
-    text.to_s.each_line do |line|
-      match = line.match(/\A(?:\+\+\+|---) (?:[ab]\/)?(.+?)(?:\t.*)?$/)
-      targets << match[1] unless match.nil?
+    base_path = Pathname.new(base.to_s).expand_path
+    output = nil
+    if Utils.which("patch")
+      output, _status = Open3.capture2e(
+        "patch", "-g", "0", "-f", "--dry-run", "-#{strip}",
+        stdin_data: text.to_s, chdir: base_path.to_s
+      )
     end
+
+    targets = []
+    if output.nil? || output.to_s.strip.empty?
+      # Fallback for hosts without `patch`: inspect headers directly.
+      text.to_s.each_line do |line|
+        match = line.match(/\A(?:\+\+\+|---) (?:[ab]\/)?(.+?)(?:\t.*)?$/)
+        targets << match[1] unless match.nil?
+      end
+    else
+      output.each_line do |line|
+        line = line.chomp
+        named = line[/\A(?:patching|checking) (?:file|symbolic link) (.+)\z/, 1] ||
+                line[/hunks? ignored while patching (.+)\z/, 1]
+        next if named.nil?
+
+        targets << named
+      end
+    end
+
     bad = targets.any? do |target|
       path = Pathname.new(target.to_s)
-      path.absolute? || path.each_filename.any? { |part| part == ".." }
+      next true if path.absolute? || path.each_filename.any? { |part| part == ".." }
+
+      resolved = (base_path + path).cleanpath
+      !resolved.to_s.start_with?(base_path.to_s + File::SEPARATOR) && resolved != base_path
     end
     raise "Patch target escapes the staged source tree" if bad
+    raise "Unsupported patch format: no target paths to verify." if targets.empty?
 
     nil
   end
