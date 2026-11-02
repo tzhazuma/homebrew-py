@@ -5332,3 +5332,44 @@ def test_compiler_gcc_probing_prefers_installed_versions(
     assert lines[0] == "12.2.0"
     assert lines[1].startswith("gcc")
     assert lines[2] == "clang,llvm_clang,gnu"
+
+
+def test_patch_cve_and_target_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-patch-helpers",
+        "1.0",
+        (
+            '  base = Pathname.new(Dir.pwd)\n'
+            '  Patch.ensure_targets_within!(\n'
+            '    "--- a/file\\n+++ b/file\\n@@ -1 +1 @@\\n-a\\n+b\\n", strip: :p1, base: base\n'
+            '  )\n'
+            '  bad = begin\n'
+            '    Patch.ensure_targets_within!(\n'
+            '      "--- a/file\\n+++ ../../etc/passwd\\n", strip: :p1, base: base\n'
+            '    )\n'
+            '    "none"\n'
+            '  rescue => error\n'
+            '    error.message.include?("escapes").to_s\n'
+            '  end\n'
+            '  (prefix/"patch-helpers.txt").write [\n'
+            '    Patch.extract_cves("CVE-2024-1234", "CVE-2023-99999 CVE-2024-1234").join(","),\n'
+            '    Patch.resolves_type("CVE-2024-1234"),\n'
+            '    Patch.resolves_type("GHSA-xr7r-f8xq-vfvv"),\n'
+            '    Patch.resolves_type("OSV-2023-298"),\n'
+            '    Patch.resolves_type("https://github.com/foo/bar/issues/1"),\n'
+            '    bad\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "patch-helpers.txt").read_text().splitlines() == [
+        "CVE-2024-1234,CVE-2023-99999",
+        "security",
+        "security",
+        "security",
+        "defect",
+        "true",
+    ]

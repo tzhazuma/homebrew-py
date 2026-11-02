@@ -7493,6 +7493,42 @@ class PybrewResource
   end
 end
 
+class Patch
+  CVE_PATTERN = /CVE-(\d{4})-(\d{4,})/
+
+  def self.extract_cves(*strings)
+    strings.flat_map { |text| text.to_s.scan(CVE_PATTERN) }
+           .map { |year, id| "CVE-#{year}-#{id}" }
+           .uniq
+  end
+
+  def self.resolves_type(id)
+    text = id.to_s
+    return "security" if text.match?(/\ACVE-\d{4}-\d{4,}\z/) ||
+                         text.match?(/\AGHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}\z/i) ||
+                         text.match?(/\AOSV-\d{4}-\d+\z/)
+
+    "defect"
+  end
+
+  def self.ensure_targets_within!(text, strip:, base:)
+    return if text.to_s.strip.empty?
+
+    targets = []
+    text.to_s.each_line do |line|
+      match = line.match(/\A(?:\+\+\+|---) (?:[ab]\/)?(.+?)(?:\t.*)?$/)
+      targets << match[1] unless match.nil?
+    end
+    bad = targets.any? do |target|
+      path = Pathname.new(target.to_s)
+      path.absolute? || path.each_filename.any? { |part| part == ".." }
+    end
+    raise "Patch target escapes the staged source tree" if bad
+
+    nil
+  end
+end
+
 class PybrewPatch
   attr_reader :name, :url, :sha256, :strip_level
 
