@@ -945,6 +945,28 @@ def _download_accepts_headers(downloader: Any) -> bool:
     )
 
 
+def verify_cask_url(cask: Cask, url: Optional[str] = None) -> None:
+    """Apply the cask ``url ... verified:`` regex to the resolved URL.
+
+    Homebrew checks the final URL after redirects; pybrew only has the
+    declared/downloaded URL locally, so this is a bounded check.  A false
+    result raises before any archive is extracted.
+    """
+
+    pattern = (cask.url_options or {}).get("verified")
+    if not isinstance(pattern, str) or not pattern.strip():
+        return
+    target = cask.resolved_url() if url is None else str(url)
+    try:
+        matched = re.search(pattern, target) is not None
+    except re.error:
+        matched = False
+    if not matched:
+        raise CaskError(
+            f"{cask.token}: URL {target!r} does not match verified pattern {pattern!r}"
+        )
+
+
 def cask_request_headers(cask: Cask) -> dict[str, str]:
     """Translate ``Cask.url_options`` into HTTP request headers (best effort).
 
@@ -1127,6 +1149,7 @@ class CaskInstaller:
             digest = cask.resolved_sha256()
             if not digest:
                 raise CaskError(f"{cask.token}: no sha256 for {cask.resolved_arch()}")
+            verify_cask_url(cask, url)
             hint = f"{cask.token}-{version}.{Path(url.split('?', 1)[0]).suffix or 'download'}"
             request_headers = cask_request_headers(cask)
             if request_headers and _download_accepts_headers(self.downloader):

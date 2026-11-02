@@ -1854,3 +1854,43 @@ def test_cask_installed_inventory_helpers(tmp_path: Path, monkeypatch: pytest.Mo
     assert cask.font()
     assert cask.url_specs() == ["https://example.com/demo-2.0.zip"]
     assert cask.checksumable()
+
+
+def test_install_cask_verified_url_pattern(tmp_path: Path) -> None:
+    archive = tmp_path / "Verified-1.0.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("tool", "#!/bin/sh\nexit 0\n")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+
+    def cask_source(pattern: str) -> str:
+        return f'''cask "verified" do
+  version "1.0"
+  sha256 "{digest}"
+  url "{archive.as_uri()}", verified: "{pattern}"
+  stage_only true
+end
+'''
+
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "v" / "verified.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(cask_source("Verified-1\\\\.0\\\\.zip"))
+
+    config = Config.default(prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache")
+    config.ensure()
+    installer = CaskInstaller(config, appdir=tmp_path / "Applications", library_root=tmp_path / "Library")
+    loader = CaskLoader(discover_taps([tap]))
+    installer.install(loader.load("verified"))
+    assert (config.caskroom / "verified" / "1.0").exists()
+
+    cask_path.write_text(cask_source("Nope"))
+    mismatch_config = Config.default(
+        prefix=tmp_path / "prefix2", taps=[tap], cache=tmp_path / "cache2"
+    )
+    mismatch_config.ensure()
+    mismatch = CaskInstaller(
+        mismatch_config, appdir=tmp_path / "Applications2", library_root=tmp_path / "Library2"
+    )
+    with pytest.raises(CaskError, match="verified pattern"):
+        mismatch.install(CaskLoader(discover_taps([tap])).load("verified"))
+    assert not (mismatch_config.caskroom / "verified" / "1.0").exists()
