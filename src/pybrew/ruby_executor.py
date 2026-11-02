@@ -5514,6 +5514,39 @@ class Keg
     end
   end
 
+  def delete_pyc_files!
+    deleted = 0
+    Dir.glob((@path/"**/*").to_s, File::FNM_DOTMATCH).each do |entry|
+      path = Pathname.new(entry)
+      if path.directory? && path.basename.to_s == "__pycache__"
+        FileUtils.rm_rf(path.to_s)
+        deleted += 1
+      elsif path.file? && [".pyc", ".pyo"].include?(path.extname)
+        FileUtils.rm_f(path.to_s)
+        deleted += 1
+      end
+    end
+    deleted
+  end
+
+  def remove_alias_symlink(alias_name)
+    path = homebrew_prefix/"opt"/alias_name.to_s
+    return false unless File.symlink?(path.to_s)
+
+    path.unlink
+    true
+  rescue StandardError
+    false
+  end
+
+  def consistent_reproducible_symlink_permissions!
+    true
+  end
+
+  def normalize_pod2man_outputs!
+    []
+  end
+
   def empty_installation?
     @path.directory? && @path.children.empty?
   end
@@ -6072,6 +6105,71 @@ module Formula
     return [] unless HOMEBREW_CELLAR.directory?
 
     HOMEBREW_CELLAR.children.select { |child| child.directory? }.map { |child| child.basename.to_s }
+  end
+
+  def self.installed
+    installed_formula_names.map { |name| PybrewFormulaRef.new(name) }
+  end
+
+  def self.names
+    configured = (PYBREW_CONFIG["formulae"] || {}).keys
+    (configured + installed_formula_names).uniq.sort
+  end
+
+  def self.full_names
+    names.map { |name| PybrewFormulaRef.new(name).full_name }.uniq.sort
+  end
+
+  def self.aliases
+    names.flat_map { |name| PybrewFormulaRef.new(name).aliases }.map(&:to_s).uniq.sort
+  end
+
+  def self.alias_full_names
+    names.flat_map do |name|
+      ref = PybrewFormulaRef.new(name)
+      ref.aliases.map { |alias_name| "#{ref.tap}/#{alias_name}".sub(%r{^/}, "") }
+    end.uniq.sort
+  end
+
+  def self.core_names
+    names.select { |name| PybrewFormulaRef.new(name).tap.to_s == "homebrew/core" }
+  end
+
+  def self.core_aliases
+    core_names.flat_map { |name| PybrewFormulaRef.new(name).aliases }.map(&:to_s).uniq.sort
+  end
+
+  def self.tap_names
+    names.select { |name| !PybrewFormulaRef.new(name).tap.to_s.empty? }
+  end
+
+  def self.tap_aliases
+    tap_names.flat_map { |name| PybrewFormulaRef.new(name).aliases }.map(&:to_s).uniq.sort
+  end
+
+  def self.racks
+    return [] unless HOMEBREW_CELLAR.directory?
+
+    HOMEBREW_CELLAR.children.select { |child| child.directory? }
+  end
+
+  def self.tap_files
+    names.filter_map do |name|
+      ref = PybrewFormulaRef.new(name)
+      path = ref.path
+      path.file? ? path : nil
+    end
+  end
+
+  def self.installed_with_alias_path
+    installed.each_with_object({}) do |ref, result|
+      result[ref.name] = ref.aliases
+    end
+  end
+
+  def self.fuzzy_search(query)
+    needle = query.to_s.downcase
+    names.select { |name| name.downcase.include?(needle) }
   end
 end
 

@@ -5012,3 +5012,74 @@ def test_formula_installer_loaded_receipt_not_written_on_failure(
         "true",
         "failing-receipt",
     ]
+
+
+def test_formula_class_level_inventory_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-class-inventory",
+        "1.0",
+        (
+            '  cellar = Pathname.new(ENV["HOMEBREW_CELLAR"])\n'
+            '  (cellar/"ruby-class-inventory"/"1.0").mkpath\n'
+            '  (cellar/"inventory-other"/"2.0").mkpath\n'
+            '  (prefix/"inventory.txt").write [\n'
+            '    Formula.installed.map(&:name).include?("ruby-class-inventory").to_s,\n'
+            '    Formula.names.include?("inventory-other").to_s,\n'
+            '    Formula.full_names.include?("ruby-class-inventory").to_s,\n'
+            '    Formula.racks.map { |rack| rack.basename.to_s }.include?("inventory-other").to_s,\n'
+            '    Formula.fuzzy_search("inventory").include?("inventory-other").to_s,\n'
+            '    Formula.installed_with_alias_path.key?("inventory-other").to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "inventory.txt").read_text().splitlines() == [
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+    ]
+
+
+def test_keg_cleanup_and_alias_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-keg-cleanup",
+        "1.0",
+        (
+            '  (prefix/"pkg"/"__pycache__").mkpath\n'
+            '  (prefix/"pkg"/"__pycache__"/"mod.pyc").write "x"\n'
+            '  (prefix/"pkg"/"plain.pyc").write "x"\n'
+            '  (prefix/"pkg"/"keep.txt").write "keep"\n'
+            '  keg = Keg.new(prefix)\n'
+            '  deleted = keg.delete_pyc_files!\n'
+            '  alias_link = Pathname.new(ENV["HOMEBREW_PREFIX"])/"opt"/"keg-cleanup-old"\n'
+            '  alias_link.parent.mkpath\n'
+            '  alias_link.make_symlink(prefix.to_s) unless alias_link.symlink?\n'
+            '  removed = keg.remove_alias_symlink("keg-cleanup-old")\n'
+            '  (prefix/"cleanup.txt").write [\n'
+            '    (deleted >= 2).to_s,\n'
+            '    (prefix/"pkg"/"__pycache__").exist?.to_s,\n'
+            '    (prefix/"pkg"/"plain.pyc").exist?.to_s,\n'
+            '    (prefix/"pkg"/"keep.txt").read,\n'
+            '    removed.to_s,\n'
+            '    alias_link.symlink?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "cleanup.txt").read_text().splitlines() == [
+        "true",
+        "false",
+        "false",
+        "keep",
+        "true",
+        "false",
+    ]
