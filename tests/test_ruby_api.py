@@ -5124,3 +5124,30 @@ def test_keg_node_gyp_debris_and_tab_dep_hash(
         "1.0",
         "true",
     ]
+
+
+def test_formulary_factory_from_api_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-api-factory",
+        "1.0",
+        (
+            '  struct = Struct.new(:desc, :version).new("api desc", "3.1")\n'
+            '  klass = Formulary.load_formula_from_struct!("api-factory", struct)\n'
+            '  fetched = Formulary.factory("api-factory", :stable, from: :api)\n'
+            '  missing = Formulary.factory("not-cached", :stable, from: :api)\n'
+            '  (prefix/"api-factory.txt").write [\n'
+            '    fetched.equal?(klass).to_s,\n'
+            '    fetched.name.to_s,\n'
+            '    missing.name.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "api-factory.txt").read_text().splitlines() == [
+        "true",
+        "api-factory",
+        "not-cached",
+    ]

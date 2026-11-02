@@ -6669,6 +6669,16 @@ module Formulary
       return @factory_cache[cache_key]
     end
 
+    if options[:from].to_s == "api"
+      begin
+        api_formula = formula_class_get_from_api(ref)
+        (@factory_cache ||= {})[cache_key] = api_formula if factory_cached?
+        return api_formula
+      rescue StandardError
+        nil
+      end
+    end
+
     reference = Formula[ref]
     formula = factory_load_source(reference, options)
     formula = reference if formula.nil?
