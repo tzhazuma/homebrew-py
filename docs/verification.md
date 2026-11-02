@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-729 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+730 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -724,6 +724,12 @@ local remote, commits a change, and confirms the CLI updates it.
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
 
+## Formula spec/build accessors
+
+- Added `Formula#active_spec=`, `#specs`, `#spec_syms`, `#spec_eval` and
+  `#build=` compatibility accessors; `specs` returns stable/head and
+  `spec_syms` matches.
+
 ## Upstream sync (2026-11-02)
 
 - Upstream exploratory PR Homebrew/brew#24362 remains closed (2026-10-28);
@@ -1234,9 +1240,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `fc49dc3` (upstream rack helpers + tracking state)
-- CI run for `fc49dc3`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41370538527>
+- Latest feature commit: `02a0e91` (formula spec/build accessors + test fix)
+- CI run for `02a0e91`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41411931045>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
