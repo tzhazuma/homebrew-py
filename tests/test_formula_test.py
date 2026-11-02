@@ -1971,3 +1971,22 @@ end
     formula, config = _installed_formula(tmp_path, source, taps=[tap])
     result = run_formula_test(formula, config, ruby=_REAL_RUBY)
     assert result.success is True
+
+
+@requires_ruby
+def test_dynamic_formula_lookup_across_three_hundred_formulae(
+    tmp_path: Path,
+) -> None:
+    tap = tmp_path / "sample-tap"
+    for index in range(300):
+        _write_tap_formula(tap, f"bulk3-{index:03d}", None)
+    source = """do
+  name = "bulk3-299"
+  dep = Formula[name]
+  refute dep.installed?
+  assert_equal "bulk3-299", dep.name
+end
+"""
+    formula, config = _installed_formula(tmp_path, source, taps=[tap])
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True

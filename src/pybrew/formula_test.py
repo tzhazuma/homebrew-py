@@ -44,14 +44,14 @@ DEFAULT_RUBY = "/usr/bin/ruby"
 DEFAULT_TIMEOUT = 300.0
 
 #: Maximum number of formula metadata entries loaded for one test run.
-MAX_FORMULA_ENTRIES = 250
+MAX_FORMULA_ENTRIES = 2000
 
 #: Maximum number of tap formula files indexed for ``Formula[...]`` lookups.
 MAX_TAP_FORMULA_INDEX = 20000
 
 #: Small local taps are preloaded eagerly so dynamic ``Formula[expression]``
 #: lookups (e.g. ``Formula[dep_name]``) can resolve uninstalled formulae.
-MAX_EAGER_FORMULA_ENTRIES = 200
+MAX_EAGER_FORMULA_ENTRIES = 2000
 
 #: Bounded in-process caches (parsed formulae and tap indexes).
 FORMULA_CACHE_LIMIT = 256
