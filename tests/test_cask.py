@@ -1797,28 +1797,6 @@ def test_install_nested_container_unsafe_path_is_rejected(
         installer.install(CaskLoader(discover_taps([tap])).load("nestedy"))
 
 
-def test_nested_container_inside_dmg_is_documented(tmp_path: Path) -> None:
-    cask = parse_cask_source(
-        'cask "nesteddmg" do\n  version "1.0"\n'
-        '  url "https://example.com/outer.dmg"\n'
-        '  container nested: "inner.dmg"\n'
-        'end\n'
-    )
-    config = Config.default(
-        prefix=tmp_path / "prefix", taps=[], cache=tmp_path / "cache"
-    )
-    config.ensure()
-    installer = CaskInstaller(
-        config,
-        appdir=tmp_path / "Applications",
-        library_root=tmp_path / "Library",
-    )
-    with pytest.raises(CaskError, match="inside a dmg are not supported"):
-        installer._extract_nested_container(
-            cask, tmp_path / "outer.dmg", "dmg", tmp_path / "outer"
-        )
-
-
 def test_cask_installed_inventory_helpers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HOMEBREW_PREFIX", str(tmp_path / "prefix"))
     cask = Cask(
@@ -2105,3 +2083,45 @@ end
     installer = CaskInstaller(config)
     installer.install(CaskLoader(discover_taps([tap])).load("curl-strategy"))
     assert (config.caskroom / "curl-strategy" / "1.0").is_dir()
+
+
+@pytest.mark.skipif(sys.platform != "darwin", reason="dmg requires macOS hdiutil")
+def test_install_nested_container_inside_dmg(tmp_path: Path) -> None:
+    import subprocess
+
+    payload = tmp_path / "Payload.zip"
+    with zipfile.ZipFile(payload, "w") as bundle:
+        bundle.writestr("inside.txt", "nested dmg payload\n")
+    source = tmp_path / "dmg-source"
+    source.mkdir()
+    shutil.copy2(payload, source / "Payload.zip")
+    dmg = tmp_path / "Nested-1.0.dmg"
+    result = subprocess.run(
+        [
+            "hdiutil", "create", "-volname", "Nested", "-srcfolder", str(source),
+            "-ov", "-format", "UDZO", str(dmg),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        pytest.skip(f"hdiutil unavailable: {result.stderr}")
+    digest = hashlib.sha256(dmg.read_bytes()).hexdigest()
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "n" / "nested-dmg.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        f'''cask "nested-dmg" do
+  version "1.0"
+  sha256 "{digest}"
+  url "{dmg.as_uri()}"
+  container nested: "Payload.zip"
+  stage_only true
+end
+'''
+    )
+    config = Config.default(prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache")
+    config.ensure()
+    installer = CaskInstaller(config)
+    installer.install(CaskLoader(discover_taps([tap])).load("nested-dmg"))
+    assert (config.caskroom / "nested-dmg" / "1.0").is_dir()

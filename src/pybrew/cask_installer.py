@@ -1291,9 +1291,9 @@ class CaskInstaller:
     ) -> Path:
         """Extract the outer archive and return its nested container file.
 
-        Only the outer zip/tar/7z/rar containers are supported; nested
-        containers inside a dmg cannot be mounted safely here and raise a clear
-        error.  The ``container nested:`` path is relative to the extracted
+        Outer zip/tar/7z/rar/dmg containers are supported.  A dmg is mounted
+        read-only and the nested file is copied out before the image is
+        detached.  The ``container nested:`` path is relative to the extracted
         outer container, may use ``#{version}`` interpolation and, best effort,
         a glob when it contains wildcard characters.
         """
@@ -1316,9 +1316,24 @@ class CaskInstaller:
         elif kind == "rar":
             _extract_rar(archive, destination)
         elif kind == "dmg":
-            raise CaskError(
-                f"{cask.token}: nested containers inside a dmg are not supported"
-            )
+            with _MountedImage(archive, destination / "mnt") as mountpoint:
+                candidate = mountpoint / nested_path
+                if not candidate.is_file():
+                    wildcard = any(character in nested for character in "*?[")
+                    matches = (
+                        sorted(path for path in mountpoint.glob(nested) if path.is_file())
+                        if wildcard
+                        else []
+                    )
+                    if len(matches) != 1:
+                        raise CaskError(
+                            f"{cask.token}: nested container {nested!r} not found in "
+                            f"{archive.name}"
+                        )
+                    candidate = matches[0]
+                copied = destination / candidate.name
+                shutil.copy2(candidate, copied)
+                return copied
         else:
             raise CaskError(
                 f"{cask.token}: unsupported outer container for nested path "
