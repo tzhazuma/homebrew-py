@@ -44,7 +44,7 @@ DEFAULT_RUBY = "/usr/bin/ruby"
 DEFAULT_TIMEOUT = 300.0
 
 #: Maximum number of formula metadata entries loaded for one test run.
-MAX_FORMULA_ENTRIES = 50
+MAX_FORMULA_ENTRIES = 250
 
 #: Maximum number of tap formula files indexed for ``Formula[...]`` lookups.
 MAX_TAP_FORMULA_INDEX = 20000
@@ -2051,10 +2051,6 @@ def _formula_entries(
         installed_names = []
     for installed_name in installed_names:
         queue.append((installed_name, False))
-    if len(index.by_name) <= MAX_EAGER_FORMULA_ENTRIES:
-        for eager_name in sorted(index.by_name):
-            queue.append((eager_name, False))
-
     taps_listing = ", ".join(tap.name for tap in index.taps) or "no taps configured"
     seen: set[str] = {formula.name}
     while queue and len(seen) < MAX_FORMULA_ENTRIES:
@@ -2102,6 +2098,26 @@ def _formula_entries(
         for key in keys:
             if key and key not in entries:
                 entries[key] = entry
+
+    # Lightweight fallback entries make dynamic ``Formula[expression]`` lookups
+    # work across a small local tap without parsing every formula source.  The
+    # real test body is only loaded when the formula is actually referenced
+    # literally, installed, or declared as a dependency.
+    if len(index.by_name) <= MAX_EAGER_FORMULA_ENTRIES:
+        for eager_name in sorted(index.by_name):
+            if eager_name in entries or len(entries) >= MAX_FORMULA_ENTRIES:
+                continue
+            resolved = index.resolve(eager_name)
+            if resolved is None:
+                continue
+            tap, _path = resolved
+            entry = _formula_entry(
+                eager_name,
+                config,
+                load_error="formula source was not eagerly loaded for this test",
+            )
+            entries[eager_name] = entry
+            entries.setdefault(f"{tap.name}/{eager_name}", entry)
     return entries
 
 
