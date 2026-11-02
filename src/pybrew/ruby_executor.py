@@ -7484,6 +7484,103 @@ class PybrewResource
     staged_path
   end
 
+  def download_name
+    return @info["download_name"].to_s unless @info["download_name"].nil?
+
+    base = url.to_s.split("?", 1).first
+    name = File.basename(base.to_s)
+    name.empty? ? self.name : name
+  end
+
+  def download_strategy
+    @info["using"] || :Using
+  end
+
+  def using
+    @info["using"]
+  end
+
+  def downloaded_and_valid?
+    staged? && !sha256.to_s.empty?
+  end
+
+  def verify_download_integrity(_file = nil)
+    nil
+  end
+
+  def download_queue_name
+    download_name
+  end
+
+  def download_queue_type
+    :resource
+  end
+
+  def directory
+    Pathname.new(".")
+  end
+
+  def file
+    download_name
+  end
+
+  def files
+    [file]
+  end
+
+  def path_exec_files
+    []
+  end
+
+  def installed_size
+    0
+  end
+
+  def bottle_size
+    0
+  end
+
+  def manifest_annotations
+    {}
+  end
+
+  def sbom_supplement
+    nil
+  end
+
+  def owner=(value)
+    @owner = value
+  end
+
+  def owner
+    @owner
+  end
+
+  def initialize_dup(other)
+    super
+    nil
+  end
+
+  def stage_resource
+    stage
+  end
+
+  def unpack(*_args)
+    nil
+  end
+
+  def apply_patches
+    nil
+  end
+
+  def resolves
+    nil
+  end
+
+  def determine_url_mirrors
+    [url].compact
+  end
+
   def to_s
     name
   end

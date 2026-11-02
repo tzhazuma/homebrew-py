@@ -5373,3 +5373,46 @@ def test_patch_cve_and_target_helpers(
         "defect",
         "true",
     ]
+
+
+def test_resource_download_and_metadata_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-resource-helpers",
+        "1.0",
+        (
+            '  staged = prefix/"resource-staged"\n'
+            '  staged.mkpath\n'
+            '  resource = PybrewResource.new(\n'
+            '    "data",\n'
+            '    {"url" => "https://example.com/data.tar.gz", "sha256" => "abc",\n'
+            '     "using" => :curl, "staged" => staged.to_s}\n'
+            '  )\n'
+            '  resource.owner = "ruby-resource-helpers"\n'
+            '  (prefix/"resource-helpers.txt").write [\n'
+            '    resource.download_name,\n'
+            '    resource.download_queue_name,\n'
+            '    resource.download_queue_type.to_s,\n'
+            '    resource.files.join(","),\n'
+            '    resource.determine_url_mirrors.join(","),\n'
+            '    resource.using.to_s,\n'
+            '    resource.downloaded_and_valid?.to_s,\n'
+            '    resource.owner.to_s,\n'
+            '    resource.installed_size.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "resource-helpers.txt").read_text().splitlines() == [
+        "data.tar.gz",
+        "data.tar.gz",
+        "resource",
+        "data.tar.gz",
+        "https://example.com/data.tar.gz",
+        "curl",
+        "true",
+        "ruby-resource-helpers",
+        "0",
+    ]
