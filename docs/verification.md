@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-728 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+729 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -723,6 +723,15 @@ local remote, commits a change, and confirms the CLI updates it.
 - Added `socket_path`/`socket_text`/`write_socket` and wired socket services to
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
+
+## Upstream sync (2026-11-02)
+
+- Tracked Homebrew/brew `59604a815c` and homebrew-core `992feb273e`; formula
+  DSL changes are internal plus:
+  - `Formula.rack_installed?` and `Formula.installed_formula_names`
+  - `Keg#aliases` unsafe-component filtering
+- No new formula syntax requiring fixture changes; existing corpus remains
+  parseable.
 
 ## Seventh parallel batch
 
