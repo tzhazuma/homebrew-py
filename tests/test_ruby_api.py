@@ -5083,3 +5083,44 @@ def test_keg_cleanup_and_alias_symlink(
         "true",
         "false",
     ]
+
+
+def test_keg_node_gyp_debris_and_tab_dep_hash(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-keg-nodegyp",
+        "1.0",
+        (
+            '  base = prefix/"pkg"/"node_modules"/"addon"/"build"/"Release"\n'
+            '  (base/"obj.target"/"nested").mkpath\n'
+            '  (base/"obj.target"/"x.o").write "obj"\n'
+            '  (base/"addon.a").write "archive"\n'
+            '  (base/"addon.node").write "binary"\n'
+            '  keg = Keg.new(prefix)\n'
+            '  keg.require_relocation!\n'
+            '  keg.delete_node_gyp_debris!\n'
+            '  ref = Formula["ruby-keg-nodegyp"]\n'
+            '  row = Tab.formula_to_dep_hash(ref, ["ruby-keg-nodegyp"])\n'
+            '  (prefix/"nodegyp.txt").write [\n'
+            '    keg.require_relocation?.to_s,\n'
+            '    (base/"obj.target").exist?.to_s,\n'
+            '    (base/"addon.a").exist?.to_s,\n'
+            '    (base/"addon.node").exist?.to_s,\n'
+            '    row["full_name"].to_s,\n'
+            '    row["version"].to_s,\n'
+            '    row["declared_directly"].to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "nodegyp.txt").read_text().splitlines() == [
+        "true",
+        "false",
+        "false",
+        "true",
+        "ruby-keg-nodegyp",
+        "1.0",
+        "true",
+    ]

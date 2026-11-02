@@ -2573,12 +2573,13 @@ class PybrewSourceSpec
 end
 
 class PybrewBottleFile
-  attr_reader :tag, :sha256, :cellar
+  attr_reader :tag, :sha256, :cellar, :rebuild
 
   def initialize(tag, info)
     @tag = tag.to_s
     @sha256 = (info || {})["sha256"]
     @cellar = (info || {})["cellar"]
+    @rebuild = (info || {})["rebuild"]
   end
 end
 
@@ -2604,6 +2605,11 @@ class PybrewBottleSpec
   def cellar
     entry = @files[@current_tag] || {}
     entry["cellar"]
+  end
+
+  def rebuild
+    entry = @files[@current_tag] || {}
+    entry["rebuild"]
   end
 
   def bottle?
@@ -5551,8 +5557,45 @@ class Keg
     @path.directory? && @path.children.empty?
   end
 
+  def require_relocation!
+    @require_relocation = true
+  end
+
   def require_relocation?
-    false
+    !!@require_relocation
+  end
+
+  def prepare_debug_symbols
+    nil
+  end
+
+  def ignore_interrupts_and_uninstall!
+    uninstall
+  end
+
+  def record_cask_symlink(_dst)
+    nil
+  end
+
+  def resolve_any_conflicts(_dst, **_options)
+    nil
+  end
+
+  def delete_node_gyp_debris!
+    Dir.glob((@path/"**/node_modules/**/build/**/*").to_s).each do |entry|
+      path = Pathname.new(entry)
+      next unless path.to_s.include?("/node_modules/") && path.to_s.include?("/build/")
+
+      if path.directory? && path.basename.to_s == "obj.target"
+        FileUtils.rm_rf(path.to_s)
+      elsif [".o", ".d", ".a"].include?(path.extname) && path.file?
+        FileUtils.rm_f(path.to_s)
+      end
+    end
+  end
+
+  def strip_node_gyp_addons!
+    []
   end
 
   def lock
@@ -5748,6 +5791,19 @@ class Tab
     new(JSON.parse(tabfile.read), tabfile)
   rescue StandardError
     new({}, tabfile)
+  end
+
+  def self.formula_to_dep_hash(formula, declared_deps)
+    row = {
+      "full_name" => formula.full_name,
+      "version" => formula.version.to_s,
+      "revision" => formula.revision,
+      "bottle_rebuild" => formula.bottle_for_tag&.rebuild,
+      "pkg_version" => formula.pkg_version.to_s,
+      "declared_directly" => Array(declared_deps).include?(formula.full_name),
+      "compatibility_version" => formula.compatibility_version
+    }
+    row.reject { |_key, value| value.nil? }
   end
 
   def self.for_name(name)
