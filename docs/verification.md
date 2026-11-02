@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-756 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+757 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -724,6 +724,13 @@ local remote, commits a change, and confirms the CLI updates it.
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
 
+## Resource download/metadata helpers
+
+- Added `download_name`/`download_queue_name`/`download_queue_type`,
+  `download_strategy`/`using`, `downloaded_and_valid?`, `files`/`file`,
+  `determine_url_mirrors`, `manifest_annotations`, `owner=`, `installed_size`,
+  and bounded staging/unpack no-ops.
+
 ## Patch CVE/target helpers
 
 - Added `Patch.extract_cves`, `Patch.resolves_type`, and a bounded
@@ -1379,9 +1386,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `6ba03ee` (Patch CVE/target helpers)
-- CI run for `6ba03ee`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41532069236>
+- Latest feature commit: `50db6d8` (Resource download/metadata helpers)
+- CI run for `50db6d8`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41533246606>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
