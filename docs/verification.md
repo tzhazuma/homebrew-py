@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-730 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+736 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -724,6 +724,16 @@ local remote, commits a change, and confirms the CLI updates it.
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
 
+## Eighth parallel batch
+
+- FormulaInstaller loaded-source installs write a minimal
+  `INSTALL_RECEIPT.json` (version, installed_on_request, runtime_dependencies,
+  poured_from_bottle) readable via `Tab.for_keg`; failing installs leave no
+  receipt.
+- Test DSL gained versioned MacOS SDK helpers: `MacOS.sdks`, `sdk`,
+  `sdk_path`, `latest_sdk_version`, `SDKROOT`/`PYBREW_SDK_DIRS`/fake `xcrun`
+  discovery.
+
 ## Formula spec/build accessors
 
 - Added `Formula#active_spec=`, `#specs`, `#spec_syms`, `#spec_eval` and
@@ -1240,9 +1250,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `02a0e91` (formula spec/build accessors + test fix)
-- CI run for `02a0e91`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41411931045>
+- Latest feature commit: `d0ca084` (loaded receipts + versioned SDK helpers)
+- CI run for `d0ca084`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41414562196>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success

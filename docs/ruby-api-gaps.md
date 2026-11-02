@@ -6,7 +6,7 @@ claiming full parity with every file under `Library/Homebrew`.
 
 ## Current baseline
 
-- Full test suite: 730 passed, 5 skipped (after spec/build accessors)
+- Full test suite: 736 passed, 5 skipped (after eighth parallel batch)
 - CI: Ubuntu 3.9 / 3.12 + macOS 3.12
 - Optional Ruby bridge remains opt-in; default parser behavior is unchanged.
 
@@ -16,7 +16,7 @@ claiming full parity with every file under `Library/Homebrew`.
 | --- | --- | --- |
 | Formulary source loader | Partial | `load_formula_from_path` evaluates a metadata-only `PybrewLoadedFormula`; namespace/cache/errors, path/factory/API caches, `formula_class_get_from_path`/`from_api`, local-source factory and bounded struct mapping exist; real API JSON and full tap/alias resolution missing |
 | Formulary class cache / reload semantics | Missing | No cache keyed by path/mtime |
-| FormulaInstaller fetch/build/deps/link/cleanup | Partial | Loaded-source flow runs fetch/build/deps/link/clean/finish and recursively installs loaded dependencies; bottle manifest/pour, Tab/service/SBOM, linkage checks and topological ordering missing |
+| FormulaInstaller fetch/build/deps/link/cleanup | Partial | Loaded-source flow runs fetch/build/deps/link/clean/finish, recursively installs loaded dependencies, writes a minimal receipt readable via Tab; bottle manifest/pour, full Tab/service/SBOM, linkage checks and topological ordering missing |
 | Compiler selection / Superenv build env | Partial | `CompilerSelector`/`CompilerFailure` surface and env-only `Superenv.setup_build_environment`; no real compiler probing/sandbox |
 | Sandbox execution | Stub | `Sandbox` compatibility methods return safe defaults; no real sandbox |
 
@@ -28,7 +28,7 @@ claiming full parity with every file under `Library/Homebrew`.
 | livecheck `url_options` | Partial | Header/user-agent/etc. captured best-effort |
 | Cask script shim | Partial | No sudo; `arch` uses cask arch stanza when set; MacOS naming static; url_options reach the stock Downloader over HTTP(S) |
 | Test DSL arbitrary formula lookup | Partial | Bounded tap index (50 metadata entries/run); dynamic/uninstalled/unreferenced and alias-only lookups fail clearly |
-| Test DSL dependency test isolation | Partial | Dependency tests use isolated testpath/cwd/PYBREW_PREFIX/TMPDIR; PATH/HOME/global constants remain parent/global |
+| Test DSL dependency test isolation | Partial | Dependency tests use isolated testpath/cwd/PYBREW_PREFIX/TMPDIR; PATH/HOME/global constants remain parent/global; MacOS SDK discovery is best-effort and not a full Homebrew locator |
 | Test DSL version object / revision | Partial | String-compatible `Version`/`PkgVersion` with revision-aware `pkg_version`; not Homebrew's full token parser |
 | Test DSL MacOS/OS/Hardware helpers | Partial | sdk_path/sdk_version/release names, OS.version, CPU flags/features exist; versioned SDK selection and Xcode/CLT modules missing |
 | Minitest surface | Partial | skip semantics, pattern assertions, assertion counter are approximate |
