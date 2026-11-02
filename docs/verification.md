@@ -1408,9 +1408,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `5c90bf9` (larger local tap lookup)
-- CI run for `5c90bf9`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41544315186>
+- Latest feature commit: `734ebff` (Keg optlink action options)
+- CI run for `734ebff`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41545525269>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
