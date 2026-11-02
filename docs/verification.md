@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-743 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+744 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -724,6 +724,12 @@ local remote, commits a change, and confirms the CLI updates it.
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
 
+## Formulary contents/loader methods
+
+- Added `Formulary.from_contents` (temporary-file evaluation, returns an
+  instance), `get_formula`, `klass`, and `load_file`.
+- Method-name audit now reports 0 missing Formulary methods.
+
 ## FormulaInstaller method surface
 
 - Added the remaining Homebrew FormulaInstaller method names as bounded
@@ -1301,9 +1307,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `46e9a66` (FormulaInstaller surface)
-- CI run for `46e9a66`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41502231032>
+- Latest feature commit: `297e275` (Formulary contents/loader methods)
+- CI run for `297e275`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41503651704>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success

@@ -6,7 +6,7 @@ claiming full parity with every file under `Library/Homebrew`.
 
 ## Current baseline
 
-- Full test suite: 743 passed, 5 skipped (after FormulaInstaller surface)
+- Full test suite: 744 passed, 5 skipped (after Formulary contents/loader methods)
 - CI: Ubuntu 3.9 / 3.12 + macOS 3.12
 - Optional Ruby bridge remains opt-in; default parser behavior is unchanged.
 
@@ -14,7 +14,7 @@ claiming full parity with every file under `Library/Homebrew`.
 
 | Item | Status | Notes |
 | --- | --- | --- |
-| Formulary source loader | Partial | `load_formula_from_path` evaluates a metadata-only `PybrewLoadedFormula`; namespace/cache/errors, path/factory/API caches, `formula_class_get_from_path`/`from_api`, `factory from: :api`, local-source factory and bounded struct mapping exist; real API JSON and full tap/alias resolution missing |
+| Formulary source loader | Partial | `load_formula_from_path` evaluates a metadata-only `PybrewLoadedFormula`; namespace/cache/errors, path/factory/API caches, `formula_class_get_from_path`/`from_api`, `factory from: :api`, `from_contents`, loader helpers, local-source factory and bounded struct mapping exist; real API JSON and full tap/alias resolution missing |
 | Formulary class cache / reload semantics | Missing | No cache keyed by path/mtime |
 | FormulaInstaller fetch/build/deps/link/cleanup | Partial | Loaded-source flow runs fetch/build/deps/link/clean/finish, recursively installs loaded dependencies, writes a minimal receipt readable via Tab; method-name surface is complete (bounded no-ops), but real bottle manifest/pour, full Tab/service/SBOM, linkage checks and topological ordering remain Python-side |
 | Compiler selection / Superenv build env | Partial | `CompilerSelector`/`CompilerFailure` surface and env-only `Superenv.setup_build_environment`; no real compiler probing/sandbox |
