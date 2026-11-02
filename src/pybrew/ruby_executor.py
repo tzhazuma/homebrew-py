@@ -5651,6 +5651,17 @@ class Keg
         FileUtils.rm_f(target.to_s)
       end
       target.make_symlink(@path.to_s) unless File.identical?(target.to_s, @path.to_s)
+      aliases.each do |alias_name|
+        alias_target = target.dirname/alias_name.to_s
+        next if File.identical?(alias_target.to_s, @path.to_s)
+
+        FileUtils.rm_f(alias_target.to_s) if overwrite
+        alias_target.make_symlink(@path.to_s) unless alias_target.symlink?
+      end
+      oldname_opt_records.each do |record|
+        FileUtils.rm_f(record.to_s) if record.symlink?
+        record.make_symlink(@path.to_s) unless record.symlink?
+      end
       return nil
     end
     target
