@@ -5636,8 +5636,24 @@ class Keg
     Pathname.new(PybrewFormulaRef.homebrew_prefix)
   end
 
-  def optlink
-    homebrew_prefix/"opt"/name
+  def optlink(*args, **options)
+    verbose = options.fetch(:verbose, args[0] || false)
+    dry_run = options.fetch(:dry_run, args[1] || false)
+    overwrite = options.fetch(:overwrite, args[2] || false)
+    target = homebrew_prefix/"opt"/name
+    if verbose || dry_run || overwrite
+      return nil if dry_run
+
+      target.dirname.mkpath
+      if File.symlink?(target.to_s) && !File.identical?(target.to_s, @path.to_s)
+        return nil unless overwrite
+
+        FileUtils.rm_f(target.to_s)
+      end
+      target.make_symlink(@path.to_s) unless File.identical?(target.to_s, @path.to_s)
+      return nil
+    end
+    target
   end
 
   def opt_record
