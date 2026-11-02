@@ -1408,9 +1408,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `4fe478a` (lightweight dynamic tap entries)
-- CI run for `4fe478a`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41542149072>
+- Latest feature commit: `b6383af` (patch dry-run validation)
+- CI run for `b6383af`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41543256022>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
