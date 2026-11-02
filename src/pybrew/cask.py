@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import platform
+import plistlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -171,6 +172,63 @@ class Cask:
             "installed_version": old,
             "installed_versions": self.installed_versions(),
         }
+
+    @property
+    def installed(self) -> bool:
+        return bool(self.installed_versions())
+
+    def installed_version(self) -> Optional[str]:
+        versions = self.installed_versions()
+        return versions[-1] if versions else None
+
+    @property
+    def outdated(self) -> bool:
+        return self.outdated_version() is not None
+
+    def _app_candidates(self) -> list[Path]:
+        prefix = Path(os.environ.get("HOMEBREW_PREFIX", "/usr/local"))
+        appdir = Path(os.environ.get("PYBREW_APPDIR", str(prefix / "Applications")))
+        candidates: list[Path] = []
+        for artifact in self.artifacts:
+            if artifact.kind not in {"app", "suite"}:
+                continue
+            target = artifact.target or Path(artifact.source).name
+            path = Path(target)
+            candidates.append(path if path.is_absolute() else appdir / target)
+        return candidates
+
+    def installed_app_info_plist(self) -> Optional[Path]:
+        for app in self._app_candidates():
+            plist = app / "Contents" / "Info.plist"
+            if plist.is_file():
+                return plist
+        return None
+
+    def installed_app_info(self) -> dict[str, Any]:
+        plist = self.installed_app_info_plist()
+        if plist is None:
+            return {}
+        try:
+            with plist.open("rb") as handle:
+                payload = plistlib.load(handle)
+        except Exception:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def bundle_version(self) -> Optional[str]:
+        value = self.installed_app_info().get("CFBundleVersion")
+        return str(value) if value is not None else None
+
+    def bundle_short_version(self) -> Optional[str]:
+        value = self.installed_app_info().get("CFBundleShortVersionString")
+        return str(value) if value is not None else None
+
+    def bundle_long_version(self) -> Optional[str]:
+        short = self.bundle_short_version()
+        build = self.bundle_version()
+        if short and build and short != build:
+            return f"{short} ({build})"
+        return short or build
 
     def artifacts_list(self) -> list[Artifact]:
         return list(self.artifacts)

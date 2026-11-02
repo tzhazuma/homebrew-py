@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import plistlib
 import shutil
 import sys
 import zipfile
@@ -1926,3 +1927,34 @@ def test_cask_metadata_helper_methods(tmp_path: Path, monkeypatch: pytest.Monkey
         "version": "1.10",
         "installed_versions": [],
     }
+
+
+def test_cask_installed_app_bundle_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    prefix = tmp_path / "prefix"
+    monkeypatch.setenv("HOMEBREW_PREFIX", str(prefix))
+    app = prefix / "Applications" / "Meta.app"
+    contents = app / "Contents"
+    contents.mkdir(parents=True)
+    with (contents / "Info.plist").open("wb") as handle:
+        plistlib.dump(
+            {
+                "CFBundleVersion": "42",
+                "CFBundleShortVersionString": "2.5",
+            },
+            handle,
+        )
+    room = prefix / "Caskroom" / "meta-app" / "2.5"
+    room.mkdir(parents=True)
+    cask = Cask(
+        token="meta-app",
+        version="2.5",
+        artifacts=[Artifact("app", "Meta.app")],
+    )
+    assert cask.installed is True
+    assert cask.installed_version() == "2.5"
+    assert cask.outdated is False
+    assert cask.installed_app_info_plist() == contents / "Info.plist"
+    assert cask.installed_app_info()["CFBundleVersion"] == "42"
+    assert cask.bundle_version() == "42"
+    assert cask.bundle_short_version() == "2.5"
+    assert cask.bundle_long_version() == "2.5 (42)"
