@@ -15,6 +15,7 @@ from pybrew.services import (
     LaunchctlRunner,
     ServiceError,
     ServiceManager,
+    ServiceSpec,
     SystemctlRunner,
     parse_service_block,
 )
@@ -774,3 +775,42 @@ def test_unknown_service_directive_is_warned(
     formula = _formula_with_service('run [opt_bin/"svc"]\nfrobnicate "x"')
     spec = parse_service_block(formula, config)
     assert spec.warnings == ["unsupported service directive `frobnicate`"]
+
+
+def test_service_spec_helper_methods(tmp_path: Path) -> None:
+    spec = ServiceSpec(
+        run=["/opt/example/bin/svc", "--flag"],
+        keep_alive={"successful_exit": True},
+        cron={"minute": 5, "hour": "6", "weekday": 7},
+        environment_variables={"FOO": "bar"},
+        require_root=True,
+        nice=5,
+        interval=30,
+    )
+    prefix = tmp_path / "prefix"
+    assert spec.command() == ["/opt/example/bin/svc", "--flag"]
+    assert spec.command_p() is True
+    assert spec.manual_command() == spec.command()
+    assert spec.keep_alive_p() is True
+    assert spec.timed_p() is True
+    assert spec.requires_root_p() is True
+    assert spec.nice_requires_root_p() is True
+    assert spec.default_service_name("svc") == "homebrew.mxcl.svc"
+    assert spec.default_plist_name("svc") == "homebrew.mxcl.svc.plist"
+    assert spec.path_dir(prefix) == prefix / "bin"
+    assert spec.path_dirs(prefix) == [prefix / "bin", prefix / "sbin"]
+    assert spec.path_parent_dir(prefix) == tmp_path
+    env = spec.effective_environment_variables(prefix)
+    assert env["FOO"] == "bar"
+    assert env["PATH"] == f"{prefix / 'bin'}:{prefix / 'sbin'}"
+    assert spec.parse_cron() == {
+        "Minute": 5,
+        "Hour": 6,
+        "Day": 1,
+        "Month": 1,
+        "Weekday": 7,
+    }
+    assert ServiceSpec.cron_weekday_to_systemd_weekday(1) == "Mon"
+    assert ServiceSpec.cron_weekday_to_systemd_weekday("Sun") == "Sun"
+    restored = ServiceSpec.from_hash({"run": ["x"], "unknown": "ignored"})
+    assert restored.run == ["x"]

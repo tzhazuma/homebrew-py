@@ -77,6 +77,109 @@ class ServiceSpec:
     sockets: dict[str, dict[str, str]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
+    @classmethod
+    def from_hash(cls, data: dict[str, Any]) -> "ServiceSpec":
+        known = cls.__dataclass_fields__
+        return cls(**{key: value for key, value in data.items() if key in known})
+
+    def command(self) -> list[str]:
+        return list(self.run)
+
+    def command_p(self) -> bool:
+        return bool(self.run)
+
+    def manual_command(self) -> list[str]:
+        return list(self.run)
+
+    def keep_alive_p(self) -> bool:
+        return bool(self.keep_alive)
+
+    def run_at_load_p(self) -> bool:
+        return bool(self.run_at_load)
+
+    def timed_p(self) -> bool:
+        return bool(self.cron) or self.interval is not None
+
+    def launch_only_once_p(self) -> bool:
+        return bool(self.launch_only_once)
+
+    def macos_legacy_timers_p(self) -> bool:
+        return bool(self.macos_legacy_timers)
+
+    def requires_root_p(self) -> bool:
+        return bool(self.require_root)
+
+    def nice_requires_root_p(self) -> bool:
+        return bool(self.nice) and bool(self.require_root)
+
+    def default_service_name(self, formula_name: str) -> str:
+        return f"homebrew.mxcl.{formula_name}"
+
+    def default_plist_name(self, formula_name: str) -> str:
+        return f"{self.default_service_name(formula_name)}.plist"
+
+    def path_dir(self, prefix: Path) -> Path:
+        return Path(prefix) / "bin"
+
+    def path_dirs(self, prefix: Path) -> list[Path]:
+        base = Path(prefix)
+        return [base / "bin", base / "sbin"]
+
+    def path_parent_dir(self, prefix: Path) -> Path:
+        return Path(prefix).parent
+
+    def effective_environment_variables(self, prefix: Path) -> dict[str, str]:
+        environment = dict(self.environment_variables)
+        search = ":".join(str(path) for path in self.path_dirs(prefix))
+        existing = environment.get("PATH")
+        environment["PATH"] = f"{search}:{existing}" if existing else search
+        return environment
+
+    def default_cron_values(self) -> dict[str, int]:
+        return {"Minute": 0, "Hour": 0, "Day": 1, "Month": 1, "Weekday": 0}
+
+    def parse_cron(self) -> dict[str, int]:
+        values = self.default_cron_values()
+        for key, value in (self.cron or {}).items():
+            normalized = CRON_KEY_ALIASES.get(str(key), str(key))
+            if normalized in values:
+                try:
+                    values[normalized] = int(value)
+                except (TypeError, ValueError):
+                    values[normalized] = 0
+        return values
+
+    @staticmethod
+    def cron_weekday_to_systemd_weekday(weekday: Any) -> str:
+        mapping = {
+            "0": "Sun",
+            "1": "Mon",
+            "2": "Tue",
+            "3": "Wed",
+            "4": "Thu",
+            "5": "Fri",
+            "6": "Sat",
+            "7": "Sun",
+            "Sun": "Sun",
+            "Mon": "Mon",
+            "Tue": "Tue",
+            "Wed": "Wed",
+            "Thu": "Thu",
+            "Fri": "Fri",
+            "Sat": "Sat",
+        }
+        return mapping.get(str(weekday), str(weekday))
+
+
+#: Cron keys accepted by Homebrew's service DSL.
+CRON_KEY_ALIASES = {
+    "minute": "Minute",
+    "hour": "Hour",
+    "day": "Day",
+    "month": "Month",
+    "weekday": "Weekday",
+}
+
 
 class _ServiceValueParser:
     """Parse the literal values used inside a service block."""
