@@ -879,6 +879,8 @@ module MacOS
   end
 
   def self.pkgutil_info(pkg)
+    return "" unless File.exist?("/usr/sbin/pkgutil")
+
     Utils.popen_read("/usr/sbin/pkgutil", "--pkg-info", pkg.to_s).to_s
   end
 
