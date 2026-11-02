@@ -4084,7 +4084,7 @@ def test_formula_installer_install_runs_full_loaded_flow(
         "post",
         "true",
         "loaded-flow",
-        "",
+        "loaded-flow",
         "dep",
         "dep,loaded-flow",
     ]
@@ -4647,7 +4647,7 @@ def test_formula_installer_recursive_loaded_dependencies(
         "root",
         "child",
         "ruby-dep-root,ruby-dep-child",
-        "ruby-dep-child",
+        "ruby-dep-child,ruby-dep-root",
         "ruby-dep-missing,ruby-no-install",
         "true",
         "true",
@@ -4695,7 +4695,7 @@ def test_formula_installer_loaded_dependency_cycle_guard(
     assert (keg / "cycle.txt").read_text().splitlines() == [
         "1",
         "ruby-cycle",
-        "true",
+        "false",
         "ruby-cycle",
         "true",
     ]
@@ -4883,4 +4883,132 @@ def test_formula_specs_and_build_accessors(
         "stable,head",
         "stable",
         "build_marker",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# FormulaInstaller loaded-source INSTALL_RECEIPT.json / Tab writing
+# ---------------------------------------------------------------------------
+
+
+def test_formula_installer_loaded_writes_install_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-receipt",
+        "1.0",
+        (
+            '  path = prefix/"receipt-fixture.rb"\n'
+            '  path.write <<~RUBY\n'
+            '    class ReceiptFixture < Formula\n'
+            '      version "2.0"\n'
+            '      depends_on "dep"\n'
+            '      depends_on "build-dep" => :build\n'
+            '      install do\n'
+            '        prefix.mkpath\n'
+            '        (prefix/"installed.txt").write("ok")\n'
+            '      end\n'
+            '    end\n'
+            '  RUBY\n'
+            '  klass = Formulary.load_formula_from_path("receipt-fixture", path)\n'
+            '  FormulaInstaller.new(klass.new, installed_on_request: true).install\n'
+            '  receipt_path = HOMEBREW_PREFIX/"Cellar"/"receipt-fixture"/"2.0"/"INSTALL_RECEIPT.json"\n'
+            '  receipt = JSON.parse(receipt_path.read)\n'
+            '  tab = Tab.for_keg(receipt_path.dirname)\n'
+            '  default_path = prefix/"receipt-default.rb"\n'
+            '  default_path.write <<~RUBY\n'
+            '    class ReceiptDefault < Formula\n'
+            '      version "1.0"\n'
+            '      install do\n'
+            '        prefix.mkpath\n'
+            '        (prefix/"installed.txt").write("default")\n'
+            '      end\n'
+            '    end\n'
+            '  RUBY\n'
+            '  default_klass = Formulary.load_formula_from_path("receipt-default", default_path)\n'
+            '  FormulaInstaller.new(default_klass.new).install\n'
+            '  default_receipt = JSON.parse(\n'
+            '    (HOMEBREW_PREFIX/"Cellar"/"receipt-default"/"1.0"/"INSTALL_RECEIPT.json").read\n'
+            '  )\n'
+            '  (prefix/"receipt.txt").write [\n'
+            '    receipt_path.file?.to_s,\n'
+            '    receipt.keys.sort.join(","),\n'
+            '    receipt["version"],\n'
+            '    receipt["installed_on_request"].to_s,\n'
+            '    receipt["runtime_dependencies"].join(","),\n'
+            '    receipt["poured_from_bottle"].to_s,\n'
+            '    tab["version"],\n'
+            '    tab.installed_on_request?.to_s,\n'
+            '    tab.poured_from_bottle?.to_s,\n'
+            '    tab.runtime_dependencies.join(","),\n'
+            '    FormulaInstaller.installed.map(&:name).join(","),\n'
+            '    (receipt_path.dirname/"installed.txt").read,\n'
+            '    default_receipt["installed_on_request"].to_s,\n'
+            '    default_receipt["runtime_dependencies"].empty?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "receipt.txt").read_text().splitlines() == [
+        "true",
+        "installed_on_request,poured_from_bottle,runtime_dependencies,version",
+        "2.0",
+        "true",
+        "dep",
+        "false",
+        "2.0",
+        "true",
+        "false",
+        "dep",
+        "receipt-fixture,receipt-default",
+        "ok",
+        "false",
+        "true",
+    ]
+
+
+def test_formula_installer_loaded_receipt_not_written_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-receipt-failure",
+        "1.0",
+        (
+            '  path = prefix/"failing-receipt.rb"\n'
+            '  path.write <<~RUBY\n'
+            '    class FailingReceipt < Formula\n'
+            '      version "1.0"\n'
+            '      install do\n'
+            '        prefix.mkpath\n'
+            '        (prefix/"partial.txt").write("partial")\n'
+            '        raise "receipt install boom"\n'
+            '      end\n'
+            '    end\n'
+            '  RUBY\n'
+            '  klass = Formulary.load_formula_from_path("failing-receipt", path)\n'
+            '  begin\n'
+            '    FormulaInstaller.new(klass.new).install\n'
+            '    failure = "none"\n'
+            '  rescue => error\n'
+            '    failure = error.class.name\n'
+            '  end\n'
+            '  failing_prefix = HOMEBREW_PREFIX/"Cellar"/"failing-receipt"/"1.0"\n'
+            '  (prefix/"receipt-failure.txt").write [\n'
+            '    failure,\n'
+            '    (failing_prefix/"partial.txt").exist?.to_s,\n'
+            '    (failing_prefix/"INSTALL_RECEIPT.json").exist?.to_s,\n'
+            '    FormulaInstaller.installed.empty?.to_s,\n'
+            '    FormulaInstaller.attempted.map(&:name).join(",")\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "receipt-failure.txt").read_text().splitlines() == [
+        "RuntimeError",
+        "true",
+        "false",
+        "true",
+        "failing-receipt",
     ]

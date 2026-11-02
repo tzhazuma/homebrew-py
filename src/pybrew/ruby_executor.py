@@ -3017,10 +3017,54 @@ class FormulaInstaller
       build
       clean
       finish
+      unless only_deps?
+        unless self.class.installed.any? { |item| item.to_s == name }
+          self.class.installed << formula
+        end
+        write_install_receipt
+      end
       formula
     ensure
       self.class.installing.delete(name)
     end
+  end
+
+  RECEIPT_FILENAME = "INSTALL_RECEIPT.json".freeze
+
+  # Minimal Homebrew INSTALL_RECEIPT.json for a Formulary-loaded install.
+  # ``Tab.for_keg(prefix)`` reads this back.
+  def install_receipt_data
+    runtime_dependencies = []
+    if formula.respond_to?(:dependencies)
+      formula.dependencies.each do |dep|
+        next if dep.respond_to?(:runtime?) && !dep.runtime?
+
+        dep_name = dep.name.to_s
+        next if dep_name.empty? || runtime_dependencies.include?(dep_name)
+
+        runtime_dependencies << dep_name
+      end
+    end
+    {
+      "version" => formula.version.to_s,
+      "installed_on_request" => installed_on_request?,
+      "runtime_dependencies" => runtime_dependencies,
+      "poured_from_bottle" => false,
+    }
+  end
+
+  def write_install_receipt
+    return nil unless formula.is_a?(PybrewLoadedFormula)
+    return nil if only_deps?
+
+    prefix = formula.prefix
+    return nil unless prefix.directory?
+
+    path = prefix/RECEIPT_FILENAME
+    path.write(JSON.pretty_generate(install_receipt_data) + "\n")
+    path
+  rescue ScriptError, StandardError
+    nil
   end
 
   # Mirror Homebrew's install flow for Formulary-loaded sources: link the keg
@@ -3287,7 +3331,7 @@ class FormulaInstaller
       return nil
     end
 
-    FormulaInstaller.new(dep_formula, **@options).install
+    FormulaInstaller.new(dep_formula, **@options.merge(installed_on_request: false)).install
     unless self.class.installed.any? { |item| item.to_s == dep.to_s }
       self.class.installed << dep
     end
