@@ -4830,3 +4830,28 @@ def test_formula_active_spec_prefers_requested(
     lines = (keg / "activespec.txt").read_text().splitlines()
     assert lines[0] == "https://example.com/ruby-active-spec-1.0.tar.gz"
     assert lines[1] == lines[0]
+
+
+def test_formula_rack_installed_class_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-rack-installed",
+        "1.0",
+        (
+            '  rack = Pathname.new(ENV["HOMEBREW_CELLAR"])/"rack-target"/"1.0"\n'
+            '  rack.mkpath\n'
+            '  (prefix/"rack-installed.txt").write [\n'
+            '    Formula.rack_installed?("rack-target").to_s,\n'
+            '    Formula.rack_installed?("missing-target").to_s,\n'
+            '    Formula.installed_formula_names.include?("rack-target").to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "rack-installed.txt").read_text().splitlines() == [
+        "true",
+        "false",
+        "true",
+    ]

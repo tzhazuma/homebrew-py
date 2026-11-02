@@ -5997,6 +5997,17 @@ module Formula
   def self.factory(name)
     self[name]
   end
+
+  def self.rack_installed?(name)
+    rack = HOMEBREW_CELLAR/name.to_s.split("/").last.to_s
+    rack.directory? && !rack.children.select { |child| child.directory? }.empty?
+  end
+
+  def self.installed_formula_names
+    return [] unless HOMEBREW_CELLAR.directory?
+
+    HOMEBREW_CELLAR.children.select { |child| child.directory? }.map { |child| child.basename.to_s }
+  end
 end
 
 class PybrewInreplaceHelper
