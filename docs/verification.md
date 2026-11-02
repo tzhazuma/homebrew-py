@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-757 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+758 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -724,6 +724,12 @@ local remote, commits a change, and confirms the CLI updates it.
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
 
+## macOS mdfind/pkgutil helpers
+
+- Added `MacOS.full_version=` (cache reset), `mdfind`, `mdfind_query`,
+  `app_with_bundle_id`, `pkgutil_info`, `sdk_locator`, `sdk_for_formula`,
+  `sdk_path_if_needed`.
+
 ## Resource download/metadata helpers
 
 - Added `download_name`/`download_queue_name`/`download_queue_type`,
@@ -1386,9 +1392,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `50db6d8` (Resource download/metadata helpers)
-- CI run for `50db6d8`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41533246606>
+- Latest feature commit: `4cbefdb` (macOS mdfind/pkgutil helpers)
+- CI run for `4cbefdb`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41534488655>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
