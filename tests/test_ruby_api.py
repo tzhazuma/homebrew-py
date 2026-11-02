@@ -2226,7 +2226,7 @@ def test_formula_broad_compatibility_methods(
             '    ref.rpath.to_s, ref.common_sandbox_env.key?(:HOME).to_s,\n'
             '    ref.test_fixtures.empty?.to_s, ref.pypi_packages.nil?.to_s,\n'
             '    ref.ruby_source_path.to_s, ref.full_formulae_names.join(","),\n'
-            '    ref.specs.empty?.to_s, ref.link_overwrite_reason.nil?.to_s\n'
+            '    ref.specs.length.to_s, ref.link_overwrite_reason.nil?.to_s\n'
             '  ].join("\\n")\n'
         ),
     )
@@ -2237,7 +2237,7 @@ def test_formula_broad_compatibility_methods(
     assert lines[3] == "false"
     assert lines[4] == "" or lines[4].endswith("ruby-broad.rb")
     assert lines[5] == "ruby-broad"
-    assert lines[6:] == ["true", "true"]
+    assert lines[6:] == ["2", "true"]
 
 
 def test_formula_with_logging_yields(
