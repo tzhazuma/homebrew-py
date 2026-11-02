@@ -726,6 +726,9 @@ local remote, commits a change, and confirms the CLI updates it.
 
 ## Upstream sync (2026-11-02)
 
+- Upstream exploratory PR Homebrew/brew#24362 remains closed (2026-10-28);
+  it was not reopened or resubmitted.
+
 - Tracked Homebrew/brew `59604a815c` and homebrew-core `992feb273e`; formula
   DSL changes are internal plus:
   - `Formula.rack_installed?` and `Formula.installed_formula_names`
@@ -1231,9 +1234,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `740bd01` (seventh batch + upstream sync)
-- CI run for `740bd01`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41259825843>
+- Latest feature commit: `fc49dc3` (upstream rack helpers + tracking state)
+- CI run for `fc49dc3`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41370538527>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
