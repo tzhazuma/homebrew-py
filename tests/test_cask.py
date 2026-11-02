@@ -1958,3 +1958,32 @@ def test_cask_installed_app_bundle_metadata(tmp_path: Path, monkeypatch: pytest.
     assert cask.bundle_version() == "42"
     assert cask.bundle_short_version() == "2.5"
     assert cask.bundle_long_version() == "2.5 (42)"
+
+
+def test_cask_source_platform_and_pin_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prefix = tmp_path / "prefix"
+    monkeypatch.setenv("HOMEBREW_PREFIX", str(prefix))
+    source = tmp_path / "meta.rb"
+    source.write_text("cask 'meta'")
+    cask = Cask(
+        token="meta",
+        path=source,
+        version="2.0",
+        os={"macos": True, "linux": False},
+    )
+    assert cask.ruby_source_path() == source
+    assert cask.ruby_source_checksum() == hashlib.sha256(source.read_bytes()).hexdigest()
+    assert cask.loaded_from_api() is False
+    assert cask.loaded_from_internal_api() is False
+    assert cask.valid_platform() is True
+    assert cask.supports_macos() is True
+    assert cask.supports_linux() is False
+    assert cask.pinned() is False
+    assert cask.pinned_version() is None
+    cask.pin()
+    assert cask.pinned() is True
+    assert cask.pinned_version() == "2.0"
+    cask.unpin()
+    assert cask.pinned() is False

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import platform
 import plistlib
@@ -214,6 +215,53 @@ class Cask:
         except Exception:
             return {}
         return payload if isinstance(payload, dict) else {}
+
+    def ruby_source_path(self) -> Optional[Path]:
+        return self.path if self.path is not None and self.path.is_file() else None
+
+    def ruby_source_checksum(self) -> Optional[str]:
+        path = self.ruby_source_path()
+        if path is None:
+            return None
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def loaded_from_api(self) -> bool:
+        return False
+
+    def loaded_from_internal_api(self) -> bool:
+        return False
+
+    def valid_platform(self) -> bool:
+        return self.platform_supported()
+
+    def supports_macos(self) -> bool:
+        return bool((self.os or {}).get("macos", True))
+
+    def supports_linux(self) -> bool:
+        return bool((self.os or {}).get("linux", True))
+
+    @property
+    def pin_path(self) -> Path:
+        return self.caskroom_path / ".metadata" / "pin"
+
+    def pinned(self) -> bool:
+        return self.pin_path.is_file()
+
+    def pinned_version(self) -> Optional[str]:
+        if not self.pinned():
+            return None
+        value = self.pin_path.read_text().strip()
+        return value or None
+
+    def pin(self) -> None:
+        self.pin_path.parent.mkdir(parents=True, exist_ok=True)
+        self.pin_path.write_text(f"{self.version or 'latest'}\n")
+
+    def unpin(self) -> None:
+        try:
+            self.pin_path.unlink()
+        except FileNotFoundError:
+            pass
 
     def bundle_version(self) -> Optional[str]:
         value = self.installed_app_info().get("CFBundleVersion")
