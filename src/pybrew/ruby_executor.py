@@ -976,6 +976,77 @@ module DevelopmentTools
   def locate
     clang
   end
+
+  def clear_version_cache
+    @clang_version_output = nil
+    nil
+  end
+
+  def host_gcc_path
+    Pathname.new("/usr/bin/gcc")
+  end
+
+  def clang_version_output
+    Utils.popen_read("clang", "--version", safe: true) rescue nil
+  end
+
+  def ld64_version
+    nil
+  end
+
+  def llvm_clang_version
+    nil
+  end
+
+  def llvm_clang_build_version
+    llvm_clang_version
+  end
+
+  def needs_libc_formula?
+    false
+  end
+
+  def needs_compiler_formula?
+    false
+  end
+
+  def needs_build_formulae?
+    needs_libc_formula? || needs_compiler_formula?
+  end
+
+  def curl_handles_most_https_certificates?
+    true
+  end
+
+  def ca_file_substitution_required?
+    false
+  end
+
+  def curl_substitution_required?
+    false
+  end
+
+  def installation_instructions
+    "Install Clang or run `brew install gcc`."
+  end
+
+  def custom_installation_instructions
+    installation_instructions
+  end
+
+  def insecure_download_warning(resource)
+    "Using `--insecure` with curl to download #{resource} because we need it to run " \
+      "`brew install ca-certificates` in order to download securely from now on. " \
+      "Checksums will still be verified."
+  end
+
+  def build_system_info
+    {
+      "os" => RUBY_PLATFORM.include?("darwin") ? "MacOS" : "Linux",
+      "os_version" => (defined?(OS_VERSION) ? OS_VERSION : RUBY_PLATFORM).to_s,
+      "cpu_family" => (defined?(Hardware::CPU) ? Hardware::CPU.family.to_s : RUBY_PLATFORM)
+    }
+  end
 end
 
 # Homebrew's compiler constants are referenced by compiler-selection code and
@@ -1431,6 +1502,118 @@ module Utils
       raise "pipe_output: expected exit status #{result}, got #{actual.inspect}" unless actual == result
     end
     output
+  end
+
+  def name_from_full_name(full_name)
+    parts = full_name.to_s.split("/", 3)
+    parts.length == 3 ? parts[2] : full_name.to_s
+  end
+
+  def tap_from_full_name(full_name)
+    parts = full_name.to_s.split("/", 3)
+    parts.length == 3 ? "#{parts[0]}/#{parts[1]}" : nil
+  end
+
+  def full_name?(full_name)
+    full_name.to_s.count("/") == 2
+  end
+
+  def name_or_token(formula_or_cask)
+    formula_or_cask.respond_to?(:token) ? formula_or_cask.token : formula_or_cask.name
+  end
+
+  def fully_qualified_name(formula_or_cask)
+    tap = formula_or_cask.respond_to?(:tap) ? formula_or_cask.tap : nil
+    if tap && ["homebrew/core", "homebrew/cask"].include?(tap.to_s)
+      "#{formula_or_cask.full_name}"
+    else
+      formula_or_cask.full_name
+    end
+  end
+
+  def convert_to_string_or_symbol(string)
+    text = string.to_s
+    text.start_with?(":") ? text[1..].to_sym : text
+  end
+
+  def deep_stringify_symbols(obj)
+    case obj
+    when String
+      obj.start_with?(":", "\\") ? "\\#{obj}" : obj
+    when Symbol
+      ":#{obj}"
+    when Hash
+      obj.each_with_object({}) { |(key, value), result| result[deep_stringify_symbols(key)] = deep_stringify_symbols(value) }
+    when Array
+      obj.map { |value| deep_stringify_symbols(value) }
+    else
+      obj
+    end
+  end
+
+  def deep_unstringify_symbols(obj)
+    case obj
+    when String
+      if obj.start_with?("\\")
+        obj[1..]
+      elsif obj.start_with?(":")
+        obj[1..].to_sym
+      else
+        obj
+      end
+    when Hash
+      obj.each_with_object({}) { |(key, value), result| result[deep_unstringify_symbols(key)] = deep_unstringify_symbols(value) }
+    when Array
+      obj.map { |value| deep_unstringify_symbols(value) }
+    else
+      obj
+    end
+  end
+
+  def deep_compact_blank(obj, compact_zero: true, compact_false: true)
+    compacted = case obj
+                when Hash
+                  obj.each_with_object({}) do |(key, value), result|
+                    item = deep_compact_blank(value, compact_zero: compact_zero, compact_false: compact_false)
+                    result[key] = item unless item.nil?
+                  end
+                when Array
+                  obj.each_with_object([]) do |value, result|
+                    item = deep_compact_blank(value, compact_zero: compact_zero, compact_false: compact_false)
+                    result << item unless item.nil?
+                  end
+                else
+                  obj
+                end
+    return nil if compacted.nil?
+    return nil if compact_false && compacted == false
+    return nil if compacted.respond_to?(:empty?) && compacted.empty?
+    return nil if compact_zero && compacted.is_a?(Numeric) && compacted.zero?
+
+    compacted
+  end
+
+  def exponential_backoff_sleep(try, base: 2)
+    wait = base**try
+    yield wait if block_given?
+    sleep wait
+  end
+
+  def parse_author!(author)
+    match = /^(?<name>[^<]+?)[ \t]*<(?<email>[^>]+?)>$/.match(author.to_s)
+    raise "Unable to parse name and email." if match.nil?
+
+    { name: match[:name], email: match[:email] }
+  end
+
+  def parallel_map(items, &block)
+    threads = items.map do |item|
+      Thread.new do
+        Thread.current.report_on_exception = false
+        block.call(item)
+      end
+    end
+    threads.map(&:value)
   end
 
   def git(*args)
@@ -5986,6 +6169,18 @@ module SystemConfig
 
     def branch
       "(none)"
+    end
+
+    def homebrew_repo
+      Pathname.new((defined?(HOMEBREW_REPOSITORY) ? HOMEBREW_REPOSITORY : HOMEBREW_PREFIX).to_s)
+    end
+
+    def homebrew_head_info
+      nil
+    end
+
+    def windows_version
+      nil
     end
 
     def head

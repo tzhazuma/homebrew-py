@@ -5151,3 +5151,44 @@ def test_formulary_factory_from_api_cache(
         "api-factory",
         "not-cached",
     ]
+
+
+def test_utils_development_tools_and_system_config_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-utils-core",
+        "1.0",
+        (
+            '  (prefix/"utils-core.txt").write [\n'
+            '    Utils.name_from_full_name("user/tap/foo"),\n'
+            '    Utils.tap_from_full_name("user/tap/foo"),\n'
+            '    Utils.full_name?("user/tap/foo").to_s,\n'
+            '    Utils.convert_to_string_or_symbol(":abc").inspect,\n'
+            '    Utils.deep_stringify_symbols(:abc),\n'
+            '    Utils.deep_unstringify_symbols(":abc").to_s,\n'
+            '    Utils.deep_compact_blank([nil, "", 0, 1]).join(","),\n'
+            '    Utils.parse_author!("A <a@b>")[:name],\n'
+            '    DevelopmentTools.host_gcc_path.to_s,\n'
+            '    DevelopmentTools.needs_build_formulae?.to_s,\n'
+            '    SystemConfig.homebrew_repo.to_s.start_with?(ENV["HOMEBREW_PREFIX"]).to_s,\n'
+            '    SystemConfig.windows_version.nil?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "utils-core.txt").read_text().splitlines() == [
+        "foo",
+        "user/tap",
+        "true",
+        ":abc",
+        ":abc",
+        "abc",
+        "1",
+        "A",
+        "/usr/bin/gcc",
+        "false",
+        "true",
+        "true",
+    ]
