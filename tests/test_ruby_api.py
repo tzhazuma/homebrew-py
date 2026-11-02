@@ -4149,7 +4149,7 @@ def test_compiler_selection_surface(
             '    CompilerSelector.compilers.join(","),\n'
             '    CompilerSelector.select_for(failing).to_s,\n'
             '    CompilerSelector.select_for(clean).to_s,\n'
-            '    CompilerSelector.preferred_gcc,\n'
+            '    CompilerSelector.preferred_gcc.to_s.start_with?(\"gcc\").to_s,\n'
             '    gcc_failure.inspect,\n'
             '    ref.compiler_failures.map(&:inspect).join(";"),\n'
             '    CompilerSelector.select_for(ref).to_s,\n'
@@ -4176,7 +4176,7 @@ def test_compiler_selection_surface(
         "clang,llvm_clang,gnu",
         "llvm_clang",
         "clang",
-        "gcc",
+        "true",
         "#<CompilerFailure: gcc 7.999>",
         "#<CompilerFailure: gcc 7.999>",
         "clang",
@@ -5302,3 +5302,33 @@ def test_formulary_from_contents_and_load_file(
         "contents desc",
         "1.0",
     ]
+
+
+def test_compiler_gcc_probing_prefers_installed_versions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    for name, version in (("gcc", "13.1.0"), ("gcc-12", "12.2.0")):
+        script = bindir / name
+        script.write_text(f"#!/bin/sh\necho 'gcc (GCC) {version}'\n")
+        script.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bindir}:{os.environ.get('PATH', '')}")
+
+    formula = _formula(
+        "ruby-gcc-probe",
+        "1.0",
+        (
+            '  (prefix/"gcc-probe.txt").write [\n'
+            '    DevelopmentTools.gcc_version("gcc-12").to_s,\n'
+            '    CompilerSelector.preferred_gcc,\n'
+            '    CompilerSelector.compilers.join(",")\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    lines = (keg / "gcc-probe.txt").read_text().splitlines()
+    assert lines[0] == "12.2.0"
+    assert lines[1].startswith("gcc")
+    assert lines[2] == "clang,llvm_clang,gnu"

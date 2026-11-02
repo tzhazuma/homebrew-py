@@ -941,8 +941,8 @@ module DevelopmentTools
     clang_build_version
   end
 
-  def gcc_version
-    output = Utils.popen_read("gcc", "--version", safe: true) rescue ""
+  def gcc_version(cc = "gcc")
+    output = Utils.popen_read(cc.to_s, "--version", safe: true) rescue ""
     output[/gcc(?: \([^)]*\))?\s+(\d+(?:\.\d+)+)/, 1]
   end
 
@@ -1187,15 +1187,17 @@ class CompilerSelector
   end
 
   def self.preferred_gcc
-    "gcc"
+    installed = CompilerConstants::GNU_GCC_VERSIONS.select { |version| !Utils.which("gcc-#{version}").nil? }
+    installed.empty? ? "gcc" : "gcc-#{installed.max}"
   end
 
   def self.build_compilers(candidate)
     case candidate.to_sym
     when :gnu
-      version = compiler_version(:gcc)
-      GNU_GCC_VERSIONS.reverse.map do |gcc_version|
-        Compiler.new(:gcc, "gcc-#{gcc_version}", version)
+      installed = GNU_GCC_VERSIONS.select { |gcc_version| !Utils.which("gcc-#{gcc_version}").nil? }
+      installed = [preferred_gcc.sub(/^gcc-/, "")] if installed.empty? && !Utils.which("gcc").nil?
+      installed.reverse.map do |gcc_version|
+        Compiler.new(:gcc, "gcc-#{gcc_version}", DevelopmentTools.gcc_version("gcc-#{gcc_version}"))
       end
     when :llvm
       []
