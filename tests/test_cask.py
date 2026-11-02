@@ -2023,3 +2023,42 @@ def test_cask_serialization_and_ref_helpers(
     assert payload["artifacts"][0]["kind"] == "app"
     assert payload["renames"] == [["old-serial", "serial"]]
     assert payload["custom"] == "value"
+
+
+def test_cask_api_refresh_and_variation_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOMEBREW_PREFIX", str(tmp_path / "prefix"))
+    source = tmp_path / "api.rb"
+    source.write_text(
+        'cask "api" do\n'
+        '  version "1.0"\n'
+        '  sha256 "abc"\n'
+        '  url "https://example.com/api-1.0.zip"\n'
+        '  name "Api"\n'
+        '  homepage "https://example.com/api"\n'
+        '  app "Api.app"\n'
+        'end\n'
+    )
+    cask = parse_cask_file(source)
+    assert cask.dsl() is cask
+    assert cask.api_to_local_hash()["token"] == "api"
+    assert cask.to_hash_with_variations()["version"] == "1.0"
+    cask.version = "9.9"
+    refreshed = cask.refresh()
+    assert refreshed.version == "1.0"
+    assert cask.refresh_for_tag("arm") is cask
+    assert cask.tab() == {"token": "api", "version": "1.0"}
+
+    populated = Cask(token="empty").populate_from_api(
+        {
+            "token": "populated",
+            "version": "2.0",
+            "url": "https://example.com/populated.zip",
+            "sha256": "def",
+            "artifacts": [{"kind": "app", "source": "Populated.app"}],
+        }
+    )
+    assert populated.token == "populated"
+    assert populated.version == "2.0"
+    assert populated.artifacts[0].source == "Populated.app"

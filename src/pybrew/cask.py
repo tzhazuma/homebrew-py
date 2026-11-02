@@ -216,6 +216,58 @@ class Cask:
             return {}
         return payload if isinstance(payload, dict) else {}
 
+    def api_to_local_hash(self) -> dict[str, Any]:
+        payload = {
+            "token": self.token,
+            "full_token": self.full_name,
+            "version": self.version,
+            "url": self.url,
+            "sha256": self.resolved_sha256(),
+            "homepage": self.homepage,
+            "name": self.name,
+        }
+        return {key: value for key, value in payload.items() if value is not None}
+
+    def to_hash_with_variations(self) -> dict[str, Any]:
+        return self.to_h()
+
+    def dsl(self) -> "Cask":
+        return self
+
+    def populate_from_api(self, data: dict[str, Any]) -> "Cask":
+        for key in ("token", "version", "url", "sha256", "name", "desc", "homepage"):
+            value = data.get(key)
+            if value is not None:
+                setattr(self, key, value)
+        if data.get("artifacts"):
+            self.artifacts = [
+                Artifact(
+                    str(item.get("kind", "artifact")),
+                    str(item.get("source", "")),
+                    item.get("target"),
+                    dict(item.get("kwargs") or {}),
+                )
+                for item in data["artifacts"]
+                if isinstance(item, dict)
+            ]
+        return self
+
+    def refresh(self) -> "Cask":
+        if self.path is None or not self.path.is_file():
+            return self
+        refreshed = parse_cask_file(self.path)
+        self.__dict__.update(refreshed.__dict__)
+        return self
+
+    def refresh_for_tag(self, _tag: Any = None) -> "Cask":
+        return self.refresh()
+
+    def tab(self) -> dict[str, Any]:
+        return {
+            "token": self.token,
+            "version": self.installed_version() or self.version,
+        }
+
     def reloadable_ref(self) -> Optional[Path]:
         return self.path
 
