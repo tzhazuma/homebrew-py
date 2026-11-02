@@ -1,7 +1,8 @@
 # Parity with Ruby Homebrew
 
-Tested against **Homebrew 7.0.9** (`cdc1ca5032`) on macOS 27.2 (arm64 hardware,
-brew running as x86_64 Rosetta), Python 3.12.7, 2026-10-27.
+Tested against **Homebrew 7.0.11** (`59604a815c`) on macOS 27.2 (arm64 hardware,
+brew running as x86_64 Rosetta), Python 3.12.7, 2026-11-02. The formula corpus
+was last confirmed against `Homebrew/homebrew-core@992feb273e`.
 
 ## Real formula corpus
 
@@ -51,9 +52,15 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 | Outdated / upgrade / auto-remove / leaves / uses / cleanup / reinstall / pin | Yes | outdated; upgrade installs/relinks/removes old kegs; autoremove; cleanup; reinstall; pin |
 | Bundle | Yes | Brewfile install/check/list/dump, tap URL, link:false, args, mas/vscode, restart_service |
 | Analytics | Yes | Local-only opt-in event log; no upload |
-| Formula tests | `brew test` | Not executed |
+| Formula tests | `brew test` | `run_test` + test DSL; dependency test blocks, isolated dependency testpaths, skip/failure propagation |
 | Fetch / source inspection | `brew fetch`, `cat`, `home`, `edit` | `fetch` formula/cask; `cat`/`home`/`edit` formula/cask |
 | Self-update / doctor | Yes | `doctor` checks prefix, Cellar, cask artifacts, links and orphan services; `--json`; `shellenv` |
+
+## Ruby API coverage
+
+The opt-in Ruby bridge and its remaining gaps are tracked in
+[ruby-api-coverage.md](ruby-api-coverage.md) and
+[ruby-api-gaps.md](ruby-api-gaps.md).
 
 ## Verified integration cases
 
