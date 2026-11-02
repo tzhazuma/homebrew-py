@@ -1936,3 +1936,21 @@ end
         },
     )
     assert result.success is True
+
+
+@requires_ruby
+def test_dynamic_formula_lookup_resolves_local_uninstalled_formula(
+    tmp_path: Path,
+) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(tap, "dynamic-dep", "  test do\n    assert true\n  end")
+    source = """do
+  name = "dynamic-dep"
+  dep = Formula[name]
+  refute dep.installed?
+  assert_equal "dynamic-dep", dep.name
+end
+"""
+    formula, config = _installed_formula(tmp_path, source, taps=[tap])
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True

@@ -49,6 +49,10 @@ MAX_FORMULA_ENTRIES = 50
 #: Maximum number of tap formula files indexed for ``Formula[...]`` lookups.
 MAX_TAP_FORMULA_INDEX = 20000
 
+#: Small local taps are preloaded eagerly so dynamic ``Formula[expression]``
+#: lookups (e.g. ``Formula[dep_name]``) can resolve uninstalled formulae.
+MAX_EAGER_FORMULA_ENTRIES = 200
+
 #: Bounded in-process caches (parsed formulae and tap indexes).
 FORMULA_CACHE_LIMIT = 256
 TAP_INDEX_CACHE_LIMIT = 8
@@ -2047,6 +2051,9 @@ def _formula_entries(
         installed_names = []
     for installed_name in installed_names:
         queue.append((installed_name, False))
+    if len(index.by_name) <= MAX_EAGER_FORMULA_ENTRIES:
+        for eager_name in sorted(index.by_name):
+            queue.append((eager_name, False))
 
     taps_listing = ", ".join(tap.name for tap in index.taps) or "no taps configured"
     seen: set[str] = {formula.name}
