@@ -2080,3 +2080,28 @@ def test_cask_config_language_and_strategy_helpers(
     assert cask.download_strategy() == ":curl"
     assert cask.using() == ":curl"
     assert Cask(token="default").languages() == ["en"]
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="curl not installed")
+def test_install_cask_using_curl_strategy(tmp_path: Path) -> None:
+    archive = tmp_path / "CurlStrategy-1.0.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("data.txt", "curl strategy\n")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "c" / "curl-strategy.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        f'''cask "curl-strategy" do
+  version "1.0"
+  sha256 "{digest}"
+  url "{archive.as_uri()}", using: :curl
+  stage_only true
+end
+'''
+    )
+    config = Config.default(prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache")
+    config.ensure()
+    installer = CaskInstaller(config)
+    installer.install(CaskLoader(discover_taps([tap])).load("curl-strategy"))
+    assert (config.caskroom / "curl-strategy" / "1.0").is_dir()

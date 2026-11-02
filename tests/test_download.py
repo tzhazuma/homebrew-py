@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import shutil
 import urllib.request
 from pathlib import Path
 from typing import Optional
@@ -155,3 +156,15 @@ def test_file_url_does_not_forward_headers_to_transport(
     assert archive.read_bytes() == payload
     # ``fetch`` accepts headers, but a file:// URL never forwards them.
     assert captured == [None]
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="curl not installed")
+def test_fetch_using_curl_strategy(tmp_path: Path) -> None:
+    payload = b"curl strategy payload"
+    source = tmp_path / "payload.bin"
+    source.write_bytes(payload)
+    digest = hashlib.sha256(payload).hexdigest()
+    downloader = Downloader(tmp_path / "cache")
+    archive = downloader.fetch(source.as_uri(), digest, hint="payload", using="curl")
+    assert archive.read_bytes() == payload
+    assert digest in archive.name

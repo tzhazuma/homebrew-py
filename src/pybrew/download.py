@@ -6,6 +6,7 @@ import hashlib
 import os
 import re
 import shutil
+import subprocess
 import tempfile
 import urllib.error
 import urllib.parse
@@ -131,6 +132,7 @@ class Downloader:
         sha256: str,
         hint: str = "download",
         headers: Optional[Mapping[str, str]] = None,
+        using: Optional[str] = None,
     ) -> Path:
         cached = self.find_cached(sha256)
         if cached is not None:
@@ -142,7 +144,7 @@ class Downloader:
             return destination
         temporary = Path(tempfile.mkstemp(prefix=".pybrew-", dir=self.cache_dir)[1])
         try:
-            self._download(url, temporary, headers=headers)
+            self._download(url, temporary, headers=headers, using=using)
             actual = sha256_file(temporary)
             if actual != sha256:
                 raise ChecksumMismatch(
@@ -176,7 +178,12 @@ class Downloader:
         url: str,
         destination: Path,
         headers: Optional[Mapping[str, str]] = None,
+        using: Optional[str] = None,
     ) -> None:
+        strategy = str(using or "").lstrip(":").lower()
+        if strategy == "curl":
+            self._curl_download(url, destination, headers)
+            return
         if headers and urllib.parse.urlparse(url).scheme == "file":
             # A local file has no HTTP request; cask headers do not apply.
             headers = None
@@ -194,6 +201,27 @@ class Downloader:
             raise DownloadError(f"{url}: HTTP {error.code} {error.reason}") from error
         except (urllib.error.URLError, OSError) as error:
             raise DownloadError(f"{url}: {error}") from error
+
+    def _curl_download(
+        self,
+        url: str,
+        destination: Path,
+        headers: Optional[Mapping[str, str]] = None,
+    ) -> None:
+        curl = shutil.which("curl")
+        if curl is None:
+            raise DownloadError(f"{url}: curl download strategy requested but curl is not installed")
+        command = [curl, "--fail", "--location", "--silent", "--show-error", "--max-time", str(DEFAULT_TIMEOUT), "-o", str(destination)]
+        for name, value in (headers or {}).items():
+            command.extend(["-H", f"{name}: {value}"])
+        command.append(url)
+        try:
+            result = subprocess.run(command, capture_output=True, text=True)
+        except OSError as error:
+            raise DownloadError(f"{url}: {error}") from error
+        if result.returncode != 0:
+            message = (result.stderr or result.stdout or "").strip()
+            raise DownloadError(f"{url}: curl exited {result.returncode}: {message}")
 
 
 def copy_or_move(source: Path, destination: Path) -> None:

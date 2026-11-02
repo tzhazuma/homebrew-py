@@ -927,8 +927,8 @@ def _archive_kind(path: Path) -> str:
     return "unknown"
 
 
-def _download_accepts_headers(downloader: Any) -> bool:
-    """Return true when the injected downloader accepts request headers."""
+def _download_accepts_parameter(downloader: Any, name: str) -> bool:
+    """Return true when the injected downloader's fetch accepts *name*."""
 
     fetch = getattr(downloader, "fetch", None)
     if fetch is None:
@@ -937,12 +937,16 @@ def _download_accepts_headers(downloader: Any) -> bool:
         parameters = inspect.signature(fetch).parameters
     except (TypeError, ValueError):  # pragma: no cover - builtins/C callables
         return False
-    if "headers" in parameters:
+    if name in parameters:
         return True
     return any(
         parameter.kind is inspect.Parameter.VAR_KEYWORD
         for parameter in parameters.values()
     )
+
+
+def _download_accepts_headers(downloader: Any) -> bool:
+    return _download_accepts_parameter(downloader, "headers")
 
 
 def verify_cask_url(cask: Cask, url: Optional[str] = None) -> None:
@@ -1152,13 +1156,15 @@ class CaskInstaller:
             verify_cask_url(cask, url)
             hint = f"{cask.token}-{version}.{Path(url.split('?', 1)[0]).suffix or 'download'}"
             request_headers = cask_request_headers(cask)
+            strategy = (cask.url_options or {}).get("using")
+            kwargs: dict[str, Any] = {"hint": hint}
             if request_headers and _download_accepts_headers(self.downloader):
-                archive = self.downloader.fetch(
-                    url, digest, hint=hint, headers=request_headers
-                )
+                kwargs["headers"] = request_headers
                 self._url_options_applied = True
-            else:
-                archive = self.downloader.fetch(url, digest, hint=hint)
+            if strategy and _download_accepts_parameter(self.downloader, "using"):
+                kwargs["using"] = str(strategy)
+                self._url_options_applied = True
+            archive = self.downloader.fetch(url, digest, **kwargs)
             kind = _archive_kind(archive)
             if cask.container in ("nupkg", "zip"):
                 kind = "zip"
