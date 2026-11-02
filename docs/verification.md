@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-760 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+761 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -724,6 +724,12 @@ local remote, commits a change, and confirms the CLI updates it.
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
 
+## Resource metadata fields
+
+- `PybrewResource` now reads `directory`, `path_exec_files`, `installed_size`,
+  `bottle_size`, `manifest_annotations`, `sbom_supplement`, and
+  `download_strategy` from resource metadata instead of returning constants.
+
 ## Cask config/language/strategy helpers
 
 - Added `Cask.all` (bounded placeholder), `config_path`, `languages`,
@@ -1402,9 +1408,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `c81cf08` (Cask config/strategy helpers)
-- CI run for `c81cf08`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41538971867>
+- Latest feature commit: `4c0a4d6` (Resource metadata fields)
+- CI run for `4c0a4d6`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41540038890>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
