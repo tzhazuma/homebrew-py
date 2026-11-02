@@ -2347,6 +2347,179 @@ class << ENV
     Hardware::CPU.arch
   end
 
+  def determine_cc
+    cc
+  end
+
+  def determine_cxx
+    cxx
+  end
+
+  def determine_cccfg
+    self["HOMEBREW_CCCFG"].to_s
+  end
+
+  def determine_path
+    self["PATH"].to_s.split(File::PATH_SEPARATOR)
+  end
+
+  def determine_make_jobs
+    cores = if defined?(Hardware::CPU) && Hardware::CPU.respond_to?(:cores)
+      Hardware::CPU.cores
+    else
+      1
+    end
+    [cores.to_i, 1].max
+  end
+
+  def determine_optflags
+    self["CFLAGS"].to_s.split
+  end
+
+  def determine_isystem_paths
+    []
+  end
+
+  def determine_library_paths
+    []
+  end
+
+  def determine_include_paths
+    []
+  end
+
+  def determine_cmake_prefix_path
+    []
+  end
+
+  def determine_cmake_include_path
+    []
+  end
+
+  def determine_cmake_library_path
+    []
+  end
+
+  def determine_cmake_frameworks_path
+    []
+  end
+
+  def determine_pkg_config_path
+    []
+  end
+
+  def determine_pkg_config_libdir
+    []
+  end
+
+  def determine_aclocal_path
+    nil
+  end
+
+  def determine_dependencies
+    []
+  end
+
+  def homebrew_extra_paths
+    []
+  end
+
+  def homebrew_extra_isystem_paths
+    []
+  end
+
+  def homebrew_extra_library_paths
+    []
+  end
+
+  def homebrew_extra_cmake_include_paths
+    []
+  end
+
+  def homebrew_extra_cmake_library_paths
+    []
+  end
+
+  def homebrew_extra_cmake_frameworks_paths
+    []
+  end
+
+  def homebrew_extra_pkg_config_paths
+    []
+  end
+
+  def libcxx
+    nil
+  end
+
+  def permit_arch_flags
+    nil
+  end
+
+  def refurbish_args
+    nil
+  end
+
+  def reset
+    nil
+  end
+
+  def runtime_cpu_detection
+    nil
+  end
+
+  def set_debug_symbols
+    nil
+  end
+
+  def extended
+    self
+  end
+
+  def determine_cc
+    cc
+  end
+
+  def determine_cxx
+    cxx
+  end
+
+  def homebrew_cc
+    cc
+  end
+
+  def fcflags
+    self["FCFLAGS"].to_s
+  end
+
+  def fortran
+    self["FC"]
+  end
+
+  def gcc_version_formula
+    nil
+  end
+
+  def append_to_rustflags(value)
+    append("RUSTFLAGS", value)
+  end
+
+  def warn_about_non_apple_gcc(_compiler = nil)
+    nil
+  end
+
+  def set_cpu_flags
+    nil
+  end
+
+  def check_for_compiler_universal_support
+    nil
+  end
+
+  def fetch_compiler
+    nil
+  end
+
   def apply_compiler(name)
     value = name.to_s
     case value
