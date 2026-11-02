@@ -1350,9 +1350,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `1f16214` (Cask source/platform/pin helpers)
-- CI run for `1f16214`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41523480465>
+- Latest feature commit: `d534af0` (Cask source/platform/pin helpers + host-aware test)
+- CI run for `d534af0`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41523954678>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
