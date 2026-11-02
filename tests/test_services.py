@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import plistlib
+import shlex
 import textwrap
 from pathlib import Path
 
@@ -814,3 +815,18 @@ def test_service_spec_helper_methods(tmp_path: Path) -> None:
     assert ServiceSpec.cron_weekday_to_systemd_weekday("Sun") == "Sun"
     restored = ServiceSpec.from_hash({"run": ["x"], "unknown": "ignored"})
     assert restored.run == ["x"]
+
+
+def test_service_manager_render_wrappers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    manager = ServiceManager(config)
+    formula = _formula()
+    spec = manager.spec_for(formula)
+    payload = manager.to_plist(formula)
+    assert payload["Label"] == "homebrew.mxcl.svc"
+    assert payload["ProgramArguments"] == spec.run
+    unit = manager.to_systemd_unit(formula)
+    assert "[Service]" in unit
+    assert f"ExecStart={shlex.join(spec.run)}" in unit

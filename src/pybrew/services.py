@@ -808,6 +808,18 @@ class ServiceManager:
                 return spec.plist_name
         return f"homebrew.mxcl.{formula.name}"
 
+    def to_plist(
+        self, formula: Formula, spec: Optional[ServiceSpec] = None
+    ) -> dict[str, Any]:
+        """Return the launchd plist payload for *formula* (Homebrew Service API)."""
+        return self.plist_payload(formula, spec or self.spec_for(formula))
+
+    def to_systemd_unit(
+        self, formula: Formula, spec: Optional[ServiceSpec] = None
+    ) -> str:
+        """Return the systemd unit text for *formula*."""
+        return self.unit_text(formula, spec or self.spec_for(formula))
+
     def plist_path(
         self, formula: Formula, spec: Optional[ServiceSpec] = None
     ) -> Path:
