@@ -1,10 +1,10 @@
 {
   "brew": {
     "default_branch": "main",
-    "head_date": "2026-11-01T21:48:30Z",
-    "head_message": "Merge pull request #24430 from Homebrew/info-recursive-runtime-empty-receipt",
-    "head_sha": "59604a815c50587ba6454f894caa7bd7dc58803a",
-    "head_url": "https://github.com/Homebrew/brew/commit/59604a815c50587ba6454f894caa7bd7dc58803a",
+    "head_date": "2026-11-02T01:56:41Z",
+    "head_message": "Merge pull request #24433 from Homebrew/attestation-rate-limit",
+    "head_sha": "bf464f57275cae0be106b43d190c98564ac59b0e",
+    "head_url": "https://github.com/Homebrew/brew/commit/bf464f57275cae0be106b43d190c98564ac59b0e",
     "release": {
       "name": "7.0.11",
       "published_at": "2026-10-26T08:20:07Z",
@@ -13,13 +13,13 @@
     },
     "repo": "Homebrew/brew"
   },
-  "checked_at": "2026-11-02T01:01:39+00:00",
+  "checked_at": "2026-11-02T07:27:29+00:00",
   "core": {
     "default_branch": "main",
-    "head_date": "2026-11-02T00:05:13Z",
-    "head_message": "Merge pull request #322813 from Homebrew/bump-dust-1.2.7",
-    "head_sha": "992feb273e747d5e26b1209f6eafbb62dab1d435",
-    "head_url": "https://github.com/Homebrew/homebrew-core/commit/992feb273e747d5e26b1209f6eafbb62dab1d435",
+    "head_date": "2026-11-02T06:26:26Z",
+    "head_message": "Merge pull request #321634 from sghng/beszel-agent-0.21.1",
+    "head_sha": "b665a4681f55b9f228a23c01b1646dcd882ff338",
+    "head_url": "https://github.com/Homebrew/homebrew-core/commit/b665a4681f55b9f228a23c01b1646dcd882ff338",
     "release": null,
     "repo": "Homebrew/homebrew-core"
   }
