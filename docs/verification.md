@@ -1392,9 +1392,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `4cbefdb` (macOS mdfind/pkgutil helpers)
-- CI run for `4cbefdb`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41534488655>
+- Latest feature commit: `ce1647a` (macOS helpers + non-macOS pkgutil guard)
+- CI run for `ce1647a`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41534991230>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
