@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-755 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+756 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -724,6 +724,11 @@ local remote, commits a change, and confirms the CLI updates it.
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
 
+## Patch CVE/target helpers
+
+- Added `Patch.extract_cves`, `Patch.resolves_type`, and a bounded
+  `Patch.ensure_targets_within!` that rejects absolute/`..` patch targets.
+
 ## Dynamic local formula lookup
 
 - Local taps with at most 200 indexed formulae are preloaded into the test
@@ -1374,9 +1379,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `38f3756` (dynamic local formula lookup)
-- CI run for `38f3756`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41530816009>
+- Latest feature commit: `6ba03ee` (Patch CVE/target helpers)
+- CI run for `6ba03ee`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41532069236>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
