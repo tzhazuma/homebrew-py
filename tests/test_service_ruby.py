@@ -808,3 +808,31 @@ def test_parse_service_block_routes_only_exact_one(
     spec = parse_service_block(formula, config)
     assert spec.keep_alive is True
     assert spec.environment_variables["FOO"] == "bar"
+
+
+@requires_ruby
+def test_service_object_compatibility_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allow_ruby: None
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    source = (
+        'run [\n'
+        '  default_service_name,\n'
+        '  path_dir.basename.to_s,\n'
+        '  timed?.to_s,\n'
+        '  parse_cron["Minute"].to_s,\n'
+        '  cron_weekday_to_systemd_weekday(1),\n'
+        '  to_plist["Label"],\n'
+        '  self.class.from_hash({"run" => ["x"]}).command.join(",")\n'
+        ']\n'
+    )
+    spec = evaluate_service_source(source, _formula(), config)
+    assert spec.run == [
+        "homebrew.mxcl.svc",
+        "bin",
+        "false",
+        "0",
+        "Mon",
+        "homebrew.mxcl.svc",
+        "x",
+    ]

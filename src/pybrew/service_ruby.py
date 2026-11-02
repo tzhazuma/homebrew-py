@@ -608,6 +608,122 @@ class PybrewServiceDSL
     (@config["std_service_path_env"] || "").to_s
   end
 
+  # -- Service-object compatibility helpers ------------------------------
+  def command
+    Array(@data["run"]).map(&:to_s)
+  end
+
+  def command?
+    !command.empty?
+  end
+
+  def manual_command
+    command
+  end
+
+  def keep_alive?
+    !!@data["keep_alive"]
+  end
+
+  def timed?
+    !Array(@data["cron"]).empty? || !@data["interval"].nil?
+  end
+
+  def launch_only_once
+    !!@data["launch_only_once"]
+  end
+
+  def macos_legacy_timers
+    !!@data["macos_legacy_timers"]
+  end
+
+  def require_root
+    !!@data["require_root"]
+  end
+
+  def requires_root?
+    require_root
+  end
+
+  def nice_requires_root?
+    !@data["nice"].nil? && require_root
+  end
+
+  def default_service_name
+    "homebrew.mxcl.#{formula_name}"
+  end
+
+  def default_plist_name
+    "#{default_service_name}.plist"
+  end
+
+  def path_dir
+    bin
+  end
+
+  def path_dirs
+    [bin, sbin]
+  end
+
+  def path_parent_dir
+    prefix.parent
+  end
+
+  def effective_environment_variables
+    environment = (@data["environment_variables"] || {}).dup
+    environment["PATH"] = path_dirs.map(&:to_s).join(":") if environment["PATH"].nil?
+    environment
+  end
+
+  def default_cron_values
+    { "Minute" => 0, "Hour" => 0, "Day" => 1, "Month" => 1, "Weekday" => 0 }
+  end
+
+  def parse_cron
+    values = default_cron_values
+    raw = @data["cron"]
+    if raw.is_a?(Hash)
+      raw.each do |key, value|
+        normalized = key.to_s.downcase
+        normalized = normalized[0].upcase + normalized[1..]
+        values[normalized] = value.to_i if values.key?(normalized)
+      end
+    end
+    values
+  end
+
+  def cron_weekday_to_systemd_weekday(weekday)
+    mapping = { "0" => "Sun", "1" => "Mon", "2" => "Tue", "3" => "Wed",
+                "4" => "Thu", "5" => "Fri", "6" => "Sat", "7" => "Sun" }
+    mapping[weekday.to_s] || weekday.to_s
+  end
+
+  def self.from_hash(hash)
+    dsl = new
+    hash.each { |key, value| dsl.data[key.to_s] = value }
+    dsl
+  end
+
+  def to_plist
+    {
+      "Label" => default_service_name,
+      "ProgramArguments" => command,
+      "EnvironmentVariables" => effective_environment_variables
+    }
+  end
+
+  def to_systemd_unit
+    "[Service]\nExecStart=#{command.join(" ")}\n"
+  end
+
+  def to_systemd_timer
+    "[Timer]\nOnCalendar=*-*-* 00:00:00\n"
+  end
+
+  def f
+    self
+  end
+
   # -- directives -------------------------------------------------------
 
   def run(*args)
