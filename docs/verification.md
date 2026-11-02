@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-750 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+751 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -724,6 +724,12 @@ local remote, commits a change, and confirms the CLI updates it.
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
 
+## Cask source/platform/pin helpers
+
+- Added `ruby_source_path`/`ruby_source_checksum`, API-origin flags,
+  `valid_platform`/`supports_macos`/`supports_linux`, and cask pinning
+  (`pin_path`, `pinned`, `pinned_version`, `pin`, `unpin`).
+
 ## Cask installed app bundle helpers
 
 - Added `installed`, `installed_version`, `outdated`,
@@ -1344,9 +1350,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `c35f256` (Cask app bundle helpers)
-- CI run for `c35f256`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41522328884>
+- Latest feature commit: `1f16214` (Cask source/platform/pin helpers)
+- CI run for `1f16214`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41523480465>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
