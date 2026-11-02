@@ -1408,9 +1408,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `4ae9fe4` (cask curl download strategy)
-- CI run for `4ae9fe4`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41547373157>
+- Latest feature commit: `d3cae26` (Superenv determination helpers)
+- CI run for `d3cae26`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41548381058>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
