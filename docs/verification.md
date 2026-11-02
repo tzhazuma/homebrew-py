@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-738 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+739 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -724,6 +724,15 @@ local remote, commits a change, and confirms the CLI updates it.
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
 
+## Keg/Tab method completion
+
+- `Keg#require_relocation!`, `prepare_debug_symbols`,
+  `ignore_interrupts_and_uninstall!`, `record_cask_symlink`,
+  `resolve_any_conflicts`, `delete_node_gyp_debris!`,
+  `strip_node_gyp_addons!`.
+- `Tab.formula_to_dep_hash`; bottle specs expose `rebuild`.
+- Method-name audit now reports 0 missing Keg/Tab/Formula instance methods.
+
 ## Formula/Keg inventory + cleanup
 
 - Added `Formula.installed`, `names`, `full_names`, `aliases`,
@@ -1259,9 +1268,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `5e71d22` (inventory/cleanup helpers)
-- CI run for `5e71d22`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41491510866>
+- Latest feature commit: `f9a44d4` (Keg/Tab helpers)
+- CI run for `f9a44d4`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41493648783>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
