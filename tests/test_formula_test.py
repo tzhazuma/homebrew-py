@@ -1749,3 +1749,190 @@ end
     _install_keg(config, "dep-lib", output="dep-ok")
     result = run_formula_test(formula, config, ruby=_REAL_RUBY)
     assert result.success is True
+
+
+# ---------------------------------------------------------------------------
+# versioned macOS SDK helpers (versioned dirs, fake xcrun, SDKROOT)
+# ---------------------------------------------------------------------------
+
+
+def _fake_executable(base: Path, name: str, script: str) -> Path:
+    path = base / name
+    path.write_text("#!/bin/sh\n" + script + "\n", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def _make_sdk_dir(root: Path, version: str) -> Path:
+    sdk = root / f"MacOSX{version}.sdk"
+    sdk.mkdir(parents=True)
+    (sdk / "SDKSettings.json").write_text(f'{{"Version": "{version}"}}', encoding="utf-8")
+    return sdk
+
+
+@requires_ruby
+def test_macos_sdk_selection_by_version(tmp_path: Path) -> None:
+    sdk_root = tmp_path / "sdks"
+    _make_sdk_dir(sdk_root, "13.3")
+    _make_sdk_dir(sdk_root, "14.5")
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  assert_equal ["13.3", "14.5"], MacOS.sdks.map { |sdk| sdk.version.to_s }
+  assert_equal "14.5", MacOS.latest_sdk_version.to_s
+  assert_equal "14.5", MacOS.sdk.version.to_s
+  assert_equal "MacOSX14.5.sdk", MacOS.sdk_path.basename.to_s
+  assert_equal "13.3", MacOS.sdk("13.3").version.to_s
+  assert_equal "MacOSX13.3.sdk", MacOS.sdk_path("13.3").basename.to_s
+  assert_equal "14.5", MacOS.sdk(:sonoma).version.to_s
+  assert_nil MacOS.sdk("99.0")
+  assert_nil MacOS.sdk_path("99.0")
+  assert_equal "14.5", MacOS.sdk_version.to_s
+end
+""",
+    )
+    result = run_formula_test(
+        formula,
+        config,
+        ruby=_REAL_RUBY,
+        env={
+            "PYBREW_SDK_DIRS": str(sdk_root),
+            "PYBREW_MACOS_VERSION": "14.5.1",
+            "PYBREW_SDK_PATH": "",
+            "PYBREW_SDK_VERSION": "",
+            "PYBREW_XCRUN": "",
+            "SDKROOT": "",
+        },
+    )
+    assert result.success is True
+
+
+@requires_ruby
+def test_macos_sdk_uses_fake_xcrun_from_path(tmp_path: Path) -> None:
+    sdk = tmp_path / "FakeSDK"
+    sdk.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _fake_executable(
+        bin_dir,
+        "xcrun",
+        "case \"$1\" in\n"
+        f"  --show-sdk-path) printf '%s' \"{sdk}\" ;;\n"
+        "  --show-sdk-version) printf '%s' \"14.2\" ;;\n"
+        "  *) exit 64 ;;\n"
+        "esac",
+    )
+    empty = tmp_path / "empty-sdks"
+    empty.mkdir()
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  sdk = MacOS.sdk
+  assert_kind_of OS::Mac::SDK, sdk
+  assert_equal "14.2", sdk.version.to_s
+  assert_equal "FakeSDK", sdk.path.basename.to_s
+  assert_equal sdk.path.to_s, MacOS.sdk_path.to_s
+  assert_equal "14.2", MacOS.sdk_version.to_s
+  assert_equal "14.2", MacOS.latest_sdk_version.to_s
+end
+""",
+    )
+    result = run_formula_test(
+        formula,
+        config,
+        ruby=_REAL_RUBY,
+        env={
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+            "PYBREW_SDK_DIRS": str(empty),
+            "PYBREW_MACOS_VERSION": "14.2",
+            "PYBREW_SDK_PATH": "",
+            "PYBREW_SDK_VERSION": "",
+            "PYBREW_XCRUN": "",
+            "SDKROOT": "",
+        },
+    )
+    assert result.success is True
+
+
+@requires_ruby
+def test_macos_sdk_returns_nil_without_versioned_sdk(tmp_path: Path) -> None:
+    versionless = tmp_path / "VersionlessSDK"
+    versionless.mkdir()
+    empty = tmp_path / "empty-sdks"
+    (empty / "MacOSX.sdk").mkdir(parents=True)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _fake_executable(
+        bin_dir,
+        "xcrun",
+        "case \"$1\" in\n"
+        f"  --show-sdk-path) printf '%s' \"{versionless}\" ;;\n"
+        "  *) exit 1 ;;\n"
+        "esac",
+    )
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  assert_nil MacOS.sdk
+  assert_nil MacOS.sdk_path
+  assert_nil MacOS.sdk_version
+  assert_nil MacOS.sdk("14.5")
+  assert_equal MacOS.version.to_s, MacOS.latest_sdk_version.to_s
+end
+""",
+    )
+    result = run_formula_test(
+        formula,
+        config,
+        ruby=_REAL_RUBY,
+        env={
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+            "PYBREW_SDK_DIRS": str(empty),
+            "PYBREW_MACOS_VERSION": "14.5.1",
+            "PYBREW_SDK_PATH": "",
+            "PYBREW_SDK_VERSION": "",
+            "PYBREW_XCRUN": "",
+            "SDKROOT": "",
+        },
+    )
+    assert result.success is True
+
+
+@requires_ruby
+def test_macos_sdk_honours_sdkroot(tmp_path: Path) -> None:
+    sdk = tmp_path / "CustomSDK"
+    sdk.mkdir()
+    (sdk / "SDKSettings.json").write_text('{"Version": "13.1"}', encoding="utf-8")
+    empty = tmp_path / "empty-sdks"
+    empty.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    _fake_executable(bin_dir, "xcrun", "exit 1")
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  sdk = MacOS.sdk
+  assert_kind_of OS::Mac::SDK, sdk
+  assert_equal "13.1", sdk.version.to_s
+  assert_equal "CustomSDK", sdk.path.basename.to_s
+  assert_equal :sdkroot, sdk.source
+  assert_equal sdk.path.to_s, MacOS.sdk_path.to_s
+  assert_equal "13.1", MacOS.latest_sdk_version.to_s
+end
+""",
+    )
+    result = run_formula_test(
+        formula,
+        config,
+        ruby=_REAL_RUBY,
+        env={
+            "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+            "PYBREW_SDK_DIRS": str(empty),
+            "SDKROOT": str(sdk),
+            "PYBREW_MACOS_VERSION": "14.5.1",
+            "PYBREW_SDK_PATH": "",
+            "PYBREW_SDK_VERSION": "",
+            "PYBREW_XCRUN": "",
+        },
+    )
+    assert result.success is True

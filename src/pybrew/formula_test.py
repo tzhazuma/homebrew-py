@@ -1363,6 +1363,22 @@ module OS
       end
     end
 
+    # A discovered macOS SDK (subset of Homebrew's ``OS::Mac::SDK``).
+    class SDK
+      attr_reader :version, :path, :source
+
+      def initialize(version, path, source = :directory)
+        @version = version
+        @path = Pathname.new(path.to_s)
+        @source = source.to_sym
+      end
+
+      def to_s
+        "#<#{self.class.name} #{version} #{path}>"
+      end
+      alias inspect to_s
+    end
+
     def self.full_version
       @full_version ||= Version.new(
         begin
@@ -1389,26 +1405,74 @@ module OS
       version.pretty_name
     end
 
-    # Path to a usable macOS SDK (nil when none can be found).
-    def self.sdk_path
-      return @sdk_path if defined?(@sdk_path)
+    # All discoverable macOS SDKs, sorted by version.
+    #
+    # Sources (best-effort, local only): ``PYBREW_SDK_PATH`` (single SDK),
+    # ``SDKROOT``, versioned ``MacOSX*.sdk`` directories
+    # (``PYBREW_SDK_DIRS`` or the default CLT/Xcode locations), and finally
+    # ``xcrun --show-sdk-path``.
+    def self.sdks
+      return @sdks if defined?(@sdks)
 
-      @sdk_path = begin
+      @sdks = begin
         override = ENV["PYBREW_SDK_PATH"].to_s
         if !override.empty?
-          candidate = Pathname.new(override)
-          candidate if candidate.directory?
-        elsif OS.mac?
-          raw = `/usr/bin/xcrun --show-sdk-path 2>/dev/null`.strip
-          if !raw.empty? && File.directory?(raw)
-            Pathname.new(raw)
-          else
-            fallback_sdk_path
+          path = Pathname.new(override)
+          version = path.directory? ? sdk_version_for_path(path) : nil
+          version.nil? ? [] : [SDK.new(version, path, :override)]
+        else
+          candidates = []
+          sdkroot = ENV["SDKROOT"].to_s
+          if !sdkroot.empty?
+            root_path = Pathname.new(sdkroot)
+            root_version = root_path.directory? ? sdk_version_for_path(root_path) : nil
+            candidates << SDK.new(root_version, root_path, :sdkroot) unless root_version.nil?
           end
+          sdk_directory_paths.each do |path|
+            version = sdk_version_for_path(path)
+            candidates << SDK.new(version, path, :directory) unless version.nil?
+          end
+          if candidates.empty?
+            xcrun_sdk = sdk_from_xcrun
+            candidates << xcrun_sdk unless xcrun_sdk.nil?
+            if candidates.empty? && ENV["PYBREW_SDK_DIRS"].to_s.empty?
+              fallback = sdk_from_fallback_path
+              candidates << fallback unless fallback.nil?
+            end
+          end
+          dedupe_sdks(candidates)
         end
       rescue StandardError
-        nil
+        []
       end
+    end
+
+    # The SDK selected for ``version`` (or the current/latest SDK when nil).
+    def self.sdk(version = nil)
+      candidates = sdks
+      return nil if candidates.empty?
+
+      if version.nil?
+        sdkroot = candidates.find { |candidate| candidate.source == :sdkroot }
+        return sdkroot unless sdkroot.nil?
+
+        current = self.version.strip_patch
+        match = candidates.find { |candidate| candidate.version.strip_patch == current }
+        return match unless match.nil?
+
+        candidates.max_by { |candidate| candidate.version }
+      else
+        wanted = sdk_version_argument(version)
+        return nil if wanted.nil?
+
+        candidates.find { |candidate| candidate.version == wanted } ||
+          candidates.find { |candidate| candidate.version.strip_patch == wanted.strip_patch }
+      end
+    end
+
+    # Path to the selected SDK (nil when none can be found).
+    def self.sdk_path(version = nil)
+      sdk(version)&.path
     end
 
     # Version of the selected SDK (nil when unavailable).
@@ -1420,13 +1484,124 @@ module OS
         if !override.empty?
           Version.new(override)
         else
-          path = sdk_path
-          path.nil? ? nil : sdk_version_for_path(path)
+          sdk&.version
         end
       rescue StandardError
         nil
       end
     end
+
+    # Version of the latest available SDK (falls back to the OS version).
+    def self.latest_sdk_version
+      latest = sdks.max_by { |candidate| candidate.version }
+      latest.nil? ? version : latest.version
+    end
+
+    def self.sdk_version_argument(version)
+      case version
+      when Version
+        version
+      when Symbol
+        Version.from_symbol(version)
+      else
+        Version.new(version.to_s)
+      end
+    end
+    private_class_method :sdk_version_argument
+
+    def self.sdk_directory_paths
+      raw = ENV["PYBREW_SDK_DIRS"].to_s
+      dirs = if raw.empty?
+        [
+          "/Library/Developer/CommandLineTools/SDKs",
+          "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/" \
+            "Developer/SDKs",
+        ].map { |dir| Pathname.new(dir) }
+      else
+        raw.split(File::PATH_SEPARATOR).map { |dir| Pathname.new(dir) }
+      end
+      dirs.flat_map do |dir|
+        next [] unless dir.directory?
+
+        Dir.glob((dir/"MacOSX*.sdk").to_s).sort.map { |path| Pathname.new(path) }
+      end
+    end
+    private_class_method :sdk_directory_paths
+
+    def self.dedupe_sdks(candidates)
+      seen = {}
+      candidates.each_with_object([]) do |candidate, result|
+        key = candidate.path.to_s
+        next if seen[key]
+
+        seen[key] = true
+        result << candidate
+      end.sort_by { |candidate| candidate.version }
+    end
+    private_class_method :dedupe_sdks
+
+    def self.sdk_from_xcrun
+      return nil unless OS.mac? || xcrun_available?
+
+      raw_path = xcrun("--show-sdk-path")
+      return nil if raw_path.nil? || raw_path.empty?
+
+      path = Pathname.new(raw_path)
+      return nil unless path.directory?
+
+      version = sdk_version_for_path(path)
+      if version.nil?
+        raw_version = xcrun("--show-sdk-version")
+        version = Version.new(raw_version) unless raw_version.nil? || raw_version.empty?
+      end
+      version.nil? ? nil : SDK.new(version, path, :xcrun)
+    rescue StandardError
+      nil
+    end
+    private_class_method :sdk_from_xcrun
+
+    def self.sdk_from_fallback_path
+      path = fallback_sdk_path
+      return nil if path.nil?
+
+      version = sdk_version_for_path(path)
+      version.nil? ? nil : SDK.new(version, path, :fallback)
+    rescue StandardError
+      nil
+    end
+    private_class_method :sdk_from_fallback_path
+
+    def self.xcrun_available?
+      binary = xcrun_binary
+      !binary.nil? && File.executable?(binary)
+    end
+    private_class_method :xcrun_available?
+
+    def self.xcrun_binary
+      override = ENV["PYBREW_XCRUN"].to_s
+      return override unless override.empty?
+
+      ENV["PATH"].to_s.split(File::PATH_SEPARATOR).each do |dir|
+        next if dir.empty?
+
+        candidate = File.join(dir, "xcrun")
+        return candidate if File.executable?(candidate)
+      end
+      candidate = "/usr/bin/xcrun"
+      File.executable?(candidate) ? candidate : nil
+    end
+    private_class_method :xcrun_binary
+
+    def self.xcrun(*args)
+      binary = xcrun_binary
+      return nil if binary.nil?
+
+      stdout, status = Open3.capture2(binary, *args)
+      status.success? ? stdout.strip : nil
+    rescue StandardError
+      nil
+    end
+    private_class_method :xcrun
 
     def self.sdk_version_for_path(path)
       settings = path/"SDKSettings.json"
