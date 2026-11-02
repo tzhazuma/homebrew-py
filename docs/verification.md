@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-748 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+749 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -724,6 +724,13 @@ local remote, commits a change, and confirms the CLI updates it.
   start/stop/remove the `.socket` unit on systemd.
 - TCP maps to `ListenStream`; UDP maps to `ListenDatagram`.
 
+## Compiler GCC probing
+
+- `DevelopmentTools.gcc_version(cc)` now probes the requested compiler.
+- `CompilerSelector.build_compilers(:gnu)` only offers installed `gcc-N`
+  versions, and `preferred_gcc` picks the highest installed one with a
+  host-`gcc` fallback.
+
 ## ServiceSpec compatibility helpers
 
 - Added `ServiceSpec` helpers for command/manual command, keep-alive/timed/
@@ -1331,9 +1338,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `8ee195c` (ServiceSpec compatibility helpers)
-- CI run for `8ee195c`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41514109744>
+- Latest feature commit: `4beafb5` (compiler GCC probing)
+- CI run for `4beafb5`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41518231814>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
