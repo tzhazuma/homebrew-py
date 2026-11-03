@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-797 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+851 passed, 5 skipped (local full suite, 2026-11-04)
 ```
 
 Breakdown of the feature slices:
@@ -1509,6 +1509,33 @@ The maintainer's close is a final scope decision; no further reopen attempts
 were made. The submitting human owns any future upstream communication and
 must not use AI to answer review comments.
 
+## P0/P1/P2 completion batch (2026-11-04)
+
+- Full local suite: **851 passed, 5 skipped** in ~122s.
+- Targeted slices:
+  - Ruby shim: 168 passed (`tests/test_ruby_api.py`)
+  - Installer: 22 passed, 1 skipped (`tests/test_installer.py tests/test_real_bottle.py`)
+  - Cask: 193 passed (`tests/test_cask*.py`)
+  - Test DSL/version: 107 passed (`tests/test_formula_test.py tests/test_version.py`)
+  - CLI integration: 13 passed (`tests/test_cli.py`)
+- Real install verification (`scripts/verify_real_install.py`): local tap/formula
+  source install, keg/bin/opt/receipt assertions, executable output, and
+  uninstall all passed.
+- Ruby-bridge real install also verified with `--allow-arbitrary-ruby`: the
+  install body wrote `hello-ruby.txt` and installed `bin/payload.txt`.
+- P0/P1/P2 changes:
+  - Formulary path+mtime cache/stale reload, API-struct validation/cache,
+    bounded alias/oldname fallback.
+  - Installer bottle manifest pre-validation/summary, opt-in linkage check,
+    deterministic topological dependency order.
+  - Bounded Sandbox wrapper, compiler probing tests, Superenv env coverage.
+  - Cask livecheck strategy execution API, date-deferred deprecation/disable,
+    script delegators/no-sudo coverage.
+  - Test DSL alias index, dependency HOME/PATH isolation, Version/PkgVersion
+    ordering and Minitest skip/pattern improvements.
+  - Utils::GitHub injectable read API + explicit write guards; macOS/Xcode/CLT
+    env overrides and Xcode detection bug fix.
+
 ## API surface audit (2026-11-03)
 
 Method-name audit against Homebrew `origin/main` (`57cac9d`) reports **0
@@ -1526,9 +1553,9 @@ edge cases), not missing method names in the audited core files.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `94464f0` (formula spec_eval ownership)
-- CI run for `94464f0`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41571017919>
+- Latest feature commit: `2e97028` (P0/P1/P2 Ruby API completion batch)
+- CI run for `2e97028`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41691268351>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success

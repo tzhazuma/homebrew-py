@@ -44,18 +44,22 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
   with `patch -pN`; some exotic forms remain unsupported. Resource staging is
   limited to archives with `url`+`sha256` and literal `resource("name")` calls
   (dynamic resource iteration stages all).
-- Homebrew internals: `FormulaInstaller` loaded-source flow exists; real
-  bottle pour/manifest, linkage checks and full Tab/SBOM semantics remain
-  Python-side. `Superenv`/`Sandbox` are compatibility stubs, not build engines;
-  `Utils::GitHub` network helpers remain bounded.
+- Homebrew internals: `FormulaInstaller` loaded-source flow exists; the Python
+  installer now validates bottle manifests before extraction, records a manifest
+  summary, supports opt-in linkage checks and deterministic topological order.
+  Full Tab/SBOM semantics remain bounded. `Superenv` remains env-only; `Sandbox`
+  has an opt-in explicit-command wrapper, not a policy engine. `Utils::GitHub`
+  has bounded read APIs and explicit write guards.
 - Full `MacOS`/SDK/Xcode/CLT detection, `DevelopmentTools`, `SystemConfig`
   host details.
 - Services: Ruby evaluator mirrors pybrew's literal path helpers rather than
   Homebrew's global-prefix helpers; unknown directives are ignored.
-- Cask: livecheck strategy blocks are captured as text only and never
-  executed; `url_options` headers/user-agent/referer/cookie are forwarded by the
-  stock Downloader; curl/git/svn/hg/fossil strategies are supported; script
-  `arch` uses the cask arch stanza when present;
+- Cask: livecheck strategy blocks can be executed through an explicit
+  injectable fetcher/page API (no default network/CLI transport); date-deferred
+  deprecate/disable semantics are implemented; `url_options` headers/user-agent/
+  referer/cookie are forwarded by the stock Downloader; curl/git/svn/hg/fossil
+  strategies are supported; script `arch` uses the cask arch stanza when
+  present;
   evaluator script-body capture is best-effort (lexer-unbalanced bodies
   warn; duplicate stanzas last-wins; `caveats do ... end` source still comes
   from the literal parser); livecheck `strategy do ... end`/url kwargs are
@@ -64,14 +68,14 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
 - Formulary source loading has namespace/cache/error support but does not
   implement API-struct loading, `factory` tap-source loading, or full
   Homebrew loader machinery.
-- Formula test DSL: `Version`/`PkgVersion` are lightweight String subclasses,
-  not Homebrew's full version token parser; dependency isolation is
-  process-local (PATH/HOME/global constants unchanged); lightweight lookup
-  covers up to 10000 local-tap names (only referenced sources parsed), while
-  alias-only/unknown names still fail; dependency tests reuse the parent
-  testpath/env; MacOS/OS/Hardware and Xcode/CLT/SDK helper modules exist but
-  detection is best-effort; `skip` is treated as a successful skip; pattern
-  assertions depend on the host Ruby version.
+- Formula test DSL: `Version`/`PkgVersion` are lightweight String subclasses
+  (letter ordering/revision-aware but not Homebrew's full token parser);
+  dependency tests isolate HOME/PATH/TMPDIR/PYBREW_PREFIX, though global
+  constants and arbitrary inherited env remain process-global; lightweight
+  lookup covers up to 10000 local-tap names plus Alias/ symlink metadata, while
+  source-only aliases/unknown names still fail; MacOS/OS/Hardware and
+  Xcode/CLT/SDK helper modules exist but detection is best-effort; `skip` is a
+  Minitest-style Exception; pattern assertions depend on the host Ruby version.
 - Any Ruby gem or third-party API used by formulae.
 
 Unknown methods fail loudly through `method_missing`/Ruby errors instead of
