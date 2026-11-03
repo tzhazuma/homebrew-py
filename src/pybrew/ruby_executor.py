@@ -8054,6 +8054,110 @@ module Utils
 end
 
 module Utils
+  module Analytics
+    def self.config_true?(_key = nil)
+      false
+    end
+
+    def self.default_package_fields
+      {}
+    end
+
+    def self.default_package_tags
+      {}
+    end
+
+    def self.deferred_curl(*_args)
+      nil
+    end
+
+    def self.delete_uuid!
+      nil
+    end
+
+    def self.enable!(*_args)
+      nil
+    end
+
+    def self.format_count(value)
+      value.to_s
+    end
+
+    def self.format_percent(value)
+      "#{value}%"
+    end
+
+    def self.formula_output(*_args)
+      nil
+    end
+
+    def self.cask_output(*_args)
+      nil
+    end
+
+    def self.influx_message_displayed?
+      false
+    end
+
+    def self.messages_displayed!
+      nil
+    end
+
+    def self.messages_displayed?
+      false
+    end
+
+    def self.no_message_output?
+      true
+    end
+
+    def self.not_this_run?(*_args)
+      false
+    end
+
+    def self.output(*_args)
+      nil
+    end
+
+    def self.output_analytics(*_args)
+      nil
+    end
+
+    def self.output_github_packages_downloads(*_args)
+      nil
+    end
+
+    def self.report_build_error(*_args)
+      nil
+    end
+
+    def self.report_command_run(*_args)
+      nil
+    end
+
+    def self.report_influx(*_args)
+      nil
+    end
+
+    def self.report_package_event(*_args)
+      nil
+    end
+
+    def self.report_test_bot_test(*_args)
+      nil
+    end
+
+    def self.table_output(*_args)
+      []
+    end
+
+    def self.with_wsl_suffix_if_needed(text)
+      text.to_s
+    end
+  end
+end
+
+module Utils
   module Svn
     def self.invalid_cert_flags
       []

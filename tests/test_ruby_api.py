@@ -5647,3 +5647,30 @@ def test_bottle_tag_macos_and_svn_helpers_raw(tmp_path: Path) -> None:
         "true",
         "false",
     ]
+
+
+def test_utils_analytics_noop_helpers_raw(tmp_path: Path) -> None:
+    keg = _run_raw_body(
+        tmp_path,
+        """
+(prefix/"analytics.txt").write [
+  Utils::Analytics.format_count(3),
+  Utils::Analytics.format_percent(50),
+  Utils::Analytics.no_message_output?.to_s,
+  Utils::Analytics.table_output.empty?.to_s,
+  Utils::Analytics.with_wsl_suffix_if_needed("text"),
+  Utils::Analytics.default_package_fields.empty?.to_s,
+  Utils::Analytics.report_package_event("x").nil?.to_s
+].join("\\n")
+""",
+        name="raw-body",
+    )
+    assert (keg / "analytics.txt").read_text().splitlines() == [
+        "3",
+        "50%",
+        "true",
+        "true",
+        "text",
+        "true",
+        "true",
+    ]
