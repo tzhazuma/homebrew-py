@@ -5603,3 +5603,28 @@ def test_env_determination_helpers_raw(tmp_path: Path) -> None:
         "true",
         "true",
     ]
+
+
+def test_macos_xcode_and_sdk_helpers_raw(tmp_path: Path) -> None:
+    keg = _run_raw_body(
+        tmp_path,
+        """
+(prefix/"xcode-sdk.txt").write [
+  MacOS::Xcode.bundle_path.to_s.end_with?(".app").to_s,
+  MacOS::Xcode.minimum_version.to_s.empty?.to_s,
+  MacOS::Xcode.below_minimum_version?.to_s,
+  MacOS::Xcode.update_instructions.include?("Xcode").to_s,
+  MacOS::SDK.sdk_prefix.to_s.include?("SDKs").to_s,
+  MacOS::SDK.all_sdks.is_a?(Array).to_s
+].join("\\n")
+""",
+        name="raw-body",
+    )
+    assert (keg / "xcode-sdk.txt").read_text().splitlines() == [
+        "true",
+        "false",
+        "false",
+        "true",
+        "true",
+        "true",
+    ]

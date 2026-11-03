@@ -896,6 +896,35 @@ module MacOS
     sdk_path(version)
   end
 
+  module SDK
+    def self.sdk_prefix
+      Xcode.bundle_path/"Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs"
+    end
+
+    def self.sdk_for(version = nil)
+      MacOS.sdk(version)
+    end
+
+    def self.sdk_if_applicable(version = nil)
+      MacOS.sdk(version)
+    end
+
+    def self.all_sdks
+      found = MacOS.sdk
+      found.nil? ? [] : [found]
+    end
+
+    def self.latest_sdk
+      MacOS.sdk
+    end
+
+    def self.read_sdk_version(_path = nil)
+      MacOS.version
+    rescue StandardError
+      nil
+    end
+  end
+
   module CLT
     def self.installed?
       path = `/usr/bin/xcode-select -print-path 2>/dev/null`.to_s.strip
@@ -946,6 +975,67 @@ module MacOS
 
     def self.default_developer_dir
       "/Applications/Xcode.app/Contents/Developer"
+    end
+
+    def self.bundle_path
+      Pathname.new("/Applications/Xcode.app")
+    end
+
+    def self.default_prefix?
+      !prefix.nil? && prefix.to_s == default_developer_dir
+    end
+
+    def self.toolchain_path
+      found = prefix
+      found.nil? ? nil : found/"Toolchains/XcodeDefault.xctoolchain"
+    end
+
+    def self.minimum_version
+      PybrewVersion.new("1.0")
+    end
+
+    def self.below_minimum_version?
+      false
+    end
+
+    def self.latest_version
+      version
+    end
+
+    def self.latest_clang_version
+      DevelopmentTools.clang_version
+    end
+
+    def self.latest_sdk_version?
+      false
+    end
+
+    def self.needs_clt_installed?
+      !CLT.installed?
+    end
+
+    def self.without_clt?
+      false
+    end
+
+    def self.detect_version
+      version
+    end
+
+    def self.detect_clang_version
+      DevelopmentTools.clang_version
+    end
+
+    def self.update_instructions
+      "Update Xcode from the App Store."
+    end
+
+    def self.reinstall_instructions
+      "Reinstall Xcode from the App Store."
+    end
+
+    def self.installation_then_reinstall_instructions
+      "#{update_instructions} #{reinstall_instructions}"
     end
   end
 end
