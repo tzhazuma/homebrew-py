@@ -5628,3 +5628,22 @@ def test_macos_xcode_and_sdk_helpers_raw(tmp_path: Path) -> None:
         "true",
         "true",
     ]
+
+
+def test_bottle_tag_macos_and_svn_helpers_raw(tmp_path: Path) -> None:
+    keg = _run_raw_body(
+        tmp_path,
+        """
+(prefix/"bottle-svn.txt").write [
+  Utils::Bottles::Tag.from_symbol(:sonoma).to_macos_version.to_s,
+  Utils::Svn.invalid_cert_flags.empty?.to_s,
+  Utils::Svn.remote_exists?("file:///definitely-not-a-repo").to_s
+].join("\\n")
+""",
+        name="raw-body",
+    )
+    assert (keg / "bottle-svn.txt").read_text().splitlines() == [
+        "14",
+        "true",
+        "false",
+    ]

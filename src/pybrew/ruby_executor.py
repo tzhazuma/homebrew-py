@@ -8044,6 +8044,26 @@ module Utils
 
         nil
       end
+
+      def to_macos_version
+        release = MacOS::RELEASES[system]
+        release.nil? ? nil : MacOS::Version.new(release)
+      end
+    end
+  end
+end
+
+module Utils
+  module Svn
+    def self.invalid_cert_flags
+      []
+    end
+
+    def self.remote_exists?(url)
+      output = Utils.popen_read("svn", "info", url.to_s).to_s
+      !output.strip.empty?
+    rescue StandardError
+      false
     end
   end
 end
