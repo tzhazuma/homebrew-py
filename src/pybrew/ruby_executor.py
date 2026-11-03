@@ -3261,6 +3261,10 @@ class PybrewBottleSpec
     @current_tag = @info["current_tag"]
   end
 
+  def root_url
+    @root_url
+  end
+
   def tag
     @current_tag
   end

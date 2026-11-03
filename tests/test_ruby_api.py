@@ -6085,3 +6085,15 @@ def test_utils_spdx_helpers_raw(tmp_path: Path) -> None:
         "MIT",
         "true",
     ]
+
+
+def test_bottle_spec_root_url_raw(tmp_path: Path) -> None:
+    keg = _run_raw_body(
+        tmp_path,
+        '''
+spec = PybrewBottleSpec.new("root_url" => "https://example.invalid/bottles")
+(prefix/"root-url.txt").write spec.root_url
+''',
+        name="raw-body",
+    )
+    assert (keg / "root-url.txt").read_text() == "https://example.invalid/bottles"
