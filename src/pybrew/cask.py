@@ -296,6 +296,23 @@ class Cask:
     def config_path(self) -> Path:
         return self.caskroom_path / ".metadata" / "config.json"
 
+    def staged_path(self) -> Path:
+        return self.caskroom_path / str(self.version or "")
+
+    def os_version(self) -> str:
+        import platform
+
+        return platform.mac_ver()[0] or platform.release()
+
+    def language_eval(self, language: Optional[str] = None) -> str:
+        return language or self.language or self.default_language_group()
+
+    def language_groups(self) -> dict[str, list[str]]:
+        return {}
+
+    def default_language_group(self) -> str:
+        return "en"
+
     def temp(self) -> Path:
         import tempfile
 

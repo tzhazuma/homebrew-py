@@ -2314,3 +2314,16 @@ end
     config.ensure()
     CaskInstaller(config).install(CaskLoader(discover_taps([tap])).load("fossilgy"))
     assert (config.prefix / "bin" / "tool").is_file()
+
+
+def test_cask_staged_path_and_language_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOMEBREW_PREFIX", str(tmp_path / "prefix"))
+    cask = Cask(token="demo", version="2.0", language="fr")
+    assert cask.staged_path() == cask.caskroom_path / "2.0"
+    assert cask.language_eval() == "fr"
+    assert cask.language_eval("de") == "de"
+    assert cask.language_groups() == {}
+    assert cask.default_language_group() == "en"
+    assert cask.os_version()
