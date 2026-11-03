@@ -169,18 +169,31 @@ class Downloader:
             return destination
         temporary = Path(tempfile.mkdtemp(prefix=f".pybrew-{tool}-", dir=self.cache_dir))
         checkout = temporary / "checkout"
+        fossil_repo = temporary / "repo.fossil"
         if tool == "svn":
-            command = [executable, "checkout", "--quiet", url, str(checkout)]
+            commands = [[executable, "checkout", "--quiet", url, str(checkout)]]
         elif tool == "hg":
-            command = [executable, "clone", "--quiet", url, str(checkout)]
+            commands = [[executable, "clone", "--quiet", url, str(checkout)]]
+        elif tool == "fossil":
+            checkout.mkdir()
+            commands = [
+                [executable, "clone", url, str(fossil_repo)],
+                [executable, "open", str(fossil_repo)],
+            ]
         else:
             shutil.rmtree(temporary, ignore_errors=True)
             raise DownloadError(f"{url}: unsupported VCS {tool}")
         try:
-            result = subprocess.run(command, capture_output=True, text=True)
-            if result.returncode != 0:
-                message = (result.stderr or result.stdout or "").strip()
-                raise DownloadError(f"{url}: {tool} checkout failed: {message}")
+            for index, command in enumerate(commands):
+                result = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    cwd=str(checkout) if tool == "fossil" and index == 1 else None,
+                )
+                if result.returncode != 0:
+                    message = (result.stderr or result.stdout or "").strip()
+                    raise DownloadError(f"{url}: {tool} checkout failed: {message}")
             os.replace(checkout, destination)
         except OSError as error:
             raise DownloadError(f"{url}: {error}") from error

@@ -1152,7 +1152,7 @@ class CaskInstaller:
             url = cask.resolved_url()
             digest = cask.resolved_sha256()
             strategy = str((cask.url_options or {}).get("using") or "").lstrip(":").lower()
-            if strategy in ("git", "svn", "hg"):
+            if strategy in ("git", "svn", "hg", "fossil"):
                 if strategy == "git":
                     fetch_vcs = getattr(self.downloader, "fetch_git", None)
                 else:

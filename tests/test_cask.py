@@ -2276,3 +2276,41 @@ end
     config.ensure()
     CaskInstaller(config).install(CaskLoader(discover_taps([tap])).load(f"{tool}gy"))
     assert (config.prefix / "bin" / "tool").is_file()
+
+
+def test_install_cask_fossil_strategy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    script = repo / "tool"
+    script.write_text("#!/bin/sh\nexit 0\n")
+    script.chmod(0o755)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "fossil"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "clone" ]; then cp -R "$FAKE_REPO" "$3"; exit 0; fi\n'
+        'if [ "$1" = "open" ]; then cp -R "$FAKE_REPO"/. .; exit 0; fi\n'
+        "exit 1\n"
+    )
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("FAKE_REPO", str(repo))
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "f" / "fossilgy.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        '''cask "fossilgy" do
+  version "1.0"
+  sha256 "no-check"
+  url "https://example.invalid/repo", using: :fossil
+  binary "tool"
+end
+'''
+    )
+    config = Config.default(prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache")
+    config.ensure()
+    CaskInstaller(config).install(CaskLoader(discover_taps([tap])).load("fossilgy"))
+    assert (config.prefix / "bin" / "tool").is_file()
