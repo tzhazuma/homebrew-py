@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-796 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+797 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -898,6 +898,11 @@ local remote, commits a change, and confirms the CLI updates it.
   `#build=` compatibility accessors; `specs` returns stable/head and
   `spec_syms` matches.
 
+## Formula `spec_eval` ownership
+
+- `spec_eval` now dups a source spec, returns nil without a URL, and assigns the
+  evaluating formula/context as owner; exposed on the raw install context.
+
 ## Bottle specification root_url
 
 - Exposed `PybrewBottleSpec#root_url` explicitly (closing the `bottle.rb`
@@ -1507,9 +1512,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `22bdf7e` (Bottle specification root_url)
-- CI run for `22bdf7e`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41570174425>
+- Latest feature commit: `94464f0` (formula spec_eval ownership)
+- CI run for `94464f0`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41571017919>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
