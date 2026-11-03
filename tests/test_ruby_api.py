@@ -5674,3 +5674,30 @@ def test_utils_analytics_noop_helpers_raw(tmp_path: Path) -> None:
         "true",
         "true",
     ]
+
+
+def test_utils_curl_helpers_raw(tmp_path: Path) -> None:
+    keg = _run_raw_body(
+        tmp_path,
+        """
+(prefix/"curl.txt").write [
+  Utils::Curl.curl_executable.to_s.empty?.to_s,
+  Utils::Curl.curl_path.nil?.to_s,
+  Utils::Curl.curl_version.to_s.empty?.to_s,
+  Utils::Curl.strip_progress_bar("50.0% body"),
+  Utils::Curl.http_status_ok?(200).to_s,
+  Utils::Curl.http_status_ok?(404).to_s,
+  Utils::Curl.parse_curl_response("HTTP/1.1 200 OK\\r\\n\\r\\nbody")[1]
+].join("\\n")
+""",
+        name="raw-body",
+    )
+    assert (keg / "curl.txt").read_text().splitlines() == [
+        "false",
+        "false",
+        "false",
+        "body",
+        "true",
+        "false",
+        "body",
+    ]

@@ -8054,6 +8054,70 @@ module Utils
 end
 
 module Utils
+  module Curl
+    def self.curl_executable(use_homebrew_curl: false)
+      return HOMEBREW_PREFIX/"opt/curl/bin/curl" if use_homebrew_curl
+
+      curl_path || "curl"
+    end
+
+    def self.curl_path
+      @curl_path ||= Utils.which("curl")
+    end
+
+    def self.clear_path_cache
+      @curl_path = nil
+    end
+
+    def self.curl_version
+      output = Utils.popen_read(curl_executable, "--version").to_s
+      output[/^curl ([\w.]+)/, 1]
+    end
+
+    def self.curl_args
+      []
+    end
+
+    def self.curl_output(*args, **_options)
+      Utils.popen_read(curl_executable, *args).to_s
+    end
+
+    def self.strip_progress_bar(text)
+      text.to_s.gsub(/\A#*\s*\d{1,3}\.\d%\s*/, "")
+    end
+
+    def self.http_status_ok?(status)
+      code = status.to_i
+      code >= 200 && code < 400
+    end
+
+    def self.parse_curl_output(output)
+      [strip_progress_bar(output), {}]
+    end
+
+    def self.parse_curl_response(text)
+      raw = text.to_s
+      separator = raw.index("\r\n\r\n")
+      return ["", raw] if separator.nil?
+
+      [raw[0...separator], raw[(separator + 4)..]]
+    end
+
+    def self.curl_supports_tls13?
+      false
+    end
+
+    def self.curl_supports_fail_with_body?
+      true
+    end
+
+    def self.https_redirect_curl_args
+      ["--proto-redir", "=https"]
+    end
+  end
+end
+
+module Utils
   module Analytics
     def self.config_true?(_key = nil)
       false
