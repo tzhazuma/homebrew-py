@@ -5884,3 +5884,38 @@ def test_utils_curl_additional_helpers_raw(tmp_path: Path) -> None:
         "false",
         "false",
     ]
+
+
+def test_bottle_specification_helpers_raw(tmp_path: Path) -> None:
+    keg = _run_raw_body(
+        tmp_path,
+        """
+spec = PybrewBottleSpec.new(
+  "current_tag" => "arm64_sonoma",
+  "files" => {
+    "arm64_sonoma" => { "sha256" => "abc", "cellar" => "/opt/homebrew/Cellar" },
+    "all" => { "sha256" => "def", "cellar" => "/usr/local/Cellar" }
+  }
+)
+spec.add("x86_64_linux", checksum: "ghi", cellar: "/home/linuxbrew/.linuxbrew/Cellar")
+(prefix/"bottle-spec.txt").write [
+  spec.tags.sort.join(","),
+  spec.tag?("arm64_sonoma").to_s,
+  spec.tag?("ventura").to_s,
+  spec.find_matching_tag("ventura").to_s,
+  spec.specification_for("all").sha256,
+  spec.bottle_for_tag("x86_64_linux").sha256,
+  spec.eql?(spec).to_s
+].join("\\n")
+""",
+        name="raw-body",
+    )
+    assert (keg / "bottle-spec.txt").read_text().splitlines() == [
+        "all,arm64_sonoma,x86_64_linux",
+        "true",
+        "true",
+        "all",
+        "def",
+        "ghi",
+        "true",
+    ]

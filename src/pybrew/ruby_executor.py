@@ -3152,6 +3152,41 @@ class PybrewBottleSpec
     @files.keys
   end
 
+  def tags
+    @files.keys
+  end
+
+  def each_tag(&block)
+    @files.each_key(&block)
+    nil
+  end
+
+  def tag?(tag, no_older_versions: false)
+    !find_matching_tag(tag, no_older_versions: no_older_versions).nil?
+  end
+
+  def find_matching_tag(tag, no_older_versions: false)
+    key = tag.to_s
+    return tag if @files.key?(key)
+    return "all" if @files.key?("all")
+
+    nil
+  end
+
+  def specification_for(tag, no_older_versions: false)
+    key = find_matching_tag(tag, no_older_versions: no_older_versions)
+    key.nil? ? nil : bottle_for_tag(key)
+  end
+
+  def add(tag, checksum:, cellar:)
+    @files[tag.to_s] = { "sha256" => checksum, "cellar" => cellar }
+    nil
+  end
+
+  def eql?(other)
+    other.is_a?(PybrewBottleSpec) && @files == other.files
+  end
+
   def bottle_for_tag(tag)
     key = tag.to_s
     info = @files[key]
