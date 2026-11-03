@@ -209,6 +209,29 @@ class Cask:
         versions = self.installed_versions()
         return versions[-1] if versions else None
 
+    def any_version_installed(self) -> bool:
+        return self.installed
+
+    def pinnable(self) -> bool:
+        version = self.installed_version()
+        return bool(version and (self.caskroom_path / version).exists())
+
+    def outdated_download_sha(self) -> bool:
+        if not self.checksumable():
+            return True
+        path = self.download_sha_path()
+        if not path.exists():
+            return True
+        current = path.read_text(encoding="utf-8", errors="replace").strip()
+        expected = self.new_download_sha()
+        return not current or current != expected
+
+    def auto_updates_bundle_outdated(self) -> bool:
+        return False
+
+    def uninstall_flight_blocks(self) -> bool:
+        return False
+
     @property
     def outdated(self) -> bool:
         return self.outdated_version() is not None

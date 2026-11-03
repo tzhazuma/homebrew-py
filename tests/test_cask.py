@@ -2174,3 +2174,44 @@ end
     installed = config.prefix / "bin" / "tool"
     assert installed.is_file()
     assert installed.stat().st_mode & 0o111
+
+
+def test_cask_inventory_bundle_and_sha_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prefix = tmp_path / "prefix"
+    monkeypatch.setenv("HOMEBREW_PREFIX", str(prefix))
+    monkeypatch.setenv("PYBREW_APPDIR", str(tmp_path / "Applications"))
+    cask = Cask(
+        token="demo",
+        version="1.0",
+        url="https://example.com/demo.zip",
+        sha256="abc123",
+        artifacts=[Artifact("app", "Demo.app")],
+    )
+    version_dir = cask.caskroom_path / "1.0"
+    version_dir.mkdir(parents=True)
+    sha_path = cask.download_sha_path()
+    sha_path.parent.mkdir(parents=True, exist_ok=True)
+    sha_path.write_text("abc123")
+    assert cask.any_version_installed() is True
+    assert cask.pinnable() is True
+    assert cask.outdated_download_sha() is False
+    sha_path.write_text("different")
+    assert cask.outdated_download_sha() is True
+
+    app = tmp_path / "Applications" / "Demo.app"
+    plist = app / "Contents" / "Info.plist"
+    plist.parent.mkdir(parents=True)
+    import plistlib
+
+    plist.write_bytes(
+        plistlib.dumps(
+            {"CFBundleShortVersionString": "1.2", "CFBundleVersion": "345"}
+        )
+    )
+    assert cask.bundle_short_version() == "1.2"
+    assert cask.bundle_long_version() == "1.2 (345)"
+    assert cask.bundle_version() == "345"
+    assert cask.auto_updates_bundle_outdated() is False
+    assert cask.uninstall_flight_blocks() is False
