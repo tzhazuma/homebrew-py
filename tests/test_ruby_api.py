@@ -5981,3 +5981,42 @@ spec = PybrewBottleSpec.new("current_tag" => "all", "files" => {})
         "ok",
         "retry",
     ]
+
+
+def test_utils_path_helpers_raw(tmp_path: Path) -> None:
+    source = tmp_path / "source.txt"
+    source.write_text("x")
+    keg = _run_raw_body(
+        tmp_path,
+        f"""
+raised = begin
+  Utils::Path.ensure_child_of!("/a", "/b", message: "bad")
+  false
+rescue StandardError => error
+  error.message == "bad"
+end
+(prefix/"path.txt").write [
+  Utils::Path.child_of?("/a", "/a/b").to_s,
+  Utils::Path.child_of?("/a", "/b").to_s,
+  raised.to_s,
+  Utils::Path.clean_absolute_path?("/a/b").to_s,
+  Utils::Path.clean_absolute_path?("a/b").to_s,
+  Utils::Path.relative_path_from("/a/b/c", "/a").to_s,
+  Utils::Path.formula_opt_bin("demo").to_s.end_with?("/opt/demo/bin").to_s,
+  Utils::Path.loadable_package_path?("/a").to_s,
+  Utils::Path.cp_path_sub("{source}", "source", "copy").exist?.to_s
+].join("\\n")
+""",
+        name="raw-body",
+    )
+    assert (keg / "path.txt").read_text().splitlines() == [
+        "true",
+        "false",
+        "true",
+        "true",
+        "false",
+        "b/c",
+        "true",
+        "true",
+        "true",
+    ]

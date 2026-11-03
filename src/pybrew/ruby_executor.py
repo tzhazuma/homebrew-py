@@ -8597,6 +8597,90 @@ module Utils
 end
 
 module Utils
+  module Path
+    def self.child_of?(parent, child)
+      parent_path = Pathname.new(parent.to_s).expand_path
+      child_path = Pathname.new(child.to_s).expand_path
+      child_path.ascend { |candidate| return true if candidate == parent_path }
+      false
+    end
+
+    def self.ensure_child_of!(parent, child, message: nil)
+      return if child_of?(resolve_symlinks(parent), resolve_symlinks(child))
+
+      raise(message || "#{child} is not under #{parent}")
+    rescue SystemCallError
+      raise(message || "#{child} is not under #{parent}")
+    end
+
+    def self.clean_absolute_path?(path)
+      value = path.to_s
+      return false unless value.start_with?(File::SEPARATOR)
+
+      Pathname.new(value).cleanpath.to_s == value
+    end
+
+    def self.resolve_symlinks(path)
+      pathname = Pathname.new(path.to_s).expand_path
+      existing = pathname
+      existing = existing.parent until existing.exist? || existing.symlink? || existing.root?
+      (existing.realpath/pathname.relative_path_from(existing)).cleanpath
+    rescue StandardError
+      pathname
+    end
+
+    def self.relative_path_from(path, start)
+      Pathname.new(path.to_s).relative_path_from(Pathname.new(start.to_s))
+    end
+
+    def self.cp_path_sub(path, pattern, replacement)
+      source = Pathname.new(path.to_s)
+      raise "#{source} does not exist" unless source.exist?
+
+      target = Pathname.new(source.to_s.sub(pattern.to_s, replacement.to_s))
+      raise "#{source} is the same file as #{target}" if source == target
+
+      FileUtils.mkdir_p(target.dirname)
+      FileUtils.cp_r(source.to_s, target.to_s)
+      target
+    end
+
+    def self.loadable_package_path?(_path, _package_type = nil)
+      true
+    end
+
+    def self.formula_opt_bin(name)
+      HOMEBREW_PREFIX/"opt"/name.to_s/"bin"
+    end
+
+    def self.formula_opt_lib(name)
+      HOMEBREW_PREFIX/"opt"/name.to_s/"lib"
+    end
+
+    def self.formula_opt_libexec(name)
+      HOMEBREW_PREFIX/"opt"/name.to_s/"libexec"
+    end
+
+    def self.formula_opt_include(name)
+      HOMEBREW_PREFIX/"opt"/name.to_s/"include"
+    end
+
+    def self.formula_any_version_installed?(names)
+      Array(names).any? do |name|
+        rack = HOMEBREW_CELLAR/name.to_s.split("/").last.to_s
+        rack.directory? && !rack.children.empty?
+      end
+    end
+
+    def self.trusted_package_root(path)
+      Pathname.new(path.to_s).realpath.to_s
+    rescue Errno::ENOENT, Errno::EACCES, Errno::ENOTDIR
+      Pathname.new(path.to_s).expand_path.to_s
+    end
+  end
+end
+
+module Utils
   module Curl
     def self.curl_executable(use_homebrew_curl: false)
       return HOMEBREW_PREFIX/"opt/curl/bin/curl" if use_homebrew_curl
