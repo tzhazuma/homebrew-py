@@ -6020,3 +6020,39 @@ end
         "true",
         "true",
     ]
+
+
+def test_utils_git_helpers_raw(tmp_path: Path) -> None:
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "file.txt").write_text("hello\n")
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "a@b.c"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "A"], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "file.txt"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "initial"], check=True)
+    commit = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    keg = _run_raw_body(
+        tmp_path,
+        f"""
+Dir.chdir("{repo}") do
+  (prefix/"git.txt").write [
+    Utils::Git.head("{repo}") == "{commit}",
+    Utils::Git.last_commit("{repo}") == "{commit}",
+    Utils::Git.file_at_commit("file.txt", "{commit}").include?("hello"),
+    Utils::Git.last_revision_commit_of_file("{repo}", "file.txt") == "{commit}",
+    Utils::Git.supports_partial_clone_sparse_checkout?.to_s,
+    Utils::Git.no_global_config_env.empty?.to_s
+  ].map(&:to_s).join("\\n")
+end
+""",
+        name="raw-body",
+    )
+    assert (keg / "git.txt").read_text().splitlines() == [
+        "true", "true", "true", "true", "true", "true"
+    ]

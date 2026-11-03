@@ -1841,6 +1841,74 @@ module Utils
     rescue StandardError
       nil
     end
+
+    def self.clear_available_cache
+      nil
+    end
+
+    def self.file_at_commit(path, commit)
+      Utils.popen_read("git", "show", "#{commit}:#{path}").to_s
+    rescue StandardError
+      nil
+    end
+
+    def self.last_revision_commit_of_file(repo, file, before: nil)
+      args = ["git", "-C", repo.to_s, "log", "-1", "--format=%H"]
+      args << "#{before}" unless before.nil?
+      args << "--" << file.to_s
+      Utils.popen_read(*args).to_s.strip
+    rescue StandardError
+      nil
+    end
+
+    def self.last_revision_of_file(repo, file, before: nil)
+      args = ["git", "-C", repo.to_s, "log", "-1", "--format=%ct"]
+      args << "#{before}" unless before.nil?
+      args << "--" << file.to_s
+      Utils.popen_read(*args).to_s.strip
+    rescue StandardError
+      nil
+    end
+
+    def self.last_revision_commit_of_files(repo, files, before: nil)
+      Array(files).filter_map do |file|
+        last_revision_commit_of_file(repo, file, before: before)
+      end
+    end
+
+    def self.get_tar_commit_id(path = ".")
+      Utils.popen_read("git", "-C", path.to_s, "rev-parse", "HEAD").to_s.strip
+    rescue StandardError
+      nil
+    end
+
+    def self.cherry_pick!(repo, commit)
+      Utils.popen_read("git", "-C", repo.to_s, "cherry-pick", commit.to_s).to_s
+    rescue StandardError
+      nil
+    end
+
+    def self.set_name_email!(repo, name, email)
+      Utils.popen_read("git", "-C", repo.to_s, "config", "user.name", name.to_s)
+      Utils.popen_read("git", "-C", repo.to_s, "config", "user.email", email.to_s)
+      nil
+    end
+
+    def self.setup_gpg!(*_args)
+      nil
+    end
+
+    def self.no_global_config_env
+      {}
+    end
+
+    def self.no_global_config_file
+      nil
+    end
+
+    def self.supports_partial_clone_sparse_checkout?
+      true
+    end
   end
 
   module Curl
