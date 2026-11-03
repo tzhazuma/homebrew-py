@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-967 passed, 5 skipped (local full suite, 2026-11-04 wave 4)
+1007 passed, 5 skipped (local full suite, 2026-11-04 wave 5)
 ```
 
 Breakdown of the feature slices:
@@ -1509,6 +1509,28 @@ The maintainer's close is a final scope decision; no further reopen attempts
 were made. The submitting human owns any future upstream communication and
 must not use AI to answer review comments.
 
+## Wave 5 completion batch (2026-11-04)
+
+- Full local suite: **1007 passed, 5 skipped** in ~109s.
+- Targeted slices:
+  - Ruby shim: 179 passed
+  - Installer/linkage: 54 passed (`tests/test_installer.py tests/test_relocation.py`)
+  - Cask: 266 passed
+  - Test DSL/version: 121 passed
+  - Service: 121 passed
+  - CLI: 15 passed
+- Real install verification: `scripts/verify_real_install.py` still passes
+  (build metadata + keg SBOM + install/uninstall).
+- Wave 5 changes:
+  - Sandbox allow/deny rule collection + generated seatbelt profile/bwrap args.
+  - Formulary remote single-URL API JSON with injectable curl transport.
+  - Non-heuristic Mach-O/ELF linkage parsing, RPATH/RUNPATH, corrupt/unsupported
+    separation, `all_formulae` reports and `pybrew linkage --all`.
+  - Cask generic artifact dirmethod/base_dir and livecheck HTTP redirects,
+    headers, retries, gzip/deflate/charset.
+  - Version token classes plus opt-in Homebrew null-token comparison.
+  - Service user env override file and `PYBREW_SERVICE_PATH_MODE` unifier.
+
 ## Wave 4 completion batch (2026-11-04)
 
 - Full local suite: **967 passed, 5 skipped** in ~100s.
@@ -1621,9 +1643,9 @@ edge cases), not missing method names in the audited core files.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `c0b25f2` (Wave 4 Sandbox/Superenv/Service/Cask)
-- CI run for `c0b25f2`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41703528718>
+- Latest feature commit: `687536e` (Wave 5 Sandbox/linkage/Version/Service)
+- CI run for `687536e`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41708290740>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success

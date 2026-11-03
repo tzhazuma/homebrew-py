@@ -46,13 +46,14 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
   (dynamic resource iteration stages all).
 - Homebrew internals: `FormulaInstaller` loaded-source flow exists; the Python
   installer validates bottle manifests before extraction, records source/build
-  metadata + a keg SBOM, exposes formula-level linkage diagnostics (`pybrew
-  linkage`) and cleans stale links. Full Homebrew Tab/SBOM semantics and
-  non-heuristic linkage remain bounded. `Superenv` has opt-in generated shims
-  with bounded flag/rpath sanitization, macOS SDKROOT/xcrun detection, bounded
-  `-std` flags and compiler wrappers, but no full Homebrew Superenv engine;
-  `Sandbox` auto-detects `sandbox-exec`/`bwrap` for explicit commands and fails
-  clearly when unavailable, but has no granular rule-generated profile.
+  metadata + a keg SBOM, exposes formula-level/all-installed linkage diagnostics
+  (`pybrew linkage`, Mach-O/ELF/RPATH with corrupt/unsupported separation) and
+  cleans stale links. Full Homebrew Tab/SBOM semantics and a full dyld/ld.so
+  simulation remain bounded. `Superenv` has opt-in generated shims with bounded
+  flag/rpath sanitization, macOS SDKROOT/xcrun, bounded `-std` and compiler
+  wrappers, but no full Homebrew Superenv engine. `Sandbox` auto-detects
+  `sandbox-exec`/`bwrap`, collects allow/deny rules and generates a bounded
+  profile via `apply!`, but not a verified minimal-policy engine.
   `Utils::GitHub` read/write names are complete with injectable REST reads/write
   guards, but no full GraphQL/PR/team semantics.
 - Full `MacOS`/SDK/Xcode/CLT detection, `DevelopmentTools`, `SystemConfig`
