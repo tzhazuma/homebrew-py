@@ -1764,6 +1764,74 @@ module Utils
 end
 
 module Utils
+  module SPDX
+    def self.valid_license?(_license)
+      true
+    end
+
+    def self.valid_license_exception?(_exception)
+      false
+    end
+
+    def self.deprecated_license?(_license)
+      false
+    end
+
+    def self.licenses_forbid_installation?(_license)
+      false
+    end
+
+    def self.forbidden_licenses_include?(_license)
+      false
+    end
+
+    def self.parse_license_expression(expression)
+      expression.to_s
+    end
+
+    def self.string_to_license_expression(expression)
+      expression.to_s
+    end
+
+    def self.license_expression_to_string(expression)
+      expression.to_s
+    end
+
+    def self.truncate_license(expression, _length = 80)
+      expression.to_s
+    end
+
+    def self.license_data(_license = nil)
+      {}
+    end
+
+    def self.exception_data(_exception = nil)
+      {}
+    end
+
+    def self.license_index
+      []
+    end
+
+    def self.exception_index
+      []
+    end
+
+    def self.latest_tag
+      nil
+    end
+
+    def self.license_version_info(_version = nil)
+      nil
+    end
+
+    def self.download_latest_license_data!(*_args)
+      nil
+    end
+  end
+end
+
+module Utils
   module Path
     def self.rmdir_if_possible(path)
       path = Pathname.new(path.to_s)

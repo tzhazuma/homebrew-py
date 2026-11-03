@@ -6056,3 +6056,32 @@ end
     assert (keg / "git.txt").read_text().splitlines() == [
         "true", "true", "true", "true", "true", "true"
     ]
+
+
+def test_utils_spdx_helpers_raw(tmp_path: Path) -> None:
+    keg = _run_raw_body(
+        tmp_path,
+        """
+(prefix/"spdx.txt").write [
+  Utils::SPDX.valid_license?("MIT").to_s,
+  Utils::SPDX.valid_license_exception?("Classpath-exception-2.0").to_s,
+  Utils::SPDX.deprecated_license?("GPL-1.0").to_s,
+  Utils::SPDX.licenses_forbid_installation?("x").to_s,
+  Utils::SPDX.forbidden_licenses_include?("x").to_s,
+  Utils::SPDX.parse_license_expression("MIT OR Apache-2.0"),
+  Utils::SPDX.license_expression_to_string("MIT"),
+  Utils::SPDX.license_index.empty?.to_s
+].join("\\n")
+""",
+        name="raw-body",
+    )
+    assert (keg / "spdx.txt").read_text().splitlines() == [
+        "true",
+        "false",
+        "false",
+        "false",
+        "false",
+        "MIT OR Apache-2.0",
+        "MIT",
+        "true",
+    ]
