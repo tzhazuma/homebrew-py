@@ -130,6 +130,40 @@ def test_parse_service_spec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     assert spec.environment_variables["FOO"] == "bar"
 
 
+def test_literal_parser_keeps_pybrew_service_path_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The opt-in Ruby evaluator diverges, but the literal parser must not.
+
+    The Ruby evaluator aligns ``bin``/``lib``/``etc`` with Homebrew's formula
+    paths; the default literal parser keeps pybrew's formula-opt-prefix
+    helpers and its reduced ``std_service_path_env`` value.
+    """
+
+    monkeypatch.delenv("PYBREW_ALLOW_SERVICE_RUBY", raising=False)
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula_with_service(
+        """
+        run [opt_bin/"svc", bin/"svc", lib/"libsvc", etc/"svc.conf", prefix/"README"]
+        working_dir var/"lib/svc"
+        environment_variables PATH: std_service_path_env, PREFIX: prefix
+        """
+    )
+
+    spec = parse_service_block(formula, config)
+
+    opt_prefix = config.opt_path("svc")
+    assert spec.run == [
+        str(opt_prefix / "bin" / "svc"),
+        str(opt_prefix / "bin" / "svc"),
+        str(opt_prefix / "lib" / "libsvc"),
+        str(opt_prefix / "etc" / "svc.conf"),
+        str(config.prefix / "README"),
+    ]
+    assert spec.environment_variables["PATH"] == str(config.prefix / "bin")
+    assert spec.environment_variables["PREFIX"] == str(config.prefix)
+
+
 def test_plist_generation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _config(tmp_path, monkeypatch)
     formula = _formula()

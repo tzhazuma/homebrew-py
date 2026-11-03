@@ -8,6 +8,8 @@ import os
 import platform
 import plistlib
 import re
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -265,6 +267,7 @@ class Cask:
         fetcher: Optional[Callable[[str], Any]] = None,
         page: Optional[str | bytes] = None,
         timeout: Optional[float] = None,
+        online: bool = False,
     ) -> dict[str, Any]:
         """Bounded livecheck strategy check for CLI/caller use.
 
@@ -276,9 +279,12 @@ class Cask:
 
         from .cask_ruby import STRATEGY_TIMEOUT, execute_livecheck_strategy
 
+        effective_fetcher = fetcher
+        if effective_fetcher is None and online:
+            effective_fetcher = livecheck_http_fetcher
         return execute_livecheck_strategy(
             self,
-            fetcher=fetcher,
+            fetcher=effective_fetcher,
             page=page,
             timeout=STRATEGY_TIMEOUT if timeout is None else timeout,
         )
@@ -310,6 +316,7 @@ class Cask:
         fetcher: Optional[Callable[[str], Any]] = None,
         page: Optional[str | bytes] = None,
         timeout: Optional[float] = None,
+        online: bool = False,
     ) -> dict[str, Any]:
         """Run a bounded livecheck and compare it with the current version.
 
@@ -335,13 +342,17 @@ class Cask:
             "result": None,
         }
 
+        effective_fetcher = fetcher
+        if effective_fetcher is None and online:
+            effective_fetcher = livecheck_http_fetcher
+
         page_text: Optional[str] = None
         if page is not None:
             if isinstance(page, bytes):
                 page_text = page.decode("utf-8", errors="replace")
             else:
                 page_text = str(page)
-        elif fetcher is not None:
+        elif effective_fetcher is not None:
             url = self._livecheck_url()
             if not url:
                 status.update(
@@ -350,8 +361,8 @@ class Cask:
                 )
                 return status
             try:
-                fetched = fetcher(url)
-            except Exception as error:  # caller-supplied transport
+                fetched = effective_fetcher(url)
+            except Exception as error:  # caller-supplied/default transport
                 status.update(
                     status="error",
                     error=f"{type(error).__name__}: {error}",
@@ -856,6 +867,42 @@ class Cask:
             "zap": self.zap,
             "caveats": self.caveats,
         }
+
+
+#: Bounded defaults for the opt-in livecheck HTTP transport.
+LIVECHECK_HTTP_TIMEOUT = 30.0
+LIVECHECK_MAX_PAGE_BYTES = 5 * 1024 * 1024
+LIVECHECK_USER_AGENT = "pybrew-livecheck/0.1"
+
+
+def livecheck_http_fetcher(
+    url: str,
+    *,
+    timeout: float = LIVECHECK_HTTP_TIMEOUT,
+    max_bytes: int = LIVECHECK_MAX_PAGE_BYTES,
+) -> str:
+    """Bounded default HTTP transport for ``pybrew livecheck --online``.
+
+    Only ``http``/``https`` URLs are accepted and the response is capped.  The
+    helper only runs when a caller explicitly passes ``online=True`` or a
+    custom fetcher to :meth:`Cask.livecheck_status`; default calls stay offline.
+    """
+
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in ("http", "https"):
+        raise CaskError(
+            f"unsupported livecheck URL scheme: {parsed.scheme or '(none)'}"
+        )
+    request = urllib.request.Request(
+        url, headers={"User-Agent": LIVECHECK_USER_AGENT}
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        data = response.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise CaskError(
+            f"livecheck page exceeds the {max_bytes}-byte limit"
+        )
+    return data.decode("utf-8", errors="replace")
 
 
 def _normalize_livecheck_candidates(value: Any) -> list[str]:

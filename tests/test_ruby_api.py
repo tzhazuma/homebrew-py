@@ -6517,7 +6517,7 @@ def test_sandbox_policy_surface_presence_and_explicit_failure(
         "true",
         "false",
         "false",
-        "true",
+        "false",
         "true",
         "true",
         "ran",
@@ -6820,4 +6820,215 @@ def test_formulary_tap_alias_directory_resolution(
         "ruby-tap-alias",
         "literal-alias,qualified-alias",
         "PybrewFormulaUnavailableError",
+    ]
+
+
+def _has_platform_sandbox() -> bool:
+    return Path("/usr/bin/sandbox-exec").exists() or shutil.which("bwrap") is not None
+
+
+def test_sandbox_backend_detection_fake_and_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    fake_sandbox_exec = tmp_path / "sandbox-exec"
+    fake_sandbox_exec.write_text("#!/bin/sh\nprintf 'exec:%s\\n' \"$*\"\n")
+    fake_sandbox_exec.chmod(0o755)
+    fake_bwrap = tmp_path / "bwrap"
+    fake_bwrap.write_text("#!/bin/sh\nprintf 'bwrap:%s\\n' \"$*\"\n")
+    fake_bwrap.chmod(0o755)
+    missing = tmp_path / "missing-sandbox"
+    formula = _formula(
+        "ruby-sandbox-backend",
+        "1.0",
+        (
+            '  ENV["PYBREW_SANDBOX"] = "1"\n'
+            '  ENV["PYBREW_SANDBOX_PATH"] = "' + str(fake_sandbox_exec) + '"\n'
+            '  backend_exec = Sandbox.backend.to_s\n'
+            '  exec_name = Sandbox.executable_name\n'
+            '  wrapped_exec = Sandbox.wrapped_command("echo", "hi")\n'
+            '  output_exec = Sandbox.run("echo", "hi")\n'
+            '  ENV["PYBREW_SANDBOX_PATH"] = "' + str(fake_bwrap) + '"\n'
+            '  backend_bwrap = Sandbox.backend.to_s\n'
+            '  wrapped_bwrap = Sandbox.wrapped_command("echo", "hi")\n'
+            '  output_bwrap = Sandbox.run("echo", "hi")\n'
+            '  ENV["PYBREW_SANDBOX_PATH"] = "' + str(missing) + '"\n'
+            '  unavailable = Sandbox.available?.to_s\n'
+            '  error = begin\n'
+            '    Sandbox.run("echo", "hi")\n'
+            '    "none"\n'
+            '  rescue NotImplementedError => raised\n'
+            '    raised.class.name + "|" + raised.message.include?("no sandbox backend").to_s\n'
+            '  end\n'
+            '  ENV.delete("PYBREW_SANDBOX")\n'
+            '  default = Sandbox.available?.to_s + "|" + Sandbox.run("echo", "hi").inspect\n'
+            '  (prefix/"sandbox-backend.txt").write [\n'
+            '    backend_exec, exec_name, wrapped_exec[1], wrapped_exec[2],\n'
+            '    output_exec.to_s.strip, backend_bwrap,\n'
+            '    wrapped_bwrap.include?("--ro-bind").to_s, output_bwrap.to_s.strip,\n'
+            '    unavailable, error, default\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "sandbox-backend.txt").read_text().splitlines() == [
+        "sandbox_exec",
+        "sandbox-exec",
+        "-p",
+        "(version 1)(allow default)",
+        "exec:-p (version 1)(allow default) echo hi",
+        "bwrap",
+        "true",
+        "bwrap:--ro-bind / / --dev /dev --proc /proc --unshare-net -- echo hi",
+        "false",
+        "NotImplementedError|true",
+        "false|nil",
+    ]
+
+
+@pytest.mark.skipif(not _has_platform_sandbox(), reason="no platform sandbox backend")
+def test_sandbox_real_platform_echo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-sandbox-real",
+        "1.0",
+        (
+            '  ENV["PYBREW_SANDBOX"] = "1"\n'
+            '  ENV.delete("PYBREW_SANDBOX_BINARY")\n'
+            '  ENV.delete("PYBREW_SANDBOX_PATH")\n'
+            '  available = Sandbox.available?\n'
+            '  output = available ? Sandbox.run("echo", "hello") : nil\n'
+            '  (prefix/"sandbox-real.txt").write [\n'
+            '    available.to_s, Sandbox.backend.to_s, output.to_s.strip\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    lines = (keg / "sandbox-real.txt").read_text().splitlines()
+    assert lines[0] == "true"
+    assert lines[1] in ("sandbox_exec", "bwrap")
+    assert lines[2] == "hello"
+
+
+def test_tab_full_fields_and_json_round_trip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-tab-full",
+        "1.0",
+        (
+            '  receipt = prefix/"INSTALL_RECEIPT.json"\n'
+            '  tab = Tab.new({}, receipt)\n'
+            '  tab.homebrew_version = "4.6.0"\n'
+            '  tab.installed_on_request = true\n'
+            '  tab.installed_as_dependency = false\n'
+            '  tab.time = 1_700_000_000\n'
+            '  tab.source_modified_time = 1_650_000_000\n'
+            '  tab.source = {"path" => "/tmp/foo.rb", "tap" => "homebrew/core",\n'
+            '                "tap_git_head" => "abc123"}\n'
+            '  tab.built_on = {"os" => "macOS", "os_version" => "14.5", "arch" => "arm64"}\n'
+            '  tab.sbom = {"spdxfile" => "foo.spdx.json", "purposes" => ["source"]}\n'
+            '  tab.version_scheme = 2\n'
+            '  tab.built_as_bottle = true\n'
+            '  tab.poured_from_bottle = false\n'
+            '  tab.compiler = "clang"\n'
+            '  tab.changed_files = ["bin/foo", "lib/foo.dylib"]\n'
+            '  tab.used_options = ["--with-x"]\n'
+            '  tab.unused_options = ["--without-y"]\n'
+            '  tab.runtime_dependencies = ["dep-one", "dep-two"]\n'
+            '  tab.arch = :arm64\n'
+            '  tab.head = false\n'
+            '  written = tab.write\n'
+            '  reread = Tab.for_keg(prefix)\n'
+            '  round_trip = Tab.from_file_content(reread.to_json)\n'
+            '  created = Tab.create(Formula["ruby-tab-full"])\n'
+            '  (prefix/"tab-full.txt").write [\n'
+            '    written.to_s, reread.homebrew_version,\n'
+            '    reread.installed_on_request?.to_s, reread.installed_as_dependency?.to_s,\n'
+            '    reread.time.to_s, reread.source_modified_time.to_s,\n'
+            '    reread.source["tap"], reread.source["tap_git_head"],\n'
+            '    reread.built_on["os"], reread.sbom["spdxfile"],\n'
+            '    reread.version_scheme.to_s, reread.built_as_bottle?.to_s,\n'
+            '    reread.poured_from_bottle?.to_s, reread.compiler,\n'
+            '    reread.changed_files.join(","), reread.used_options.join(","),\n'
+            '    reread.unused_options.join(","), reread.runtime_dependencies.join(","),\n'
+            '    reread.arch.to_s, reread.head?.to_s,\n'
+            '    round_trip.changed_files.join(","), round_trip.sbom["purposes"].join(","),\n'
+            '    created.homebrew_version, created.source["tap"].to_s,\n'
+            '    created.runtime_dependencies.empty?.to_s, created.time.is_a?(Integer).to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.tap = "homebrew/core"
+    keg = _build(tmp_path, formula)
+    assert (keg / "tab-full.txt").read_text().splitlines() == [
+        "true",
+        "4.6.0",
+        "true",
+        "false",
+        "1700000000",
+        "1650000000",
+        "homebrew/core",
+        "abc123",
+        "macOS",
+        "foo.spdx.json",
+        "2",
+        "true",
+        "false",
+        "clang",
+        "bin/foo,lib/foo.dylib",
+        "--with-x",
+        "--without-y",
+        "dep-one,dep-two",
+        "arm64",
+        "false",
+        "bin/foo,lib/foo.dylib",
+        "source",
+        "0.0.0",
+        "homebrew/core",
+        "true",
+        "true",
+    ]
+
+
+def test_keg_remove_old_aliases_and_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    keg = _run_raw_body(
+        tmp_path,
+        """
+keg_path = prefix
+(keg_path/"bin").mkpath
+(keg_path/"INSTALL_RECEIPT.json").write JSON.generate({"aliases" => ["keg-alias-old"], "version_scheme" => 2})
+keg = Keg.new(keg_path)
+prefix_path = keg.homebrew_prefix
+opt = prefix_path/"opt"
+linked = prefix_path/"var/homebrew/linked"
+opt.mkpath
+linked.mkpath
+(opt/"keg-alias-old").make_symlink(keg_path) unless (opt/"keg-alias-old").symlink?
+(linked/"keg-alias-old").make_symlink(keg_path) unless (linked/"keg-alias-old").symlink?
+(opt/"#{keg.name}@1").make_symlink(keg_path) unless (opt/"#{keg.name}@1").symlink?
+(linked/"#{keg.name}@1").make_symlink(keg_path) unless (linked/"#{keg.name}@1").symlink?
+before = [(opt/"keg-alias-old").symlink?, (linked/"keg-alias-old").symlink?,
+          (opt/"#{keg.name}@1").symlink?, (linked/"#{keg.name}@1").symlink?]
+result = keg.remove_old_aliases
+after = [(opt/"keg-alias-old").symlink?, (linked/"keg-alias-old").symlink?,
+         (opt/"#{keg.name}@1").symlink?, (linked/"#{keg.name}@1").symlink?]
+(prefix/"oldaliases.txt").write [
+  before.map(&:to_s).join(","), result.inspect, after.map(&:to_s).join(","),
+  keg.remove_alias_symlink("keg-alias-old").to_s
+].join("\\n")
+""",
+        name="ruby-keg-oldaliases",
+    )
+    assert (keg / "oldaliases.txt").read_text().splitlines() == [
+        "true,true,true,true",
+        "nil",
+        "false,false,false,false",
+        "false",
     ]

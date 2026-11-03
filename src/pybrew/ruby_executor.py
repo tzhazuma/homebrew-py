@@ -266,6 +266,7 @@ HOMEBREW_TEMP = Pathname.new(ENV["HOMEBREW_TEMP"] || "/tmp")
 HOMEBREW_PREFIX_PLACEHOLDER = "$HOMEBREW_PREFIX"
 HOMEBREW_CELLAR_PLACEHOLDER = "$HOMEBREW_CELLAR"
 HOMEBREW_HOME_PLACEHOLDER = "$HOMEBREW_HOME"
+HOMEBREW_VERSION = "0.0.0"
 
 module OS
   def self.mac?
@@ -3640,6 +3641,13 @@ end
 module Sandbox
   SANDBOX_ENV = "PYBREW_SANDBOX"
   SANDBOX_BINARY_ENV = "PYBREW_SANDBOX_BINARY"
+  SANDBOX_PATH_ENV = "PYBREW_SANDBOX_PATH"
+  SANDBOX_CANDIDATES = [
+    "/usr/bin/sandbox-exec",
+    "/usr/bin/bwrap",
+    "/usr/local/bin/bwrap",
+    "/opt/homebrew/bin/bwrap",
+  ].freeze
 
   # Isolation/rules APIs from Homebrew's sandbox.rb.  The pybrew shim only
   # supports the optional external wrapper (Sandbox.run); policy construction,
@@ -3656,17 +3664,46 @@ module Sandbox
   ].freeze
 
   class << self
-    # Optional bounded sandbox wrapper.  It is disabled unless the caller
-    # explicitly opts in with PYBREW_SANDBOX=1 and points at an executable
-    # PYBREW_SANDBOX_BINARY; the default remains the documented no-sandbox mode.
+    # Optional bounded sandbox backend.  Disabled by default.  When
+    # PYBREW_SANDBOX=1, an explicit executable (PYBREW_SANDBOX_BINARY) wins;
+    # otherwise the platform backend is detected (/usr/bin/sandbox-exec on
+    # macOS, bwrap on Linux).  PYBREW_SANDBOX_PATH overrides/excludes detection
+    # (used by tests to simulate unavailable backends).
+    def detected_executable
+      override = ENV[SANDBOX_PATH_ENV].to_s
+      unless override.empty?
+        path = Pathname.new(override)
+        return path.to_s if path.file? && path.executable?
+
+        return nil
+      end
+
+      SANDBOX_CANDIDATES.find do |candidate|
+        File.file?(candidate.to_s) && File.executable?(candidate.to_s)
+      end
+    end
+
     def executable
       raw = ENV[SANDBOX_BINARY_ENV].to_s
-      return nil if raw.empty?
+      unless raw.empty?
+        path = Pathname.new(raw)
+        return path.to_s if path.file? && path.executable?
 
-      path = Pathname.new(raw)
-      return path.to_s if path.file? && path.executable?
+        return nil
+      end
 
-      nil
+      detected_executable
+    end
+
+    def backend
+      found = executable
+      return :none if found.nil?
+
+      name = File.basename(found.to_s)
+      return :sandbox_exec if name == "sandbox-exec"
+      return :bwrap if name == "bwrap" || name == "bubblewrap"
+
+      :explicit
     end
 
     def enabled?
@@ -3714,13 +3751,38 @@ module Sandbox
       yield if block_given?
     end
 
-    # Run an explicit command through the configured sandbox binary.  Returns
-    # nil when sandboxing is not enabled so callers keep their normal path.
-    def run(*command)
-      return nil unless enabled?
-      raise ArgumentError, "Sandbox.run requires a command" if command.empty?
+    # Wrap an explicit command with the minimal backend arguments.  Explicit
+    # fake/custom binaries receive the command unchanged.
+    def wrapped_command(*command)
+      argv = command.flatten.compact.map(&:to_s)
+      case backend
+      when :sandbox_exec
+        [executable, "-p", "(version 1)(allow default)", *argv]
+      when :bwrap
+        [executable, "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
+         "--unshare-net", "--", *argv]
+      else
+        [executable, *argv]
+      end
+    end
 
-      Utils.popen_read(executable, *command.map(&:to_s), safe: true)
+    # Run an explicit command through the sandbox backend.  Returns nil when
+    # sandboxing is not enabled so callers keep their normal path; when it is
+    # explicitly enabled but no backend exists, raises a clear error instead of
+    # silently running unsandboxed.
+    def run(*command)
+      return nil unless ENV[SANDBOX_ENV].to_s == "1"
+      raise ArgumentError, "Sandbox.run requires a command" if command.empty?
+      if executable.nil?
+        raise NotImplementedError,
+              "Sandbox is enabled (PYBREW_SANDBOX=1) but no sandbox backend is " \
+              "available; install bwrap/sandbox-exec or set PYBREW_SANDBOX_BINARY " \
+              "(candidates: #{SANDBOX_CANDIDATES.join(", ")})"
+      end
+
+      Utils.popen_read(*wrapped_command(*command), safe: true)
+    rescue NotImplementedError
+      raise
     rescue ScriptError, StandardError => error
       @failure_reason = "#{error.class}: #{error.message}"
       nil
@@ -3858,24 +3920,27 @@ module Sandbox
       return found unless found.nil?
 
       raise NotImplementedError,
-            "Sandbox.executable! is not available: set PYBREW_SANDBOX=1 and an " \
-            "executable PYBREW_SANDBOX_BINARY to enable the bounded wrapper"
+            "Sandbox.executable! is not available: no sandbox backend found " \
+            "(candidates: #{SANDBOX_CANDIDATES.join(", ")}); set " \
+            "PYBREW_SANDBOX_BINARY to use a custom/fake backend"
     end
 
     def ensure_sandbox_available!
       return true if available?
 
       raise NotImplementedError,
-            "Sandbox.ensure_sandbox_available! cannot provide isolation in the " \
-            "pybrew Ruby shim; the default remains safe no-sandbox mode"
+            "Sandbox.ensure_sandbox_available! cannot provide isolation: " \
+            "PYBREW_SANDBOX is not enabled or no sandbox backend is available; " \
+            "the default remains safe no-sandbox mode"
     end
 
     def executable_candidate_paths
-      []
+      SANDBOX_CANDIDATES.dup
     end
 
     def executable_name
-      "sandbox"
+      found = executable
+      found.nil? ? "sandbox" : File.basename(found.to_s)
     end
 
     def executable_usable?
@@ -6730,6 +6795,24 @@ class Keg
   end
 
   def remove_old_aliases(versioned_aliases: aliases)
+    opt_dir = homebrew_prefix/"opt"
+    linked_dir = linked_keg_record.parent
+    alias_list = Array(versioned_aliases).map(&:to_s)
+    alias_list.each do |alias_name|
+      next if alias_name.include?("@")
+
+      remove_alias_symlink_at(opt_dir/alias_name)
+      remove_alias_symlink_at(linked_dir/alias_name)
+    end
+
+    Dir.glob("#{opt_dir}/#{name}@*").sort.each do |entry|
+      link = Pathname.new(entry)
+      alias_name = link.basename.to_s
+      next if alias_list.include?(alias_name) && File.exist?(link.to_s)
+
+      remove_alias_symlink_at(link)
+      remove_alias_symlink_at(linked_dir/alias_name)
+    end
     nil
   end
 
@@ -6841,8 +6924,17 @@ class Keg
   end
 
   def remove_alias_symlink(alias_name)
-    path = homebrew_prefix/"opt"/alias_name.to_s
+    remove_alias_symlink_at(homebrew_prefix/"opt"/alias_name.to_s)
+  end
+
+  def remove_alias_symlink_at(path)
+    path = Pathname.new(path.to_s)
     return false unless File.symlink?(path.to_s)
+
+    target = path.realpath
+    resolved_keg = @path.realpath
+    resolved_parent = @path.parent.realpath
+    return false unless target == resolved_keg || target.parent == resolved_parent
 
     path.unlink
     true
@@ -7273,6 +7365,20 @@ class Tab
     new({})
   end
 
+  def self.create(formula)
+    tab = new({})
+    tab.homebrew_version = HOMEBREW_VERSION
+    tab.installed_on_request = false
+    tab.time = Time.now.to_i
+    tab.arch = Hardware::CPU.arch
+    tab.source = {
+      "tap" => (formula.respond_to?(:tap) ? formula.tap : nil),
+      "tap_git_head" => nil,
+    }
+    tab.runtime_dependencies = []
+    tab
+  end
+
   def self.from_file(path)
     path = Pathname.new(path.to_s)
     return empty unless path.file?
@@ -7434,8 +7540,124 @@ class Tab
     @data["source"] || {}
   end
 
+  def source=(value)
+    @data["source"] = value.is_a?(Hash) ? value : {}
+  end
+
+  def built_on
+    @data["built_on"].is_a?(Hash) ? @data["built_on"] : {}
+  end
+
+  def built_on=(value)
+    @data["built_on"] = value.is_a?(Hash) ? value : {}
+  end
+
+  def sbom
+    @data["sbom"].is_a?(Hash) ? @data["sbom"] : {}
+  end
+
+  def sbom=(value)
+    @data["sbom"] = value.is_a?(Hash) ? value : {}
+  end
+
+  def arch
+    @data["arch"]
+  end
+
+  def arch=(value)
+    @data["arch"] = value
+  end
+
+  def built_as_bottle
+    built_as_bottle?
+  end
+
+  def built_as_bottle=(value)
+    @data["built_as_bottle"] = !!value
+  end
+
+  def poured_from_bottle
+    poured_from_bottle?
+  end
+
+  def poured_from_bottle=(value)
+    @data["poured_from_bottle"] = !!value
+  end
+
+  def compiler=(value)
+    @data["compiler"] = value
+  end
+
+  def changed_files=(value)
+    @data["changed_files"] = Array(value)
+  end
+
+  def source_modified_time=(value)
+    @data["source_modified_time"] = value
+  end
+
+  def version_scheme=(value)
+    @data["version_scheme"] = value.to_i
+  end
+
+  def runtime_dependencies=(value)
+    @data["runtime_dependencies"] = Array(value)
+  end
+
+  def used_options=(value)
+    @data["used_options"] = Array(value)
+  end
+
+  def unused_options=(value)
+    @data["unused_options"] = Array(value)
+  end
+
   def time
     @data["time"]
+  end
+
+  def time=(value)
+    @data["time"] = value
+  end
+
+  def homebrew_version=(value)
+    @data["homebrew_version"] = value
+  end
+
+  def installed_on_request=(value)
+    @data["installed_on_request"] = !!value
+  end
+
+  def installed_as_dependency=(value)
+    @data["installed_as_dependency"] = !!value
+  end
+
+  def head=(value)
+    @data["HEAD"] = !!value
+  end
+
+  def stdlib
+    @data["stdlib"]
+  end
+
+  def stdlib=(value)
+    @data["stdlib"] = value
+  end
+
+  def bottle_rebuild
+    @data["bottle_rebuild"]
+  end
+
+  def loaded_from_api?
+    !!@data["loaded_from_api"]
+  end
+
+  def loaded_from_api=(value)
+    @data["loaded_from_api"] = !!value
+  end
+
+  def loaded_from_internal_api?
+    !!@data["loaded_from_internal_api"]
   end
 
   def compiler

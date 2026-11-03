@@ -2742,3 +2742,166 @@ def test_livecheck_status_fetcher_error_is_error() -> None:
 
     assert result["status"] == "error"
     assert "offline" in (result["error"] or "")
+
+
+# ---------------------------------------------------------------------------
+# default livecheck HTTP transport (fake urlopen; no network)
+# ---------------------------------------------------------------------------
+
+
+class _FakeHttpResponse:
+    def __init__(self, payload: bytes):
+        self.payload = payload
+
+    def read(self, amount: int = -1) -> bytes:
+        if amount is None or amount < 0:
+            return self.payload
+        return self.payload[:amount]
+
+    def __enter__(self) -> "_FakeHttpResponse":
+        return self
+
+    def __exit__(self, *_exc: object) -> bool:
+        return False
+
+
+def _patch_urlopen(
+    monkeypatch: pytest.MonkeyPatch,
+    payload: bytes,
+    calls: list[object] | None = None,
+) -> None:
+    def fake_urlopen(request: object, timeout: float | None = None):
+        if calls is not None:
+            calls.append(request)
+        return _FakeHttpResponse(payload)
+
+    monkeypatch.setattr("pybrew.cask.urllib.request.urlopen", fake_urlopen)
+
+
+def test_livecheck_http_fetcher_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import (
+        LIVECHECK_MAX_PAGE_BYTES,
+        LIVECHECK_USER_AGENT,
+        livecheck_http_fetcher,
+    )
+
+    calls: list[object] = []
+    _patch_urlopen(monkeypatch, b"tool-2.0", calls)
+
+    assert livecheck_http_fetcher("https://example.com/tool") == "tool-2.0"
+    assert len(calls) == 1
+    request = calls[0]
+    assert "pybrew-livecheck" in str(request.headers) or LIVECHECK_USER_AGENT in str(
+        request.headers
+    )
+
+    with pytest.raises(CaskError, match="unsupported livecheck URL scheme"):
+        livecheck_http_fetcher("file:///tmp/page")
+
+    _patch_urlopen(monkeypatch, b"x" * (LIVECHECK_MAX_PAGE_BYTES + 1))
+    with pytest.raises(CaskError, match="byte limit"):
+        livecheck_http_fetcher("https://example.com/tool")
+
+
+def test_livecheck_status_online_uses_default_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import Cask
+
+    calls: list[object] = []
+    _patch_urlopen(monkeypatch, b"tool-2.0", calls)
+    cask = Cask(
+        token="online",
+        version="2.0",
+        livecheck={
+            "url": "https://example.com/tool",
+            "regex": r"tool-(\d+(?:\.\d+)*)",
+        },
+    )
+
+    status = cask.livecheck_status(online=True)
+
+    assert status["status"] == "up_to_date"
+    assert len(calls) == 1
+    assert getattr(calls[0], "full_url", "") == "https://example.com/tool"
+
+
+def test_livecheck_status_offline_by_default_does_not_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import Cask
+
+    def forbidden_urlopen(*_args: object, **_kwargs: object):
+        raise AssertionError("livecheck must not touch the network by default")
+
+    monkeypatch.setattr("pybrew.cask.urllib.request.urlopen", forbidden_urlopen)
+    cask = Cask(
+        token="offline",
+        version="1.0",
+        livecheck={"regex": r"v(\d+)"},
+    )
+
+    status = cask.livecheck_status()
+
+    assert status["status"] == "unknown"
+    assert "no network" in (status["reason"] or "")
+
+
+def test_livecheck_status_default_transport_error_is_reported(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import Cask
+
+    def failing_urlopen(*_args: object, **_kwargs: object):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr("pybrew.cask.urllib.request.urlopen", failing_urlopen)
+    cask = Cask(
+        token="failing",
+        version="1.0",
+        livecheck={"url": "https://example.com/tool", "regex": r"v(\d+)"},
+    )
+
+    status = cask.livecheck_status(online=True)
+
+    assert status["status"] == "error"
+    assert "connection refused" in (status["error"] or "")
+
+
+def test_check_livecheck_online_passes_default_fetcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import Cask, livecheck_http_fetcher
+
+    captured: dict[str, object] = {}
+
+    def fake_execute(cask: object, **kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "executed": True,
+            "result": ["1.0"],
+            "error": None,
+            "reason": None,
+            "page_size": 0,
+            "source": "|page| page",
+        }
+
+    monkeypatch.setattr(
+        "pybrew.cask_ruby.execute_livecheck_strategy", fake_execute
+    )
+    cask = Cask(
+        token="online-strategy",
+        version="1.0",
+        livecheck={"strategy_source": "|page| page"},
+    )
+
+    result = cask.check_livecheck(online=True)
+
+    assert result["executed"] is True
+    assert captured["fetcher"] is livecheck_http_fetcher
+    assert captured["page"] is None
+
+    cask.check_livecheck(online=False)
+    assert captured["fetcher"] is None

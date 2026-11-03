@@ -1598,11 +1598,30 @@ class CaskInstaller:
                 # A stage_only artifact entry installs nothing.
                 continue
             elif artifact.kind == "artifact":
-                raise CaskError(
-                    f"{cask.token}: generic `artifact` stanza is not supported "
-                    "by pybrew; use a specific artifact kind "
-                    "(app, binary, suite, pkg, ...)"
+                # Homebrew's generic artifact is a "moved" artifact that
+                # requires an explicit target.  pybrew installs it bounded:
+                # relative targets live under appdir, absolute targets must
+                # stay below one of the install roots.
+                source = self._find(source_root, artifact.source)
+                if source is None:
+                    raise CaskError(
+                        f"{cask.token}: artifact {artifact.source!r} not found"
+                    )
+                destination = self._generic_artifact_destination(
+                    cask, artifact, source.name
                 )
+                if destination.exists() or destination.is_symlink():
+                    if not force:
+                        raise CaskError(
+                            f"{cask.token}: {destination} already exists"
+                        )
+                    self._remove_path(destination)
+                if source.is_dir():
+                    shutil.copytree(source, destination, symlinks=True)
+                else:
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, destination)
+                installed.append(str(destination))
             else:
                 raise CaskError(f"{cask.token}: unsupported artifact {artifact.kind}")
         return installed
@@ -1701,6 +1720,51 @@ class CaskInstaller:
                 raise CaskError(
                     f"{cask.token} conflicts with installed cask {conflict!r}"
                 )
+
+    def _generic_artifact_destination(
+        self,
+        cask: Cask,
+        artifact: Artifact,
+        source_name: str,
+    ) -> Path:
+        """Resolve the bounded destination of a generic ``artifact`` stanza.
+
+        Homebrew's generic artifact requires ``target:`` and is a "moved"
+        artifact.  pybrew resolves a relative target under the cask appdir and
+        accepts an absolute target only when it stays below appdir, library_root
+        or the prefix; anything else is rejected.
+        """
+
+        target = artifact.target
+        if target is None or not str(target).strip():
+            raise CaskError(
+                f"{cask.token}: generic `artifact` stanza requires a target"
+            )
+        expanded = Path(os.path.expanduser(str(target)))
+        if expanded.is_absolute():
+            candidate = Path(os.path.abspath(str(expanded)))
+            roots: list[Path] = []
+            for root in (self.appdir, self.library_root, self.config.prefix):
+                try:
+                    roots.append(Path(root).resolve())
+                except OSError:
+                    continue
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                resolved = candidate
+            if not any(
+                resolved == root or root in resolved.parents for root in roots
+            ):
+                raise CaskError(
+                    f"{cask.token}: generic artifact target "
+                    f"{str(target)!r} is outside install roots"
+                )
+            return candidate
+        relative = _safe_artifact_target(
+            str(target), source_name, cask.token
+        )
+        return self.appdir / relative
 
     def _install_manpage_artifact(
         self,

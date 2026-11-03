@@ -90,6 +90,27 @@ def _body(text: str) -> str:
     return textwrap.dedent(text).strip()
 
 
+def _keg_prefix(config: Config, formula: object) -> Path:
+    """The versioned keg path Homebrew's Formula#prefix points at."""
+
+    return config.cellar / formula.name / formula.pkg_version
+
+
+def _homebrew_std_service_path_env(config: Config) -> str:
+    """Homebrew's Service#std_service_path_env value."""
+
+    return ":".join(
+        [
+            str(config.prefix / "bin"),
+            str(config.prefix / "sbin"),
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ]
+    )
+
+
 def _fake_ruby(tmp_path: Path, body: str) -> Path:
     script = tmp_path / "fake-ruby"
     script.write_text("#!/bin/sh\n" + body.strip() + "\n", encoding="utf-8")
@@ -368,6 +389,8 @@ def test_basic_fields_and_directives(
             '''
             run [opt_bin/"svc", "--foreground"]
             working_dir var/"lib/svc"
+            root_dir var/"root"
+            input_path var/"in"
             log_path var/"log/svc.log"
             error_log_path var/"log/svc.err.log"
             keep_alive network_state: true, successful_exit: false, interval: 45
@@ -391,6 +414,8 @@ def test_basic_fields_and_directives(
     opt_prefix = config.opt_path("svc")
     assert spec.run == [str(opt_prefix / "bin" / "svc"), "--foreground"]
     assert spec.working_dir == str(config.prefix / "var" / "lib" / "svc")
+    assert spec.root_dir == str(config.prefix / "var" / "root")
+    assert spec.input_path == str(config.prefix / "var" / "in")
     assert spec.log_path == str(config.prefix / "var" / "log" / "svc.log")
     assert spec.error_log_path == str(config.prefix / "var" / "log" / "svc.err.log")
     assert spec.keep_alive == {
@@ -409,7 +434,7 @@ def test_basic_fields_and_directives(
     assert spec.macos_legacy_timers is True
     assert spec.launch_only_once is True
     assert spec.environment_variables == {
-        "PATH": str(config.prefix / "bin"),
+        "PATH": _homebrew_std_service_path_env(config),
         "FOO": "bar",
         "NUM": "7",
     }
@@ -487,9 +512,10 @@ def test_path_helpers_and_interpolation(
     spec = evaluate_service_source(
         _body(
             '''
-            run ["#{opt_bin}/svc", "--version=#{version.major_minor}"]
+            run ["#{opt_bin}/svc", "--version=#{version.major_minor}",
+                 "--prefix=#{prefix}", "--keg=#{bin}"]
             working_dir var/"lib/#{formula.name}"
-            log_path "#{prefix}/var/log/#{formula.name}.log"
+            log_path var/"log/#{formula.name}.log"
             environment_variables PREFIX: prefix,
                                   OPT_PREFIX: opt_prefix,
                                   OPT_BIN: opt_bin,
@@ -504,18 +530,198 @@ def test_path_helpers_and_interpolation(
     )
 
     opt_prefix = config.opt_path("svc")
-    assert spec.run == [f"{opt_prefix / 'bin'}/svc", "--version=2.5"]
+    keg = _keg_prefix(config, formula)
+    assert spec.run == [
+        f"{opt_prefix / 'bin'}/svc",
+        "--version=2.5",
+        f"--prefix={keg}",
+        f"--keg={keg / 'bin'}",
+    ]
     assert spec.working_dir == str(config.prefix / "var" / "lib" / "svc")
     assert spec.log_path == str(config.prefix / "var" / "log" / "svc.log")
+    # Homebrew Formula path semantics: bin/lib live under the versioned keg,
+    # etc/var are HOMEBREW_PREFIX subdirectories, opt_* are the stable paths.
     assert spec.environment_variables == {
-        "PREFIX": str(config.prefix),
+        "PREFIX": str(keg),
         "OPT_PREFIX": str(opt_prefix),
         "OPT_BIN": str(opt_prefix / "bin"),
-        "BIN": str(opt_prefix / "bin"),
-        "LIB": str(opt_prefix / "lib"),
-        "ETC": str(opt_prefix / "etc"),
+        "BIN": str(keg / "bin"),
+        "LIB": str(keg / "lib"),
+        "ETC": str(config.prefix / "etc"),
         "VAR": str(config.prefix / "var"),
     }
+
+
+@requires_ruby
+def test_prefix_uses_opt_prefix_when_keg_is_optlinked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allow_ruby: None
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula(version="2.5.1")
+    keg = _keg_prefix(config, formula)
+    keg.mkdir(parents=True)
+    opt_prefix = config.opt_path("svc")
+    opt_prefix.symlink_to(keg)
+
+    spec = evaluate_service_source(
+        _body(
+            '''
+            run [prefix.to_s, bin.to_s, lib.to_s, opt_bin.to_s, etc.to_s]
+            '''
+        ),
+        formula,
+        config,
+    )
+
+    # Homebrew's Formula#prefix returns opt_prefix once the keg is opt-linked.
+    assert spec.run == [
+        str(opt_prefix),
+        str(opt_prefix / "bin"),
+        str(opt_prefix / "lib"),
+        str(opt_prefix / "bin"),
+        str(config.prefix / "etc"),
+    ]
+
+
+@requires_ruby
+def test_path_dirs_follow_configured_service_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allow_ruby: None
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula()
+    spec = evaluate_service_source(
+        _body(
+            '''
+            working_dir var/"lib/svc"
+            root_dir var/"root"
+            input_path var/"in"
+            log_path var/"log/svc.log"
+            error_log_path var/"log/svc.err.log"
+            run path_dirs.map(&:to_s)
+            '''
+        ),
+        formula,
+        config,
+    )
+
+    assert spec.run == [
+        str(config.prefix / "var" / "lib" / "svc"),
+        str(config.prefix / "var" / "root"),
+        str(config.prefix / "var"),
+        str(config.prefix / "var" / "log"),
+    ]
+    # No configured paths (or only relative ones) yields no path dirs.
+    empty = evaluate_service_source(
+        'working_dir "relative/dir"\nrun path_dirs.map(&:to_s)',
+        formula,
+        config,
+    )
+    assert empty.run == []
+
+
+@requires_ruby
+def test_path_dir_and_path_parent_dir_match_homebrew(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allow_ruby: None
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula()
+    spec = evaluate_service_source(
+        _body(
+            '''
+            run [
+              path_dir("relative/path").inspect,
+              path_dir("").inspect,
+              path_dir(nil).inspect,
+              path_parent_dir("relative/path").inspect,
+              path_dir("~/svc").to_s,
+              path_parent_dir(var/"log/svc.log").to_s
+            ]
+            '''
+        ),
+        formula,
+        config,
+    )
+
+    assert spec.run == [
+        "nil",
+        "nil",
+        "nil",
+        "nil",
+        str(Path.home() / "svc"),
+        str(config.prefix / "var" / "log"),
+    ]
+
+
+@requires_ruby
+def test_manual_command_is_shell_quoted_homebrew_style(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allow_ruby: None
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula()
+    spec = evaluate_service_source(
+        _body(
+            '''
+            run [opt_bin/"svc", "--flag", "two words"]
+            environment_variables FOO: "bar", PATH: std_service_path_env
+            run [manual_command]
+            '''
+        ),
+        formula,
+        config,
+    )
+
+    opt_bin = config.opt_path("svc") / "bin"
+    # PATH is excluded from the manual command; the other variable is kept
+    # verbatim and command arguments are shell-quoted.
+    assert spec.run == [f'FOO="bar" {opt_bin}/svc --flag two\\ words']
+
+
+@requires_ruby
+def test_homebrew_paths_work_with_a_minimal_fake_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allow_ruby: None
+) -> None:
+    # A fake config that only exposes ``prefix``: Homebrew paths are derived
+    # from it and the evaluator does not require Config.opt_path/keg_path.
+    class FakeConfig:
+        def __init__(self, prefix: Path) -> None:
+            self.prefix = prefix
+
+    prefix = tmp_path / "fake-prefix"
+    formula = _formula(version="2.5.1")
+    spec = evaluate_service_source(
+        _body(
+            '''
+            run [prefix.to_s, opt_prefix.to_s, opt_bin.to_s, bin.to_s,
+                 etc.to_s, var.to_s]
+            '''
+        ),
+        formula,
+        FakeConfig(prefix),
+    )
+
+    keg = prefix / "Cellar" / "svc" / "2.5.1"
+    assert spec.run == [
+        str(keg),
+        str(prefix / "opt" / "svc"),
+        str(prefix / "opt" / "svc" / "bin"),
+        str(keg / "bin"),
+        str(prefix / "etc"),
+        str(prefix / "var"),
+    ]
+
+
+@requires_ruby
+def test_path_helpers_fall_back_when_config_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allow_ruby: None
+) -> None:
+    # No configuration at all: the evaluator still captures non-path fields
+    # and path helpers resolve to empty paths instead of failing.
+    spec = evaluate_service_source(
+        'run [prefix.to_s, bin.to_s, opt_bin.to_s, keep_alive?.to_s]',
+        _formula(),
+        None,  # type: ignore[arg-type]
+    )
+    assert spec.run == ["", "", "", "false"]
 
 
 @requires_ruby
@@ -734,7 +940,48 @@ def test_service_manager_uses_evaluator_when_enabled(
     ]
     assert payload["ProgramArguments"] == spec.run
     assert payload["KeepAlive"] is True
-    assert payload["EnvironmentVariables"]["PATH"] == str(config.prefix / "bin")
+    assert payload["EnvironmentVariables"]["PATH"] == _homebrew_std_service_path_env(
+        config
+    )
+
+
+@requires_ruby
+def test_working_and_log_paths_render_from_evaluated_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allow_ruby: None
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula_with_service(
+        '''
+        run [opt_bin/"svc"]
+        working_dir var/"lib/svc"
+        root_dir var/"root"
+        input_path var/"in"
+        log_path var/"log/svc.log"
+        error_log_path var/"log/svc.err.log"
+        '''
+    )
+
+    manager = ServiceManager(config)
+    spec = manager.spec_for(formula)
+
+    assert spec.working_dir == str(config.prefix / "var" / "lib" / "svc")
+    assert spec.root_dir == str(config.prefix / "var" / "root")
+    assert spec.input_path == str(config.prefix / "var" / "in")
+    assert spec.log_path == str(config.prefix / "var" / "log" / "svc.log")
+    assert spec.error_log_path == str(config.prefix / "var" / "log" / "svc.err.log")
+
+    payload = manager.plist_payload(formula, spec)
+    assert payload["WorkingDirectory"] == spec.working_dir
+    assert payload["StandardInPath"] == spec.input_path
+    assert payload["StandardOutPath"] == spec.log_path
+    assert payload["StandardErrorPath"] == spec.error_log_path
+
+    unit = manager.unit_text(formula, spec)
+    assert f"RootDirectory={spec.root_dir}" in unit
+    assert f"StandardInput=file:{spec.input_path}" in unit
+    assert f"WorkingDirectory={spec.working_dir}" in unit
+    assert f"StandardOutput=append:{spec.log_path}" in unit
+    assert f"StandardError=append:{spec.error_log_path}" in unit
 
 
 # ---------------------------------------------------------------------------
@@ -816,9 +1063,11 @@ def test_service_object_compatibility_helpers(
 ) -> None:
     config = _config(tmp_path, monkeypatch)
     source = (
+        'working_dir var/"lib/svc"\n'
         'run [\n'
         '  default_service_name,\n'
-        '  path_dir.basename.to_s,\n'
+        '  path_dir(working_dir).basename.to_s,\n'
+        '  path_dirs.length.to_s,\n'
         '  timed?.to_s,\n'
         '  parse_cron["Minute"].to_s,\n'
         '  cron_weekday_to_systemd_weekday(1),\n'
@@ -829,7 +1078,8 @@ def test_service_object_compatibility_helpers(
     spec = evaluate_service_source(source, _formula(), config)
     assert spec.run == [
         "homebrew.mxcl.svc",
-        "bin",
+        "svc",
+        "1",
         "false",
         "0",
         "Mon",

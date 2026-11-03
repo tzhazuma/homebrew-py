@@ -742,26 +742,6 @@ def test_suite_artifact_target_cannot_escape(
         cask_env.installer.install(cask_env.loader.load("suite"))
 
 
-def test_generic_artifact_is_an_explicit_limitation(
-    cask_env: SimpleNamespace,
-) -> None:
-    archive = cask_env.tmp_path / "Generic-1.0.zip"
-    digest = _make_zip(archive, {"Generic.app/Contents/Info.plist": b"<plist/>"})
-    _write_cask(
-        cask_env.tap,
-        "generic",
-        "1.0",
-        digest,
-        archive,
-        artifacts='  artifact "Generic.app"',
-    )
-
-    with pytest.raises(
-        CaskError, match="generic `artifact` stanza is not supported"
-    ):
-        cask_env.installer.install(cask_env.loader.load("generic"))
-
-
 # ---------------------------------------------------------------------------
 # receipt cleanup safety (tampered receipts must not delete outside files)
 # ---------------------------------------------------------------------------
@@ -894,3 +874,233 @@ def test_zap_removes_symlink_without_touching_target(
     assert removed == [link]
     assert not link.is_symlink()
     assert real.read_text() == "keep"
+
+
+# ---------------------------------------------------------------------------
+# generic `artifact` stanza: bounded moved file/directory semantics
+# ---------------------------------------------------------------------------
+
+
+def test_generic_artifact_relative_target_installs_into_appdir(
+    cask_env: SimpleNamespace,
+) -> None:
+    archive = cask_env.tmp_path / "Generic-1.0.zip"
+    digest = _make_zip(archive, {"files/notes.txt": b"hello notes\n"})
+    _write_cask(
+        cask_env.tap,
+        "generic",
+        "1.0",
+        digest,
+        archive,
+        artifacts='  artifact "files/notes.txt", target: "notes.txt"',
+    )
+
+    result = cask_env.installer.install(cask_env.loader.load("generic"))
+
+    destination = cask_env.config.applications / "notes.txt"
+    assert destination.read_text() == "hello notes\n"
+    assert result.artifacts == [str(destination)]
+
+    cask_env.installer.uninstall("generic")
+    assert not destination.exists()
+
+
+def test_generic_artifact_absolute_target_below_prefix(
+    cask_env: SimpleNamespace,
+) -> None:
+    archive = cask_env.tmp_path / "Generic-1.0.zip"
+    digest = _make_zip(
+        archive, {"Generic/readme.txt": b"generic readme\n"}
+    )
+    destination = cask_env.config.prefix / "share" / "generic"
+    _write_cask(
+        cask_env.tap,
+        "generic",
+        "1.0",
+        digest,
+        archive,
+        artifacts=f'  artifact "Generic", target: "{destination}"',
+    )
+
+    cask_env.installer.install(cask_env.loader.load("generic"))
+
+    assert (destination / "readme.txt").read_text() == "generic readme\n"
+
+    cask_env.installer.uninstall("generic")
+    assert not destination.exists()
+
+
+def test_generic_artifact_requires_a_target(cask_env: SimpleNamespace) -> None:
+    archive = cask_env.tmp_path / "Generic-1.0.zip"
+    digest = _make_zip(archive, {"files/notes.txt": b"hello\n"})
+    _write_cask(
+        cask_env.tap,
+        "generic",
+        "1.0",
+        digest,
+        archive,
+        artifacts='  artifact "files/notes.txt"',
+    )
+
+    with pytest.raises(CaskError, match="requires a target"):
+        cask_env.installer.install(cask_env.loader.load("generic"))
+
+
+def test_generic_artifact_absolute_target_outside_roots_is_rejected(
+    cask_env: SimpleNamespace,
+) -> None:
+    archive = cask_env.tmp_path / "Generic-1.0.zip"
+    digest = _make_zip(archive, {"files/notes.txt": b"hello\n"})
+    outside = cask_env.tmp_path / "outside-artifact.txt"
+    _write_cask(
+        cask_env.tap,
+        "generic",
+        "1.0",
+        digest,
+        archive,
+        artifacts=f'  artifact "files/notes.txt", target: "{outside}"',
+    )
+
+    with pytest.raises(CaskError, match="outside install roots"):
+        cask_env.installer.install(cask_env.loader.load("generic"))
+    assert not outside.exists()
+
+
+# ---------------------------------------------------------------------------
+# receipt cleanup for the remaining artifact kinds
+# ---------------------------------------------------------------------------
+
+
+def test_receipt_cleanup_covers_remaining_artifact_kinds(
+    cask_env: SimpleNamespace,
+) -> None:
+    archive = cask_env.tmp_path / "CleanAll-1.0.zip"
+    digest = _make_zip(
+        archive,
+        {
+            "Clean.app/Contents/Info.plist": b"<plist/>",
+            "Clean.app/Contents/MacOS/tool": b"#!/bin/sh\n",
+            "man/tool.1": b".TH TOOL 1\n",
+            "completions/tool.bash": b"complete -W tool tool\n",
+            "payload/Clean.ttf": b"font",
+            "Clean Suite/Suite1.app/Contents/Info.plist": b"<plist/>",
+            "Clean.AppImage": b"#!/bin/sh\n",
+            "notes.txt": b"notes\n",
+        },
+    )
+    _write_cask(
+        cask_env.tap,
+        "cleanall",
+        "1.0",
+        digest,
+        archive,
+        artifacts=(
+            '  app "Clean.app"\n'
+            '  binary "Clean.app/Contents/MacOS/tool"\n'
+            '  manpage "man/tool.1"\n'
+            '  bash_completion "completions/tool.bash"\n'
+            '  font "payload/Clean.ttf"\n'
+            '  suite "Clean Suite"\n'
+            '  appimage "Clean.AppImage"\n'
+            '  artifact "notes.txt", target: "notes.txt"'
+        ),
+    )
+    result = cask_env.installer.install(cask_env.loader.load("cleanall"))
+    receipt = json.loads(
+        (result.room / ".metadata" / "receipt.json").read_text()
+    )
+    installed = [Path(path) for path in receipt["installed"]]
+    assert len(installed) == 8
+    assert all(
+        path.exists() or path.is_symlink() for path in installed
+    )
+
+    cask_env.installer.uninstall("cleanall")
+
+    assert not result.room.exists()
+    assert not any(path.exists() or path.is_symlink() for path in installed)
+
+
+# ---------------------------------------------------------------------------
+# suite explicit nested target
+# ---------------------------------------------------------------------------
+
+
+def test_suite_artifact_nested_target(cask_env: SimpleNamespace) -> None:
+    archive = cask_env.tmp_path / "Suite-1.0.zip"
+    digest = _make_zip(
+        archive, {"Suite Folder/App1.app/Contents/Info.plist": b"<plist/>"}
+    )
+    _write_cask(
+        cask_env.tap,
+        "suite",
+        "1.0",
+        digest,
+        archive,
+        artifacts='  suite "Suite Folder", target: "Nested/My Suite"',
+    )
+
+    cask_env.installer.install(cask_env.loader.load("suite"))
+
+    destination = cask_env.config.applications / "Nested" / "My Suite"
+    assert (destination / "App1.app/Contents/Info.plist").is_file()
+
+
+# ---------------------------------------------------------------------------
+# zap symlinked directories
+# ---------------------------------------------------------------------------
+
+
+def test_zap_symlinked_directory_outside_roots_is_refused(
+    cask_env: SimpleNamespace,
+) -> None:
+    cask = parse_cask_source('cask "zappy" do\n  version "1.0"\nend\n')
+    # ``/etc`` is outside home/prefix/temp; do not delete anything there.
+    outside = Path("/etc")
+    link = cask_env.config.prefix / "outside-dir-link"
+    link.symlink_to(outside, target_is_directory=True)
+    cask.zap = [str(link / "*")]
+
+    with pytest.raises(CaskError, match="outside allowed roots"):
+        cask_env.installer.zap(cask)
+    assert link.is_symlink()
+    assert (outside / "hosts").exists()
+
+
+def test_zap_symlinked_directory_inside_roots_removes_children(
+    cask_env: SimpleNamespace,
+) -> None:
+    cask = parse_cask_source('cask "zappy" do\n  version "1.0"\nend\n')
+    real = cask_env.config.prefix / "real-dir"
+    real.mkdir(parents=True)
+    payload = real / "inside.txt"
+    payload.write_text("remove", encoding="utf-8")
+    link = cask_env.config.prefix / "inside-dir-link"
+    link.symlink_to(real, target_is_directory=True)
+    cask.zap = [str(link / "*.txt")]
+
+    removed = cask_env.installer.zap(cask)
+
+    assert removed == [link / "inside.txt"]
+    assert not payload.exists()
+    assert real.is_dir()
+    assert link.is_symlink()
+
+
+def test_zap_symlinked_directory_itself_removes_only_the_link(
+    cask_env: SimpleNamespace,
+) -> None:
+    cask = parse_cask_source('cask "zappy" do\n  version "1.0"\nend\n')
+    real = cask_env.config.prefix / "real-dir-keep"
+    real.mkdir(parents=True)
+    payload = real / "keep.txt"
+    payload.write_text("keep", encoding="utf-8")
+    link = cask_env.config.prefix / "dir-link"
+    link.symlink_to(real, target_is_directory=True)
+    cask.zap = [str(link)]
+
+    removed = cask_env.installer.zap(cask)
+
+    assert removed == [link]
+    assert not link.is_symlink()
+    assert payload.read_text() == "keep"

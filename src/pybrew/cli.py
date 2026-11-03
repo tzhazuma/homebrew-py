@@ -1354,18 +1354,9 @@ def cmd_livecheck(args: argparse.Namespace) -> int:
     if getattr(args, "page", None) is not None:
         page = Path(args.page).read_text(encoding="utf-8", errors="replace")
 
-    fetcher = None
-    if getattr(args, "online", False):
-        import urllib.request
-
-        def fetcher(url: str) -> str:
-            request = urllib.request.Request(
-                url, headers={"User-Agent": "pybrew-livecheck/0.1"}
-            )
-            with urllib.request.urlopen(request, timeout=30) as response:
-                return response.read().decode("utf-8", errors="replace")
-
-    status = cask.livecheck_status(page=page, fetcher=fetcher)
+    status = cask.livecheck_status(
+        page=page, online=bool(getattr(args, "online", False))
+    )
     if getattr(args, "json", False):
         print(json.dumps(status, indent=2, sort_keys=True))
     else:

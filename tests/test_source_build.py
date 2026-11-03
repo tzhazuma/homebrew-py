@@ -525,6 +525,31 @@ def _compiler_report(path: Path) -> dict[str, str]:
     )
 
 
+def _fake_xcrun(directory: Path, sdkroot: Path, name: str = "xcrun") -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / name
+    path.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' {shlex.quote(str(sdkroot))}\n",
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
+def _fake_wrapper(directory: Path, name: str, report: str) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / name
+    path.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s\\n' \"$*\" > \"$PWD/{report}\"\n"
+        'exec "$@"\n',
+        encoding="utf-8",
+    )
+    path.chmod(0o755)
+    return path
+
+
 def test_build_environment_defaults_are_unchanged(tmp_path: Path) -> None:
     import pybrew.source_builder as source_builder
 
@@ -1114,3 +1139,224 @@ def test_default_build_environment_does_not_sanitize_without_superenv(
     assert prepared.env["LDFLAGS"] == (
         f"-L/usr/lib -Wl,-rpath,/usr/lib -L{prefix / 'lib'}"
     )
+
+
+def test_detect_sdkroot_with_injectable_fake_xcrun(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    sdk = tmp_path / "MacOSX.sdk"
+    sdk.mkdir()
+    xcrun = _fake_xcrun(tmp_path / "xcrun-bin", sdk)
+    env = {"PATH": "/usr/bin:/bin", "PYBREW_XCRUN": str(xcrun)}
+
+    assert source_builder.detect_sdkroot(env, system="Darwin") == sdk
+    # The explicit override also makes the probe usable on non-Darwin hosts.
+    assert source_builder.detect_sdkroot(env) == sdk
+    assert (
+        source_builder.detect_sdkroot({"PATH": "/usr/bin:/bin"}, system="Linux")
+        is None
+    )
+
+    explicit = tmp_path / "Explicit.sdk"
+    explicit.mkdir()
+    assert (
+        source_builder.detect_sdkroot(
+            {**env, "PYBREW_SDKROOT": str(explicit)}, system="Linux"
+        )
+        == explicit
+    )
+    assert (
+        source_builder.detect_sdkroot(
+            {**env, "SDKROOT": str(explicit)}, system="Linux"
+        )
+        == explicit
+    )
+    assert source_builder.detect_sdkroot({**env, "PYBREW_XCRUN": ""}) is None
+
+
+def test_sdkroot_exported_and_isysroot_added_in_superenv(
+    tmp_path: Path,
+) -> None:
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    prefix = config.prefix
+    fake_bin = tmp_path / "fake-bin"
+    cc = _fake_compiler(fake_bin, "clang", "cc-report.txt")
+    cxx = _fake_compiler(fake_bin, "clang++", "cxx-report.txt")
+    sdk = tmp_path / "MacOSX.sdk"
+    sdk.mkdir()
+    xcrun = _fake_xcrun(tmp_path / "xcrun-bin", sdk)
+
+    prepared = source_builder.build_environment(
+        config,
+        {
+            "PATH": str(fake_bin),
+            "PYBREW_SUPERENV": "1",
+            "PYBREW_XCRUN": str(xcrun),
+            "PYBREW_CC": str(cc),
+            "PYBREW_CXX": str(cxx),
+        },
+    )
+    env = prepared.env
+    assert env["SDKROOT"] == str(sdk)
+    for name in ("CPPFLAGS", "CFLAGS", "CXXFLAGS"):
+        tokens = shlex.split(env[name])
+        assert "-isysroot" in tokens
+        assert str(sdk) in tokens
+
+    # Without Superenv, an SDKROOT explicit enough to be exported does not
+    # change the default compiler flags (existing behavior stays intact).
+    default = source_builder.build_environment(
+        config, {"PATH": str(fake_bin), "SDKROOT": str(sdk)}
+    )
+    assert default.env["SDKROOT"] == str(sdk)
+    assert "-isysroot" not in default.env["CFLAGS"]
+    assert default.env["CFLAGS"] == f"-I{prefix / 'include'}"
+
+
+def test_explicit_isysroot_is_not_overridden_by_detection(
+    tmp_path: Path,
+) -> None:
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    fake_bin = tmp_path / "fake-bin"
+    cc = _fake_compiler(fake_bin, "clang", "cc-report.txt")
+    cxx = _fake_compiler(fake_bin, "clang++", "cxx-report.txt")
+    detected_sdk = tmp_path / "Detected.sdk"
+    detected_sdk.mkdir()
+    explicit_sdk = tmp_path / "Explicit.sdk"
+    explicit_sdk.mkdir()
+    xcrun = _fake_xcrun(tmp_path / "xcrun-bin", detected_sdk)
+
+    prepared = source_builder.build_environment(
+        config,
+        {
+            "PATH": str(fake_bin),
+            "PYBREW_SUPERENV": "1",
+            "PYBREW_XCRUN": str(xcrun),
+            "PYBREW_CC": str(cc),
+            "PYBREW_CXX": str(cxx),
+            "CFLAGS": f"-isysroot {explicit_sdk}",
+            "CPPFLAGS": f"--sysroot={explicit_sdk}",
+        },
+    )
+    env = prepared.env
+    assert env["SDKROOT"] == str(detected_sdk)
+    cflags = shlex.split(env["CFLAGS"])
+    assert cflags.count("-isysroot") == 1
+    assert str(explicit_sdk) in cflags
+    assert str(detected_sdk) not in cflags
+    cppflags = shlex.split(env["CPPFLAGS"])
+    assert f"--sysroot={explicit_sdk}" in cppflags
+    assert str(detected_sdk) not in cppflags
+
+
+def test_language_standard_flags_are_bounded_and_do_not_override(
+    tmp_path: Path,
+) -> None:
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    base = {"PATH": "/usr/bin:/bin"}
+    prepared = source_builder.build_environment(
+        config,
+        {
+            **base,
+            "PYBREW_C_STANDARD": "c11",
+            "PYBREW_CXX_STANDARD": "-std=c++17",
+        },
+    )
+    assert "-std=c11" in shlex.split(prepared.env["CFLAGS"])
+    assert "-std=c++17" in shlex.split(prepared.env["CXXFLAGS"])
+
+    explicit = source_builder.build_environment(
+        config,
+        {
+            **base,
+            "CFLAGS": "-O2 -std=gnu11",
+            "PYBREW_C_STANDARD": "c11",
+        },
+    )
+    cflags = shlex.split(explicit.env["CFLAGS"])
+    assert "-std=gnu11" in cflags
+    assert "-std=c11" not in cflags
+    assert sum(token.startswith("-std=") for token in cflags) == 1
+
+    invalid = source_builder.build_environment(
+        config,
+        {
+            **base,
+            "CFLAGS": "-O2",
+            "PYBREW_C_STANDARD": "c11; rm -rf /",
+            "PYBREW_CXX_STANDARD": "not-a-standard",
+        },
+    )
+    assert not any(
+        token.startswith("-std=") for token in shlex.split(invalid.env["CFLAGS"])
+    )
+    assert not any(
+        token.startswith("-std=") for token in shlex.split(invalid.env["CXXFLAGS"])
+    )
+
+
+def test_superenv_compiler_wrapper_specs(tmp_path: Path) -> None:
+    import subprocess
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    prefix = config.prefix
+    fake_bin = tmp_path / "fake-bin"
+    cc = _fake_compiler(fake_bin, "clang", "cc-report.txt")
+    cxx = _fake_compiler(fake_bin, "clang++", "cxx-report.txt")
+    ccache = _fake_wrapper(fake_bin, "ccache", "wrapper-cc.txt")
+    ccache_cxx = _fake_wrapper(fake_bin, "ccache-cxx", "wrapper-cxx.txt")
+    cc_spec = f"{ccache} {cc}"
+    cxx_spec = f"{ccache_cxx} {cxx}"
+    assert source_builder.split_compiler_command(cc_spec) == [
+        str(ccache),
+        str(cc),
+    ]
+
+    prepared = source_builder.build_environment(
+        config,
+        {
+            "PATH": str(fake_bin),
+            "PYBREW_SUPERENV": "1",
+            "CC": "plain-cc",
+            "CXX": "plain-cxx",
+            "PYBREW_CC": cc_spec,
+            "PYBREW_CXX": cxx_spec,
+        },
+    )
+    env = prepared.env
+    assert env["HOMEBREW_CC"] == cc_spec
+    assert env["HOMEBREW_CXX"] == cxx_spec
+    assert env["CC"] == str(prepared.superenv.root / "cc")
+    assert env["CXX"] == str(prepared.superenv.root / "c++")
+
+    subprocess.run(
+        [env["CC"], "-O2", "-DWRAP=1"], cwd=tmp_path, env=env, check=True
+    )
+    wrapper_argv = shlex.split(
+        (tmp_path / "wrapper-cc.txt").read_text().strip()
+    )
+    assert wrapper_argv[0] == str(cc)
+    assert "-O2" in wrapper_argv and "-DWRAP=1" in wrapper_argv
+    compiler = _compiler_report(tmp_path / "cc-report.txt")
+    assert "-O2" in compiler["argv"]
+    assert "-isystem" in compiler["argv"]
+    assert str(prefix / "include") in compiler["argv"]
+
+    subprocess.run(
+        [env["CXX"], "-O3"], cwd=tmp_path, env=env, check=True
+    )
+    wrapper_cxx_argv = shlex.split(
+        (tmp_path / "wrapper-cxx.txt").read_text().strip()
+    )
+    assert wrapper_cxx_argv[0] == str(cxx)
+    compiler_cxx = _compiler_report(tmp_path / "cxx-report.txt")
+    assert "-O3" in compiler_cxx["argv"]
+    assert "-isystem" in compiler_cxx["argv"]
+    assert str(prefix / "include") in compiler_cxx["argv"]
