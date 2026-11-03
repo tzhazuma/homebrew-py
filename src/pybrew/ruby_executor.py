@@ -247,6 +247,7 @@ require "shellwords"
 require "stringio"
 require "open3"
 require "tmpdir"
+require "uri"
 
 $stdout.sync = true
 $stderr.sync = true
@@ -784,7 +785,8 @@ module MacOS
     end
     return nil if raw.empty?
 
-    version_text = `/usr/bin/xcrun --show-sdk-version 2>/dev/null`.to_s.strip
+    version_text = ENV["HOMEBREW_SDK_VERSION"].to_s.strip
+    version_text = `/usr/bin/xcrun --show-sdk-version 2>/dev/null`.to_s.strip if version_text.empty?
     version_text = requested if version_text.empty? && !requested.nil?
     version_text = MacOS.version.to_s if version_text.empty?
     found = PybrewSDK.new(PybrewVersion.new(version_text), Pathname.new(raw))
@@ -842,6 +844,8 @@ module MacOS
   end
 
   def self.active_developer_dir
+    override = ENV["HOMEBREW_DEVELOPER_DIR"].to_s.strip
+    return override unless override.empty?
     return @active_developer_dir if defined?(@active_developer_dir)
 
     raw = `/usr/bin/xcode-select -print-path 2>/dev/null`.to_s.strip
@@ -927,6 +931,9 @@ module MacOS
 
   module CLT
     def self.installed?
+      override = ENV["HOMEBREW_DEVELOPER_DIR"].to_s.strip
+      return File.directory?(override) unless override.empty?
+
       path = `/usr/bin/xcode-select -print-path 2>/dev/null`.to_s.strip
       !path.empty? && File.directory?(path)
     rescue StandardError
@@ -934,6 +941,9 @@ module MacOS
     end
 
     def self.version
+      override = ENV["HOMEBREW_CLT_VERSION"].to_s.strip
+      return PybrewVersion.new(override) unless override.empty?
+
       raw = `/usr/sbin/pkgutil --pkg-info=com.apple.pkg.CLTools_Executables 2>/dev/null`.to_s
       match = raw[/^version:\s*(\S+)/, 1]
       match.nil? || match.empty? ? nil : PybrewVersion.new(match)
@@ -950,12 +960,15 @@ module MacOS
     def self.installed?
       return false unless OS.mac?
 
-      !active_developer_dir.to_s.empty? && File.directory?(active_developer_dir.to_s)
+      developer_dir = MacOS.active_developer_dir.to_s
+      !developer_dir.empty? && File.directory?(developer_dir)
     rescue StandardError
       false
     end
 
     def self.version
+      override = ENV["HOMEBREW_XCODE_VERSION"].to_s.strip
+      return PybrewVersion.new(override) unless override.empty?
       return nil unless installed?
 
       output = `/usr/bin/xcodebuild -version 2>/dev/null`.to_s
@@ -966,7 +979,7 @@ module MacOS
     end
 
     def self.prefix
-      installed? ? Pathname.new(active_developer_dir.to_s) : nil
+      installed? ? Pathname.new(MacOS.active_developer_dir.to_s) : nil
     end
 
     def self.sdk_path
@@ -3625,9 +3638,29 @@ class PybrewServiceRef
 end
 
 module Sandbox
+  SANDBOX_ENV = "PYBREW_SANDBOX"
+  SANDBOX_BINARY_ENV = "PYBREW_SANDBOX_BINARY"
+
   class << self
+    # Optional bounded sandbox wrapper.  It is disabled unless the caller
+    # explicitly opts in with PYBREW_SANDBOX=1 and points at an executable
+    # PYBREW_SANDBOX_BINARY; the default remains the documented no-sandbox mode.
+    def executable
+      raw = ENV[SANDBOX_BINARY_ENV].to_s
+      return nil if raw.empty?
+
+      path = Pathname.new(raw)
+      return path.to_s if path.file? && path.executable?
+
+      nil
+    end
+
+    def enabled?
+      ENV[SANDBOX_ENV].to_s == "1" && !executable.nil?
+    end
+
     def available?
-      false
+      enabled?
     end
 
     def full_write_isolation?
@@ -3643,7 +3676,7 @@ module Sandbox
     end
 
     def use_for?(*_args, **_kwargs)
-      false
+      enabled?
     end
 
     def inherited_sandbox?
@@ -3655,15 +3688,28 @@ module Sandbox
     end
 
     def failure_reason
-      nil
+      @failure_reason
     end
 
     def reset_state!
+      @failure_reason = nil
       nil
     end
 
     def with_preserved_brew_file
       yield if block_given?
+    end
+
+    # Run an explicit command through the configured sandbox binary.  Returns
+    # nil when sandboxing is not enabled so callers keep their normal path.
+    def run(*command)
+      return nil unless enabled?
+      raise ArgumentError, "Sandbox.run requires a command" if command.empty?
+
+      Utils.popen_read(executable, *command.map(&:to_s), safe: true)
+    rescue ScriptError, StandardError => error
+      @failure_reason = "#{error.class}: #{error.message}"
+      nil
     end
 
     def run_or_fork(*_args, **_kwargs, &block)
@@ -7946,6 +7992,10 @@ module Formulary
 
   # Accessors understood by the bounded API-struct mapping.
   FORMULA_STRUCT_ATTRIBUTES = %i[desc homepage url sha256 version license dependencies].freeze
+  # The bounded struct shape must at least carry a description and version;
+  # objects missing them are rejected as malformed instead of producing an
+  # empty formula class.
+  FORMULA_STRUCT_REQUIRED_ATTRIBUTES = %i[desc version].freeze
 
   # Homebrew's factory returns a Formula.  When the metadata reference points at
   # a local formula file (tap source), evaluate it with
@@ -7968,6 +8018,8 @@ module Formulary
     end
 
     reference = Formula[ref]
+    alias_reference = factory_alias_reference(ref)
+    reference = alias_reference unless alias_reference.nil?
     formula = factory_load_source(reference, options)
     formula = reference if formula.nil?
     (@factory_cache ||= {})[cache_key] = formula if factory_cached?
@@ -7981,6 +8033,25 @@ module Formulary
   def factory_cache_key(ref, args, options)
     spec = args.empty? ? :stable : args.first
     "#{ref}-#{spec}-#{options[:alias_path]}-#{options[:from]}"
+  end
+
+  # Bounded alias/oldname fallback: when the requested name has no metadata
+  # entry but another configured formula declares it as an alias/oldname, use
+  # that canonical metadata reference.  No broad tap/alias resolution.
+  def factory_alias_reference(ref)
+    name = ref.to_s
+    entries = PYBREW_CONFIG["formulae"] || {}
+    entry = entries[name]
+    return nil unless entry.nil? || entry.empty?
+
+    entries.each do |canonical_name, info|
+      next if info.nil?
+
+      aliases = Array(info["aliases"]).map(&:to_s)
+      oldname = info["oldname"].to_s
+      return Formula[canonical_name] if aliases.include?(name) || oldname == name
+    end
+    nil
   end
 
   def factory_load_source(reference, options = {})
@@ -8087,6 +8158,17 @@ module Formulary
     return Formula[name] if path.nil? || !Pathname.new(path.to_s).file?
 
     path = Pathname.new(path.to_s)
+    flag_list = Array(flags).map(&:to_s)
+    cached = path_cache_entry(path)
+    if cached &&
+       cached[:name] == name.to_s &&
+       cached[:mtime] == path_mtime(path) &&
+       cached[:flags] == flag_list &&
+       cached[:from_metadata] == !!from_metadata &&
+       cached[:namespace] == namespace
+      return cached[:klass]
+    end
+
     contents = path.open("r") { |file| ensure_utf8_encoding(file).read }
     namespace_name = if namespace.nil? || namespace.to_s.empty?
       "FormulaNamespace#{namespace_key(path.to_s)}"
@@ -8095,10 +8177,32 @@ module Formulary
     end
     klass = load_formula(
       name, path, contents, namespace_name,
-      flags: flags, ignore_errors: ignore_errors, from_metadata: from_metadata
+      flags: flag_list, ignore_errors: ignore_errors, from_metadata: from_metadata
     )
-    @path_cache ||= {}
-    @path_cache[path.to_s] = klass
+    cache_path_formula(path, name: name, klass: klass, flags: flag_list,
+                       from_metadata: from_metadata, namespace: namespace)
+    klass
+  end
+
+  def path_mtime(path)
+    File.mtime(path.to_s).to_f
+  rescue StandardError
+    nil
+  end
+
+  def path_cache_entry(path)
+    (@path_cache ||= {})[path.to_s]
+  end
+
+  def cache_path_formula(path, name:, klass:, flags:, from_metadata:, namespace:)
+    (@path_cache ||= {})[path.to_s] = {
+      klass: klass,
+      name: name.to_s,
+      mtime: path_mtime(path),
+      flags: Array(flags).map(&:to_s),
+      from_metadata: !!from_metadata,
+      namespace: namespace,
+    }
     klass
   end
 
@@ -8108,12 +8212,7 @@ module Formulary
   def load_formula_from_struct!(name, formula_struct = nil, *_args, **_options)
     return Formula[name] if formula_struct.nil?
 
-    unless formula_struct_like?(formula_struct)
-      raise PybrewFormulaUnavailableError,
-            "Formulary.load_formula_from_struct! expects an API formula struct " \
-            "responding to #{FORMULA_STRUCT_ATTRIBUTES.join('/')} for " \
-            "#{name.inspect}; got #{formula_struct.class}"
-    end
+    validate_formula_struct!(name, formula_struct)
 
     klass = Class.new(PybrewLoadedFormula)
     klass.loaded_name = name.to_s
@@ -8165,6 +8264,33 @@ module Formulary
     return false if object.nil?
 
     FORMULA_STRUCT_ATTRIBUTES.any? { |attribute| object.respond_to?(attribute) }
+  end
+
+  def validate_formula_struct!(name, formula_struct)
+    unless formula_struct_like?(formula_struct)
+      raise PybrewFormulaUnavailableError,
+            "Formulary.load_formula_from_struct! expects an API formula struct " \
+            "responding to #{FORMULA_STRUCT_ATTRIBUTES.join('/')} for " \
+            "#{name.inspect}; got #{formula_struct.class}"
+    end
+
+    missing = FORMULA_STRUCT_REQUIRED_ATTRIBUTES.reject do |attribute|
+      formula_struct.respond_to?(attribute)
+    end
+    unless missing.empty?
+      raise PybrewFormulaUnavailableError,
+            "Formulary.load_formula_from_struct! malformed API formula struct for " \
+            "#{name.inspect}: missing required accessor(s) #{missing.join('/')}"
+    end
+
+    return true unless formula_struct.respond_to?(:dependencies)
+
+    raw = formula_struct.dependencies
+    return true if raw.nil? || raw.is_a?(Hash) || raw.respond_to?(:each) || raw.respond_to?(:name)
+
+    raise PybrewFormulaUnavailableError,
+          "Formulary.load_formula_from_struct! malformed API formula struct for " \
+          "#{name.inspect}: dependencies is not enumerable"
   end
 
   def formula_struct_text(value)
@@ -8230,12 +8356,28 @@ module Formulary
   end
 
   def formula_class_get_from_path(path)
-    cached = (@path_cache ||= {})[path.to_s]
-    return cached unless cached.nil?
+    pathname = Pathname.new(path.to_s)
+    cached = path_cache_entry(pathname)
+    if cached.nil?
+      raise PybrewFormulaUnavailableError,
+            "no formula class has been loaded from #{path}; " \
+            "call Formulary.load_formula_from_path first"
+    end
 
-    raise PybrewFormulaUnavailableError,
-          "no formula class has been loaded from #{path}; " \
-          "call Formulary.load_formula_from_path first"
+    current_mtime = path_mtime(pathname)
+    if current_mtime.nil?
+      raise PybrewFormulaUnavailableError,
+            "formula source is no longer readable: #{path}"
+    end
+    return cached[:klass] if cached[:mtime] == current_mtime
+
+    load_formula_from_path(
+      cached[:name],
+      pathname,
+      flags: cached[:flags] || [],
+      from_metadata: cached[:from_metadata],
+      namespace: cached[:namespace]
+    )
   end
 
   def formula_class_get_from_api(name)
@@ -8933,6 +9075,174 @@ module Utils
 
     def self.url_protected_by_incapsula?(_url)
       false
+    end
+  end
+end
+
+module Utils
+  # Bounded Utils::GitHub implementation.  Read operations use a curl
+  # transport that can be redirected with PYBREW_GITHUB_CURL (tests use a fake
+  # script, so no network access is required).  Write operations fail loudly.
+  module GitHub
+    API_URL = "https://api.github.com"
+    CURL_ENV = "PYBREW_GITHUB_CURL"
+    TOKEN_ENV = "PYBREW_GITHUB_TOKEN"
+
+    module_function
+
+    def curl_executable
+      configured = ENV[CURL_ENV].to_s
+      configured.empty? ? "curl" : configured
+    end
+
+    def token
+      value = ENV[TOKEN_ENV].to_s
+      value.empty? ? nil : value
+    end
+
+    def url_to(*subroutes)
+      parts = subroutes.flatten.compact.map(&:to_s).reject(&:empty?)
+      ([API_URL] + parts).join("/")
+    end
+
+    def search_query_string(*main_params, **qualifiers)
+      terms = main_params.flatten.compact.map(&:to_s)
+      qualifiers.each { |key, value| terms << "#{key}:#{value}" }
+      "q=#{URI.encode_www_form_component(terms.join(" "))}"
+    end
+
+    def get_json(url, data: nil, method: "GET")
+      command = [curl_executable, "-sS", "-L", "-H", "Accept: application/vnd.github+json"]
+      command += ["-H", "Authorization: Bearer #{token}"] unless token.nil?
+      command += ["-X", method.to_s] unless method.to_s == "GET"
+      command += ["--data", JSON.generate(data)] unless data.nil?
+      command << url.to_s
+      output = Utils.popen_read(*command).to_s
+      return nil if output.empty?
+
+      JSON.parse(output)
+    end
+
+    def repository(user, repo)
+      get_json(url_to("repos", user, repo))
+    end
+
+    def user
+      get_json(url_to("user"))
+    end
+
+    def private_repo?(full_name)
+      user, repo = full_name.to_s.split("/", 2)
+      return false if repo.nil?
+
+      data = repository(user, repo)
+      data.is_a?(Hash) ? !!data["private"] : false
+    rescue ScriptError, StandardError
+      false
+    end
+
+    def issues(repo:, **filters)
+      query = filters.map { |key, value| "#{key}=#{value}" }.join("&")
+      url = url_to("repos", repo, "issues")
+      url = "#{url}?#{query}" unless query.empty?
+      get_json(url)
+    end
+
+    def search_issues(query, **qualifiers)
+      get_json("#{url_to("search", "issues")}?#{search_query_string(query, **qualifiers)}")
+    end
+
+    def issues_for_formula(name, tap: nil, tap_remote_repo: nil, state: nil, type: nil)
+      repo = tap_remote_repo.to_s
+      repo = "homebrew/homebrew-core" if repo.empty?
+      filters = {}
+      filters[:state] = state unless state.nil?
+      filters[:labels] = type unless type.nil?
+      issues(repo: repo, **filters)
+    end
+
+    def get_latest_release(user, repo)
+      get_json(url_to("repos", user, repo, "releases", "latest"))
+    end
+
+    def get_release(user, repo, tag)
+      get_json(url_to("repos", user, repo, "releases", "tags", tag))
+    end
+
+    def get_repo_license(user, repo, ref: nil)
+      url = url_to("repos", user, repo, "license")
+      url = "#{url}?ref=#{ref}" unless ref.nil? || ref.to_s.empty?
+      get_json(url)
+    end
+
+    def get_workflow_run(user, repo, pull_request, workflow_id: "tests.yml", artifact_pattern: nil)
+      url = url_to("repos", user, repo, "actions", "workflows", workflow_id, "runs")
+      data = get_json("#{url}?event=pull_request&per_page=30")
+      runs = data.is_a?(Hash) ? Array(data["workflow_runs"]) : []
+      run = runs.find { |item| item.is_a?(Hash) && item["pull_requests"].is_a?(Array) }
+      run || runs.first
+    end
+
+    def get_artifact_urls(workflow_array)
+      urls = []
+      Array(workflow_array).flatten.compact.each do |item|
+        next unless item.is_a?(Hash)
+
+        artifacts = item["artifacts"]
+        if !artifacts.is_a?(Array) && !item["artifacts_url"].nil?
+          data = get_json(item["artifacts_url"].to_s)
+          artifacts = data.is_a?(Hash) ? Array(data["artifacts"]) : []
+        end
+        Array(artifacts).each do |artifact|
+          next unless artifact.is_a?(Hash)
+
+          url = artifact["archive_download_url"] || artifact["url"]
+          urls << url.to_s unless url.nil?
+        end
+      end
+      urls
+    end
+
+    def unsupported_write!(name)
+      raise NotImplementedError,
+            "Utils::GitHub.#{name} is not implemented in the pybrew Ruby shim " \
+            "(GitHub write operations are out of scope)"
+    end
+
+    def create_gist(*_args, **_kwargs)
+      unsupported_write!(:create_gist)
+    end
+
+    def create_issue(*_args, **_kwargs)
+      unsupported_write!(:create_issue)
+    end
+
+    def create_issue_comment(*_args, **_kwargs)
+      unsupported_write!(:create_issue_comment)
+    end
+
+    def create_fork(*_args, **_kwargs)
+      unsupported_write!(:create_fork)
+    end
+
+    def create_pull_request(*_args, **_kwargs)
+      unsupported_write!(:create_pull_request)
+    end
+
+    def create_or_update_release(*_args, **_kwargs)
+      unsupported_write!(:create_or_update_release)
+    end
+
+    def upload_release_asset(*_args, **_kwargs)
+      unsupported_write!(:upload_release_asset)
+    end
+
+    def workflow_dispatch_event(*_args, **_kwargs)
+      unsupported_write!(:workflow_dispatch_event)
+    end
+
+    def generate_release_notes(*_args, **_kwargs)
+      unsupported_write!(:generate_release_notes)
     end
   end
 end

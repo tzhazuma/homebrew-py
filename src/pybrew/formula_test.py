@@ -123,9 +123,18 @@ require "tmpdir"
 class FormulaTestFailure < StandardError
 end
 
-# Raised by ``skip`` inside a formula test.  The runner reports it as a skip
-# (exit 0) rather than a failure, mirroring Minitest's ``Minitest::Skip``.
-class FormulaTestSkip < FormulaTestFailure
+# Minitest raises ``Minitest::Skip`` (an ``Exception``, not a
+# ``StandardError``); mirror that so ``rescue StandardError`` in a test body
+# does not accidentally swallow a skip.
+class FormulaTestSkip < Exception
+end
+
+unless defined?(NoMatchingPatternError)
+  # Ruby 2.6 (the macOS system Ruby) has no pattern-matching support.  Define
+  # the same constant so ``assert_pattern``/``refute_pattern`` can be exercised
+  # offline (a test body can raise it to simulate a pattern mismatch).
+  class NoMatchingPatternError < StandardError
+  end
 end
 
 class FormulaTestContext
@@ -135,15 +144,8 @@ class FormulaTestContext
   # predicate forms (Minitest's ``UNDEFINED``).
   UNDEFINED = Object.new.freeze
 
-  # ``NoMatchingPatternError`` only exists on Ruby 2.7+.  Keep the pattern
-  # assertions loadable on the Ruby 2.6 shipped with macOS; on older Rubies the
-  # fallback class simply never matches.
-  NO_MATCHING_PATTERN_ERROR =
-    if defined?(NoMatchingPatternError)
-      NoMatchingPatternError
-    else
-      Class.new(StandardError)
-    end
+  # Available on Ruby 2.7+ and defined by the runner on older Rubies.
+  NO_MATCHING_PATTERN_ERROR = NoMatchingPatternError
 
   attr_reader :testpath
 
@@ -233,7 +235,7 @@ class FormulaTestContext
       elsif right.is_a?(Integer)
         -1
       else
-        left.to_s <=> right.to_s
+        left.to_s.downcase <=> right.to_s.downcase
       end
     end
   end
@@ -600,14 +602,33 @@ class FormulaTestContext
     end
   end
 
-  # Environment for a dependency test: its own prefix/testpath/cwd/tmpdir.
+  # Environment for a dependency test: its own prefix/testpath/cwd/tmpdir/home
+  # and a PATH that does not expose the parent formula's keg.
   def dependency_test_environment(info, testpath)
+    dependency_prefix = info["prefix"].to_s
+    parent_prefix = @paths["prefix"].to_s
+    excluded = [File.join(parent_prefix, "bin"), File.join(parent_prefix, "sbin")]
+    inherited = ENV["PATH"].to_s.split(File::PATH_SEPARATOR).reject do |entry|
+      excluded.include?(entry)
+    end
+    path_entries = [
+      File.join(dependency_prefix, "bin"),
+      File.join(dependency_prefix, "sbin"),
+    ] + inherited
+    path_value = path_entries.reject { |entry| entry.nil? || entry.empty? }
+    path_value = path_value.uniq.join(File::PATH_SEPARATOR)
     {
-      "PYBREW_PREFIX" => info["prefix"].to_s,
-      "PYBREW_FORMULA_PREFIX" => info["prefix"].to_s,
+      "PYBREW_PREFIX" => dependency_prefix,
+      "PYBREW_FORMULA_PREFIX" => dependency_prefix,
       "PYBREW_TESTPATH" => testpath.to_s,
       "PWD" => testpath.to_s,
       "TMPDIR" => testpath.to_s,
+      "TEMP" => testpath.to_s,
+      "TMP" => testpath.to_s,
+      "HOME" => testpath.to_s,
+      "GIT_CONFIG_GLOBAL" => File.join(testpath.to_s, ".gitconfig"),
+      "XDG_CONFIG_HOME" => File.join(testpath.to_s, ".config"),
+      "PATH" => path_value,
     }
   end
 
@@ -843,6 +864,8 @@ class FormulaTestContext
     begin
       yield
     rescue FormulaTestFailure
+      raise
+    rescue FormulaTestSkip
       raise
     rescue SignalException, SystemExit
       raise
@@ -1850,17 +1873,23 @@ def _declared_dependency_names(formula: Formula) -> list[str]:
 
 
 class _TapIndex:
-    """Cheap name index over formulae in the configured local taps."""
+    """Cheap name/alias index over formulae in the configured local taps."""
 
     def __init__(self, taps: list[Tap]) -> None:
         self.taps = taps
         self.by_name: dict[str, tuple[Tap, Path]] = {}
         self.by_qualified_name: dict[str, tuple[Tap, Path]] = {}
+        self.by_alias: dict[str, tuple[Tap, Path]] = {}
+        self.by_qualified_alias: dict[str, tuple[Tap, Path]] = {}
 
     def add(self, tap: Tap, path: Path) -> None:
         name = path.stem
         self.by_name.setdefault(name, (tap, path))
         self.by_qualified_name[f"{tap.name}/{name}"] = (tap, path)
+
+    def add_alias(self, tap: Tap, alias: str, path: Path) -> None:
+        self.by_alias.setdefault(alias, (tap, path))
+        self.by_qualified_alias[f"{tap.name}/{alias}"] = (tap, path)
 
     def resolve(self, name: str) -> Optional[tuple[Tap, Path]]:
         candidates = [name]
@@ -1869,23 +1898,55 @@ class _TapIndex:
             candidates.append(parts[-1])
             candidates.append("/".join(parts[-2:]))
         for candidate in candidates:
-            resolved = self.by_qualified_name.get(candidate)
-            if resolved is not None:
-                return resolved
-            resolved = self.by_name.get(candidate)
-            if resolved is not None:
-                return resolved
+            for mapping in (
+                self.by_qualified_name,
+                self.by_name,
+                self.by_qualified_alias,
+                self.by_alias,
+            ):
+                resolved = mapping.get(candidate)
+                if resolved is not None:
+                    return resolved
         return None
+
+
+def _tap_alias_entries(tap: Tap) -> list[tuple[str, Path]]:
+    """Return ``(alias, formula_path)`` pairs from a tap's ``Aliases`` dir.
+
+    Homebrew taps expose aliases as symlinks such as
+    ``Aliases/foo -> ../Formula/bar.rb``; only that cheap metadata is used (no
+    formula sources are parsed here).
+    """
+
+    aliases_dir = tap.path / "Aliases"
+    if not aliases_dir.is_dir():
+        return []
+    entries: list[tuple[str, Path]] = []
+    for alias_path in sorted(aliases_dir.iterdir()):
+        if alias_path.name.startswith("."):
+            continue
+        try:
+            target = Path(os.readlink(alias_path))
+        except OSError:
+            continue
+        if not target.is_absolute():
+            target = alias_path.parent / target
+        target = Path(os.path.normpath(target))
+        if target.suffix != ".rb":
+            continue
+        entries.append((alias_path.name, target))
+    return entries
 
 
 def _tap_index_key(config: Config) -> tuple[tuple[str, int], ...]:
     parts: list[tuple[str, int]] = []
     for path in config.taps:
-        try:
-            stamp = path.stat().st_mtime_ns
-        except OSError:
-            stamp = 0
-        parts.append((str(path), stamp))
+        for candidate in (path, path / "Aliases"):
+            try:
+                stamp = candidate.stat().st_mtime_ns if candidate.exists() else 0
+            except OSError:
+                stamp = 0
+            parts.append((str(candidate), stamp))
     return tuple(parts)
 
 
@@ -1905,6 +1966,15 @@ def _tap_index(config: Config) -> _TapIndex:
             index.add(tap, path)
             count += 1
         if count >= MAX_TAP_FORMULA_INDEX:
+            break
+    alias_count = 0
+    for tap in index.taps:
+        for alias_name, alias_target in _tap_alias_entries(tap):
+            if alias_count >= MAX_TAP_FORMULA_INDEX:
+                break
+            index.add_alias(tap, alias_name, alias_target)
+            alias_count += 1
+        if alias_count >= MAX_TAP_FORMULA_INDEX:
             break
     if len(_tap_index_cache) >= TAP_INDEX_CACHE_LIMIT:
         _tap_index_cache.clear()
@@ -2118,6 +2188,19 @@ def _formula_entries(
             )
             entries[eager_name] = entry
             entries.setdefault(f"{tap.name}/{eager_name}", entry)
+
+    # Alias metadata is cheap (tap ``Aliases`` symlinks) and can point at
+    # formulae whose sources were not parsed eagerly.
+    for alias_name in sorted(index.by_alias):
+        if len(entries) >= MAX_FORMULA_ENTRIES:
+            break
+        alias_tap, alias_target = index.by_alias[alias_name]
+        canonical = alias_target.stem
+        entry = entries.get(canonical) or entries.get(f"{alias_tap.name}/{canonical}")
+        if entry is None:
+            continue
+        entries.setdefault(alias_name, entry)
+        entries.setdefault(f"{alias_tap.name}/{alias_name}", entry)
     return entries
 
 

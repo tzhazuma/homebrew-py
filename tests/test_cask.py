@@ -1090,6 +1090,17 @@ def test_cask_script_shim_macos_and_command_helpers(
       raise "popen_write safe should have raised"
     rescue RuntimeError
     end
+    begin
+      system_command "/usr/bin/true", sudo: true
+      raise "sudo should have been rejected"
+    rescue ArgumentError => error
+      if !error.message.include?("sudo is not supported")
+        raise "unexpected sudo error"
+      end
+    end
+    if respond_to?(:sudo)
+      raise "sudo helper must not exist"
+    end
   end
 end
 ''',
@@ -2343,3 +2354,152 @@ def test_cask_font_and_checksumable_semantics() -> None:
     assert mixed.font() is False
     assert font_only.checksumable() is False
     assert git_cask.checksumable() is False
+
+
+# ---------------------------------------------------------------------------
+# date-deferred deprecation/disable semantics (default parser)
+# ---------------------------------------------------------------------------
+
+
+def _fixed_cask_today(
+    monkeypatch: pytest.MonkeyPatch, value: str = "2024-06-01"
+) -> None:
+    import datetime
+
+    monkeypatch.setattr(
+        "pybrew.cask._today", lambda: datetime.date.fromisoformat(value)
+    )
+
+
+def test_deprecate_date_deferral_default_parser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fixed_cask_today(monkeypatch)
+
+    future = parse_cask_source(
+        'cask "future" do\n'
+        '  version "1.0"\n'
+        '  deprecate! date: "2025-01-01", because: "later"\n'
+        'end\n'
+    )
+    assert future.deprecated is False
+    assert future.deprecation_date == "2025-01-01"
+    assert future.deprecation_reason == "later"
+
+    past = parse_cask_source(
+        'cask "past" do\n'
+        '  version "1.0"\n'
+        '  deprecate! date: "2024-01-01", because: "old"\n'
+        'end\n'
+    )
+    assert past.deprecated is True
+
+    today = parse_cask_source(
+        'cask "today" do\n'
+        '  version "1.0"\n'
+        '  deprecate! date: "2024-06-01", because: "today"\n'
+        'end\n'
+    )
+    assert today.deprecated is True
+
+    no_date = parse_cask_source(
+        'cask "nodate" do\n  version "1.0"\n  deprecate! because: "now"\nend\n'
+    )
+    assert no_date.deprecated is True
+
+
+def test_disable_date_deferral_default_parser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fixed_cask_today(monkeypatch)
+
+    future = parse_cask_source(
+        'cask "future" do\n'
+        '  version "1.0"\n'
+        '  disable! date: "2025-01-01", because: "broken", '
+        'replacement_cask: "newer"\n'
+        'end\n'
+    )
+    # A future disable! is announced as a deprecation first.
+    assert future.disabled is False
+    assert future.deprecated is True
+    assert future.deprecation_date is None
+    assert future.deprecation_reason == "broken"
+    assert future.deprecation_replacement_cask == "newer"
+    assert future.disable_date == "2025-01-01"
+
+    past = parse_cask_source(
+        'cask "past" do\n'
+        '  version "1.0"\n'
+        '  disable! date: "2024-01-01", because: "broken"\n'
+        'end\n'
+    )
+    assert past.disabled is True
+    assert past.deprecated is False
+
+    no_date = parse_cask_source(
+        'cask "nodate" do\n  version "1.0"\n  disable! because: "now"\nend\n'
+    )
+    assert no_date.disabled is True
+
+
+def test_future_disable_cask_is_installable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fixed_cask_today(monkeypatch)
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "f" / "future-disable.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        '''cask "future-disable" do
+  version "1.0"
+  stage_only true
+  disable! date: "2999-01-01", because: "not yet"
+end
+''',
+        encoding="utf-8",
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    result = installer.install(
+        CaskLoader(discover_taps([tap])).load("future-disable")
+    )
+    assert result.version == "1.0"
+
+
+def test_past_disable_cask_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fixed_cask_today(monkeypatch)
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "p" / "past-disable.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        '''cask "past-disable" do
+  version "1.0"
+  stage_only true
+  disable! date: "2000-01-01", because: "gone"
+end
+''',
+        encoding="utf-8",
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    installer = CaskInstaller(
+        config,
+        appdir=tmp_path / "Applications",
+        library_root=tmp_path / "Library",
+    )
+    with pytest.raises(CaskError, match="disabled"):
+        installer.install(
+            CaskLoader(discover_taps([tap])).load("past-disable")
+        )

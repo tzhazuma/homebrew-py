@@ -1630,3 +1630,218 @@ end
 
     app = tmp_path / "Applications" / "Nested.app"
     assert (app / "Contents" / "Info.plist").is_file()
+
+
+# ---------------------------------------------------------------------------
+# date-deferred deprecation/disable semantics (opt-in evaluator)
+# ---------------------------------------------------------------------------
+
+
+def _fixed_today(monkeypatch: pytest.MonkeyPatch, value: str = "2024-06-01") -> None:
+    import datetime
+
+    monkeypatch.setattr(
+        "pybrew.cask._today", lambda: datetime.date.fromisoformat(value)
+    )
+
+
+@requires_ruby
+def test_evaluator_deprecation_date_deferral(
+    allow_ruby: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fixed_today(monkeypatch)
+
+    future = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  deprecate! date: "2025-01-01", because: "later"\n'
+        )
+    )
+    assert future.deprecated is False
+    assert future.deprecation_date == "2025-01-01"
+    assert future.deprecation_reason == "later"
+
+    past = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  deprecate! date: "2024-01-01", because: "old"\n'
+        )
+    )
+    assert past.deprecated is True
+
+    no_date = evaluate_cask_source(
+        _source('  version "1.0"\n  deprecate! because: "immediate"\n')
+    )
+    assert no_date.deprecated is True
+
+
+@requires_ruby
+def test_evaluator_disable_date_deferral(
+    allow_ruby: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fixed_today(monkeypatch)
+
+    future = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  disable! date: "2025-01-01", because: "broken", '
+            'replacement_cask: "newer"\n'
+        )
+    )
+    assert future.disabled is False
+    assert future.deprecated is True
+    assert future.deprecation_date is None
+    assert future.deprecation_reason == "broken"
+    assert future.deprecation_replacement_cask == "newer"
+    assert future.disable_date == "2025-01-01"
+
+    past = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  disable! date: "2024-01-01", because: "broken"\n'
+        )
+    )
+    assert past.disabled is True
+    assert past.deprecated is False
+
+    no_date = evaluate_cask_source(
+        _source('  version "1.0"\n  disable! because: "broken"\n')
+    )
+    assert no_date.disabled is True
+
+
+# ---------------------------------------------------------------------------
+# bounded livecheck strategy execution
+# ---------------------------------------------------------------------------
+
+
+def _strategy_cask(allow_ruby: None):
+    return evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  livecheck do\n'
+            '    url "https://example.com/tool"\n'
+            '    strategy :page_match do |page|\n'
+            '      page.scan(/tool-(\\d+(?:\\.\\d+)*)/).flatten\n'
+            '    end\n'
+            '  end\n'
+        )
+    )
+
+
+@requires_ruby
+def test_execute_livecheck_strategy_with_page(allow_ruby: None) -> None:
+    from pybrew.cask_ruby import execute_livecheck_strategy
+
+    cask = _strategy_cask(allow_ruby)
+    raw_source = cask.livecheck["strategy_source"]
+
+    result = execute_livecheck_strategy(cask, page="tool-1.2.3 and tool-2.0")
+
+    assert result["executed"] is True
+    assert result["result"] == ["1.2.3", "2.0"]
+    assert result["error"] is None
+    assert result["page_size"] == len("tool-1.2.3 and tool-2.0")
+    assert result["source"] == raw_source
+    assert cask.livecheck["strategy_result"] == result
+    # The raw block source is retained for diagnostics.
+    assert cask.livecheck["strategy_source"] == raw_source
+
+
+@requires_ruby
+def test_execute_livecheck_strategy_with_injectable_fetcher(
+    allow_ruby: None,
+) -> None:
+    from pybrew.cask_ruby import execute_livecheck_strategy
+
+    cask = _strategy_cask(allow_ruby)
+    calls: list[str] = []
+
+    def fetcher(url: str) -> str:
+        calls.append(url)
+        return "tool-7.8"
+
+    result = execute_livecheck_strategy(cask, fetcher=fetcher)
+
+    assert calls == ["https://example.com/tool"]
+    assert result["executed"] is True
+    assert result["result"] == ["7.8"]
+
+
+@requires_ruby
+def test_execute_livecheck_strategy_is_offline_by_default(allow_ruby: None) -> None:
+    from pybrew.cask_ruby import execute_livecheck_strategy
+
+    cask = _strategy_cask(allow_ruby)
+
+    result = execute_livecheck_strategy(cask)
+
+    assert result["executed"] is False
+    assert "no network" in (result["reason"] or "")
+    assert cask.livecheck.get("strategy_result") is None
+
+
+@requires_ruby
+def test_execute_livecheck_strategy_requires_opt_in(
+    allow_ruby: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pybrew.cask_ruby import ALLOW_ENV, execute_livecheck_strategy
+
+    cask = _strategy_cask(allow_ruby)
+    monkeypatch.delenv(ALLOW_ENV, raising=False)
+
+    result = execute_livecheck_strategy(cask, page="tool-1.0")
+
+    assert result["executed"] is False
+    assert ALLOW_ENV in (result["reason"] or "")
+
+
+@requires_ruby
+def test_execute_livecheck_strategy_reports_errors(allow_ruby: None) -> None:
+    from pybrew.cask_ruby import execute_livecheck_strategy
+
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  livecheck do\n'
+            '    url "https://example.com/tool"\n'
+            '    strategy :page_match do |page|\n'
+            '      raise "strategy boom"\n'
+            '    end\n'
+            '  end\n'
+        )
+    )
+
+    result = execute_livecheck_strategy(cask, page="anything")
+
+    assert result["executed"] is True
+    assert result["result"] is None
+    assert "strategy boom" in (result["error"] or "")
+    assert cask.livecheck["strategy_source"]
+
+
+@requires_ruby
+def test_execute_livecheck_strategy_without_block(allow_ruby: None) -> None:
+    from pybrew.cask_ruby import execute_livecheck_strategy
+
+    cask = evaluate_cask_source(_source('  version "1.0"\n'))
+
+    result = execute_livecheck_strategy(cask, page="anything")
+
+    assert result["executed"] is False
+    assert "no livecheck strategy block" in (result["reason"] or "")
+
+
+@requires_ruby
+def test_execute_livecheck_strategy_fetcher_failure(allow_ruby: None) -> None:
+    from pybrew.cask_ruby import execute_livecheck_strategy
+
+    cask = _strategy_cask(allow_ruby)
+
+    def failing_fetcher(_url: str) -> str:
+        raise RuntimeError("transport down")
+
+    result = execute_livecheck_strategy(cask, fetcher=failing_fetcher)
+
+    assert result["executed"] is False
+    assert "transport down" in (result["error"] or "")

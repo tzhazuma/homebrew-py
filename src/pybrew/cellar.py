@@ -7,7 +7,7 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Any, Iterable, Mapping, Optional
 
 from . import PYBREW_VERSION
 from .errors import LinkConflict, PybrewError
@@ -255,6 +255,7 @@ def write_receipt(
     poured_from_bottle: bool,
     installed_as_dependency: bool = False,
     runtime_dependencies: Optional[list[str]] = None,
+    bottle_manifest: Optional[Mapping[str, Any]] = None,
 ) -> Path:
     payload = {
         "homebrew_version": PYBREW_VERSION,
@@ -271,6 +272,9 @@ def write_receipt(
         "built_as_bottle": poured_from_bottle,
         "installed_on_request": not installed_as_dependency,
     }
+    if bottle_manifest is not None:
+        # Additive summary; existing receipt consumers only read known keys.
+        payload["bottle_manifest"] = dict(bottle_manifest)
     path = receipt_path(keg)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path

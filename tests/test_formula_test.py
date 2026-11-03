@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+from pybrew import formula_test as formula_test_module
 from pybrew.errors import BuildError
 from pybrew.formula_test import (
     FormulaTestError,
@@ -948,7 +949,7 @@ def test_skip_marks_the_test_as_skipped(tmp_path: Path) -> None:
   refute skipped?
   begin
     skip "not applicable"
-  rescue StandardError
+  rescue FormulaTestSkip
     assert skipped?
     raise
   end
@@ -2009,3 +2010,317 @@ end
     formula, config = _installed_formula(tmp_path, source, taps=[tap])
     result = run_formula_test(formula, config, ruby=_REAL_RUBY)
     assert result.success is True
+
+
+# ---------------------------------------------------------------------------
+# T4: stronger Version/PkgVersion DSL behavior
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_version_letter_segments_and_pkg_ordering(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  beta = Version.new("1.2.3-beta")
+  upper = Version.new("1.2.3-BETA")
+  release = Version.new("1.2.3")
+  assert_equal [1, 2, 3, "beta"], beta.segments
+  assert_equal 3, beta.patch
+  assert_equal 0, beta <=> upper
+  assert beta < release
+  assert release > beta
+  assert Version.new("1.2.3a") < release
+  assert_equal "1.2.3-beta", beta.to_s
+  pkg = PkgVersion.parse("1.2.3_2")
+  assert_equal "1.2.3_2", pkg.to_s
+  assert_equal "1.2.3_2", pkg.to_str
+  assert_equal 2, pkg.revision
+  assert_equal "1.2.3", pkg.version.to_s
+  assert_equal [1, 2, 3], pkg.segments
+  assert_equal 1, pkg.major
+  assert_equal 2, pkg.minor
+  assert_equal 3, pkg.patch
+  assert pkg > PkgVersion.parse("1.2.3_1")
+  assert pkg > "1.2.3_1"
+  assert pkg < "1.2.4"
+  assert_equal "1.2.3", PkgVersion.parse("1.2.3").to_s
+end
+""",
+    )
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+# ---------------------------------------------------------------------------
+# T4: dependency isolation for HOME/PATH and global constants
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_dependency_test_isolates_home_path_and_globals(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(
+        tap,
+        "dep-lib",
+        '''  test do
+    assert_equal "dep-lib", name
+    assert_equal testpath.to_s, ENV["HOME"]
+    assert_equal testpath.to_s, Dir.home.to_s
+    assert_equal testpath.to_s, ENV["TMPDIR"]
+    assert_equal testpath.to_s, ENV["TEMP"]
+    assert_equal testpath.to_s, ENV["TMP"]
+    assert_equal testpath.to_s, Dir.pwd
+    assert_equal prefix.to_s, ENV["PYBREW_PREFIX"]
+    refute_equal ENV["PYBREW_PARENT_HOME"], ENV["HOME"]
+    refute_equal ENV["PYBREW_PARENT_TESTPATH"], testpath.to_s
+    path_entries = ENV["PATH"].split(File::PATH_SEPARATOR)
+    assert_equal (prefix/"bin").to_s, path_entries.first
+    refute_includes path_entries, File.join(ENV["PYBREW_PARENT_PREFIX"], "bin")
+    assert_equal "dep-ok", shell_output("dep-lib").strip
+    assert_empty `command -v parent-only-tool 2>/dev/null`.strip
+    assert_equal ENV["HOMEBREW_PREFIX"], HOMEBREW_PREFIX.to_s
+    assert_equal ENV["HOMEBREW_CELLAR"], HOMEBREW_CELLAR.to_s
+  end''',
+    )
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  parent_testpath = testpath.to_s
+  parent_home = ENV["HOME"].to_s
+  parent_path = ENV["PATH"].to_s
+  parent_prefix = ENV["PYBREW_PREFIX"].to_s
+  parent_tmpdir = ENV["TMPDIR"].to_s
+  (testpath/"parent-marker").write "parent"
+  (bin/"parent-only-tool").write "#!/bin/sh\\necho parent-tool\\n"
+  File.chmod(0755, (bin/"parent-only-tool").to_s)
+  ENV["PYBREW_PARENT_TESTPATH"] = parent_testpath
+  ENV["PYBREW_PARENT_HOME"] = parent_home
+  ENV["PYBREW_PARENT_PREFIX"] = parent_prefix
+  Formula["dep-lib"].test
+  assert_equal parent_testpath, Dir.pwd
+  assert_equal parent_home, ENV["HOME"].to_s
+  assert_equal parent_path, ENV["PATH"].to_s
+  assert_equal parent_tmpdir, ENV["TMPDIR"].to_s
+  assert_equal parent_prefix, ENV["PYBREW_PREFIX"].to_s
+  assert_path_exists testpath/"parent-marker"
+  assert_equal "parent-tool", shell_output("#{bin}/parent-only-tool").strip
+  assert_equal ENV["HOMEBREW_PREFIX"], HOMEBREW_PREFIX.to_s
+end
+""",
+        taps=[tap],
+    )
+    formula.dependencies = [Dependency(name="dep-lib")]
+    _install_keg(config, "dep-lib", output="dep-ok")
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+# ---------------------------------------------------------------------------
+# T4: alias-only local tap lookup (Aliases metadata)
+# ---------------------------------------------------------------------------
+
+
+def _write_tap_alias(tap: Path, alias: str, formula_name: str) -> Path:
+    aliases = tap / "Aliases"
+    aliases.mkdir(parents=True, exist_ok=True)
+    link = aliases / alias
+    if link.is_symlink() or link.exists():
+        link.unlink()
+    link.symlink_to(f"../Formula/{formula_name}.rb")
+    return link
+
+
+@requires_ruby
+def test_alias_only_tap_lookup_resolves_from_metadata(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(tap, "tool-x", "  test do\n    assert true\n  end")
+    _write_tap_alias(tap, "tool-alias", "tool-x")
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  ref = Formula["tool-alias"]
+  assert_equal "tool-x", ref.name
+  assert_equal "sample-tap/tool-x", ref.full_name
+  assert_equal "1.0", ref.version.to_s
+  assert_equal Formula["tool-x"], ref
+  assert_equal "tool-x", Formula["sample-tap/tool-alias"].name
+end
+""",
+        taps=[tap],
+    )
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_dynamic_tap_alias_lookup_uses_index_metadata(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(tap, "tool-x", None)
+    _write_tap_alias(tap, "tool-alias", "tool-x")
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  ref = Formula[["tool", "alias"].join("-")]
+  assert_equal "tool-x", ref.name
+  refute ref.installed?
+end
+""",
+        taps=[tap],
+    )
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_unknown_alias_fails_clearly(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(tap, "tool-x", None)
+    _write_tap_alias(tap, "tool-alias", "tool-x")
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  Formula["no-such-alias"].name\nend', taps=[tap]
+    )
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert "no-such-alias" in excinfo.value.stderr
+    assert "not available" in excinfo.value.stderr
+
+
+# ---------------------------------------------------------------------------
+# T4: Minitest fidelity (skip/pattern/counter)
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_skip_is_not_a_standard_error(tmp_path: Path) -> None:
+    source = """do
+  begin
+    skip "not caught"
+  rescue StandardError
+    flunk "skip must not be a StandardError"
+  end
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert result.success is True
+    assert "Formula test skipped: not caught" in result.stdout
+
+
+@requires_ruby
+def test_skip_default_message_is_minitest_compatible(tmp_path: Path) -> None:
+    formula, config = _installed_formula(tmp_path, "do\n  skip\nend")
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert result.success is True
+    assert "Formula test skipped: Skipped, no message given" in result.stdout
+
+
+@requires_ruby
+def test_pattern_assertions_simulate_no_matching_pattern_error(tmp_path: Path) -> None:
+    source = """do
+  assert_pattern { 1 + 1 }
+  refute_pattern { raise NoMatchingPatternError, "length mismatch" }
+  mismatch = begin
+    assert_pattern { raise NoMatchingPatternError, "length mismatch" }
+  rescue StandardError => error
+    error
+  end
+  assert_match(/length mismatch/, mismatch.message)
+  unmatched = begin
+    refute_pattern { 1 + 1 }
+  rescue StandardError => error
+    error
+  end
+  assert_match(/NoMatchingPatternError expected/, unmatched.message)
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_assertion_counter_counts_pass_and_flunk(tmp_path: Path) -> None:
+    source = """do
+  assert_equal 0, assertions
+  pass
+  assert_equal 2, assertions
+  begin
+    flunk "counted failure"
+  rescue FormulaTestFailure
+  end
+  assert_equal 4, assertions
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_skip_does_not_increment_assertion_counter(tmp_path: Path) -> None:
+    source = """do
+  before = assertions
+  begin
+    skip "uncounted"
+  rescue FormulaTestSkip
+    raise "skip counted as an assertion" unless assertions == before
+    raise
+  end
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert result.success is True
+    assert "Formula test skipped: uncounted" in result.stdout
+
+
+@requires_ruby
+def test_dynamic_formula_lookup_is_lightweight(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tap = tmp_path / "sample-tap"
+    for index in range(5):
+        _write_tap_formula(tap, f"tool-{index}", None)
+    loaded: list[str] = []
+    original = formula_test_module._load_tap_formula
+
+    def counting_load(path: Path, tap_name: str) -> Formula:
+        loaded.append(path.stem)
+        return original(path, tap_name)
+
+    monkeypatch.setattr(formula_test_module, "_load_tap_formula", counting_load)
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  ref = Formula[["tool", "3"].join("-")]
+  assert_equal "tool-3", ref.name
+  refute ref.installed?
+end
+""",
+        taps=[tap],
+    )
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+    assert loaded == []
+
+
+@requires_ruby
+def test_skip_inside_assert_raises_propagates(tmp_path: Path) -> None:
+    source = """do
+  begin
+    assert_raises(StandardError) { skip "not matched" }
+  rescue FormulaTestSkip
+    raise
+  end
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert result.success is True
+    assert "Formula test skipped: not matched" in result.stdout

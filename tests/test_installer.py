@@ -1,22 +1,39 @@
-"""Installer-level source-build environment tests.
+"""Installer-level source-build, bottle and dependency tests.
 
 These tests exercise the Python installer path end to end with synthetic local
-sources and fake compiler executables.  No real compiler is invoked and no
-network access is required; the fake compilers record the environment and argv
-they received.
+sources, bottles and fake compiler executables.  No real compiler is invoked,
+no network access is required and real bottles are only used when cached.
 """
 
 from __future__ import annotations
 
 import hashlib
 import io
+import json
 import os
+import struct
+import sys
 import tarfile
 from pathlib import Path
 
 import pytest
 
-from pybrew.installer import InstallOptions, Installer
+from pybrew.cellar import read_receipt, write_receipt
+from pybrew.errors import BottleError, ChecksumMismatch, DependencyError
+from pybrew.installer import (
+    InstallOptions,
+    Installer,
+    LinkageError,
+    check_linkage,
+    read_bottle_manifest,
+)
+from pybrew.models import (
+    BottleFile,
+    BottleSpec,
+    Dependency,
+    Formula,
+    candidate_bottle_tags,
+)
 from pybrew.paths import Config
 from pybrew.taps import FormulaLoader, discover_taps
 
@@ -283,3 +300,537 @@ def test_default_source_build_environment_is_unchanged(
         f"-L{prefix / 'lib'}"
     )
     assert (result.keg / "bin" / "env-value.txt").read_text() == expected
+
+
+# ---------------------------------------------------------------------------
+# synthetic bottles, manifests and linkage
+# ---------------------------------------------------------------------------
+
+
+def _add_member(
+    tar: tarfile.TarFile,
+    name: str,
+    data: bytes = b"",
+    mode: int = 0o644,
+    kind: bytes = tarfile.REGTYPE,
+    target: str = "",
+) -> None:
+    info = tarfile.TarInfo(name)
+    info.size = len(data) if kind == tarfile.REGTYPE else 0
+    info.mode = mode
+    info.type = kind
+    info.linkname = target
+    tar.addfile(info, io.BytesIO(data) if kind == tarfile.REGTYPE else None)
+
+
+def _make_bottle(
+    path: Path,
+    name: str,
+    version: str,
+    *,
+    files: dict[str, bytes] | None = None,
+    symlinks: dict[str, str] | None = None,
+    receipt: dict[str, object] | None = None,
+) -> Path:
+    files = dict(files or {})
+    symlinks = dict(symlinks or {})
+    if receipt is not None:
+        files["INSTALL_RECEIPT.json"] = json.dumps(receipt).encode("utf-8")
+    top = f"{name}/{version}"
+    directories: set[str] = {top}
+    for relative in list(files) + list(symlinks):
+        parent = Path(relative).parent
+        while str(parent) not in ("", "."):
+            directories.add(f"{top}/{parent}")
+            parent = parent.parent
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(path, "w:gz") as tar:
+        for directory in sorted(directories):
+            _add_member(tar, directory, mode=0o755, kind=tarfile.DIRTYPE)
+        for relative, data in sorted(files.items()):
+            _add_member(tar, f"{top}/{relative}", data)
+        for relative, target in sorted(symlinks.items()):
+            _add_member(
+                tar,
+                f"{top}/{relative}",
+                mode=0o777,
+                kind=tarfile.SYMTYPE,
+                target=target,
+            )
+    return path
+
+
+def _formula_with_local_bottle(
+    tmp_path: Path,
+    name: str,
+    version: str,
+    *,
+    files: dict[str, bytes],
+    symlinks: dict[str, str] | None = None,
+) -> tuple[Formula, Path]:
+    tag = candidate_bottle_tags()[0]
+    bottle = _make_bottle(
+        tmp_path / "bottles" / f"{name}-{version}.{tag}.bottle.tar.gz",
+        name,
+        version,
+        files=files,
+        symlinks=symlinks,
+    )
+    formula = Formula(name=name, version=version)
+    formula.bottle = BottleSpec(
+        root_url=(tmp_path / "bottles").as_uri(),
+        files={tag: BottleFile(tag, _sha(bottle))},
+    )
+    return formula, bottle
+
+
+def _direct_installer(tmp_path: Path) -> Installer:
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    return Installer(config, FormulaLoader([]))
+
+
+def _synthetic_elf(*needed: str) -> bytes:
+    required = needed or ("libmissing.so",)
+    strings = bytearray(b"\0")
+    offsets: list[int] = []
+    for name in required:
+        offsets.append(len(strings))
+        strings.extend(name.encode("utf-8") + b"\0")
+    strtab_offset = 0x200
+    base_address = 0x400000
+    dynamic_offset = 0x100
+    dynamic = [(1, offset) for offset in offsets]
+    dynamic.extend(
+        [
+            (5, base_address + strtab_offset),
+            (10, len(strings)),
+            (0, 0),
+        ]
+    )
+    dynamic_size = len(dynamic) * 16
+    data = bytearray(0x300)
+    struct.pack_into("<4sBBBBB7x", data, 0, b"\x7fELF", 2, 1, 1, 0, 0)
+    struct.pack_into(
+        "<HHIQQQIHHHHHH",
+        data,
+        16,
+        3,
+        62,
+        1,
+        0,
+        64,
+        0,
+        0,
+        64,
+        56,
+        2,
+        0,
+        0,
+        0,
+    )
+    struct.pack_into(
+        "<IIQQQQQQ", data, 64, 1, 5, 0, base_address, base_address, 0x300, 0x300, 0x1000
+    )
+    struct.pack_into(
+        "<IIQQQQQQ",
+        data,
+        120,
+        2,
+        6,
+        dynamic_offset,
+        base_address + dynamic_offset,
+        base_address + dynamic_offset,
+        dynamic_size,
+        dynamic_size,
+        0x1000,
+    )
+    for index, (tag, value) in enumerate(dynamic):
+        struct.pack_into("<qQ", data, dynamic_offset + index * 16, tag, value)
+    data[strtab_offset : strtab_offset + len(strings)] = strings
+    return bytes(data)
+
+
+def _synthetic_macho(
+    loads: list[str], rpaths: list[str] | None = None, *, weak: bool = False
+) -> bytes:
+    rpaths = rpaths or []
+    commands: list[bytes] = []
+    command_id = 0x80000018 if weak else 0xC
+    for load in loads:
+        raw = load.encode("utf-8") + b"\0"
+        commands.append(
+            struct.pack("<IIIIII", command_id, 24 + len(raw), 24, 2, 0x10000, 0x10000)
+            + raw
+        )
+    for rpath in rpaths:
+        raw = rpath.encode("utf-8") + b"\0"
+        commands.append(
+            struct.pack("<III", 0x8000001C, 12 + len(raw), 12) + raw
+        )
+    sizeofcmds = sum(len(command) for command in commands)
+    return (
+        struct.pack(
+            "<IiiIIIII",
+            0xFEEDFACF,
+            0x0100000C,
+            0,
+            2,
+            len(commands),
+            sizeofcmds,
+            0,
+            0,
+        )
+        + b"".join(commands)
+    )
+
+
+class _MemoryLoader:
+    def __init__(self, formulas: dict[str, Formula]):
+        self.formulas = formulas
+
+    def load(self, name: str) -> Formula:
+        return self.formulas[name]
+
+
+def _dependency_formula(name: str, dependencies: list[str]) -> Formula:
+    formula = Formula(name=name, version="1.0")
+    formula.dependencies = [Dependency(name=dep) for dep in dependencies]
+    return formula
+
+
+# -- manifest ------------------------------------------------------------
+def test_read_bottle_manifest_lists_files_symlinks_and_receipt(
+    tmp_path: Path,
+) -> None:
+    bottle = _make_bottle(
+        tmp_path / "hello.bottle.tar.gz",
+        "hello",
+        "1.0",
+        files={
+            "bin/hello": b"#!/bin/sh\n",
+            "share/doc/hello/README": b"docs\n",
+        },
+        symlinks={"lib/libhello.1.dylib": "libhello.dylib"},
+        receipt={"version": "1.0"},
+    )
+    manifest = read_bottle_manifest(bottle)
+    top = "hello/1.0"
+
+    assert manifest.sha256 == _sha(bottle)
+    assert manifest.archive_size == bottle.stat().st_size
+    assert manifest.files[f"{top}/bin/hello"] == len(b"#!/bin/sh\n")
+    assert manifest.files[f"{top}/share/doc/hello/README"] == len(b"docs\n")
+    assert manifest.symlinks[f"{top}/lib/libhello.1.dylib"] == "libhello.dylib"
+    assert manifest.receipt == f"{top}/INSTALL_RECEIPT.json"
+    assert manifest.file_count == 3
+    assert manifest.symlink_count == 1
+    assert manifest.total_size == sum(manifest.files.values())
+    assert top in manifest.directories
+
+    summary = manifest.summary()
+    assert summary["sha256"] == manifest.sha256
+    assert summary["file_count"] == 3
+    assert summary["symlink_count"] == 1
+    assert summary["total_size"] == manifest.total_size
+    assert summary["receipt"] == f"{top}/INSTALL_RECEIPT.json"
+
+
+def test_read_bottle_manifest_validates_checksum(tmp_path: Path) -> None:
+    bottle = _make_bottle(
+        tmp_path / "checksum.bottle.tar.gz", "checksum", "1.0", files={"bin/x": b"x"}
+    )
+    with pytest.raises(ChecksumMismatch):
+        read_bottle_manifest(bottle, expected_sha256="0" * 64)
+    assert read_bottle_manifest(bottle, expected_sha256=_sha(bottle)).sha256 == _sha(
+        bottle
+    )
+
+
+def test_pour_validates_manifest_before_extraction(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tag = candidate_bottle_tags()[0]
+    archive = tmp_path / "bottles" / f"unsafe-1.0.{tag}.bottle.tar.gz"
+    archive.parent.mkdir(parents=True)
+    with tarfile.open(archive, "w:gz") as tar:
+        _add_member(tar, "unsafe/1.0", mode=0o755, kind=tarfile.DIRTYPE)
+        _add_member(tar, "unsafe/1.0/bin/tool", b"safe member")
+        _add_member(tar, "../escape.txt", b"payload")
+
+    formula = Formula(name="unsafe", version="1.0")
+    formula.bottle = BottleSpec(
+        root_url=archive.parent.as_uri(),
+        files={tag: BottleFile(tag, _sha(archive))},
+    )
+    extracted: list[tuple[object, ...]] = []
+    monkeypatch.setattr(
+        "pybrew.installer.safe_extract_tar",
+        lambda *args, **kwargs: extracted.append(args),
+    )
+    installer = _direct_installer(tmp_path)
+    with pytest.raises(BottleError):
+        installer.install(
+            formula,
+            InstallOptions(ignore_dependencies=True, bottle_file=archive),
+        )
+    assert extracted == []
+    assert not installer.config.keg_path("unsafe", "1.0").exists()
+
+
+@pytest.mark.parametrize("unsafe", ["../escape.txt", "/absolute.txt"])
+def test_read_bottle_manifest_rejects_unsafe_members(
+    tmp_path: Path, unsafe: str
+) -> None:
+    archive = tmp_path / "unsafe.bottle.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        _add_member(tar, "hello/1.0", mode=0o755, kind=tarfile.DIRTYPE)
+        _add_member(tar, unsafe, b"payload")
+    with pytest.raises(BottleError):
+        read_bottle_manifest(archive)
+
+
+def test_read_bottle_manifest_rejects_escaping_symlink(tmp_path: Path) -> None:
+    archive = tmp_path / "link.bottle.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        _add_member(tar, "hello/1.0", mode=0o755, kind=tarfile.DIRTYPE)
+        _add_member(
+            tar,
+            "hello/1.0/passwd",
+            mode=0o777,
+            kind=tarfile.SYMTYPE,
+            target="../../../etc/passwd",
+        )
+    with pytest.raises(BottleError):
+        read_bottle_manifest(archive)
+
+
+def test_install_local_bottle_records_manifest_summary(sample) -> None:
+    config = Config.default(
+        prefix=sample.prefix, taps=[sample.tap], cache=sample.cache
+    )
+    config.ensure()
+    loader = FormulaLoader(discover_taps([sample.tap]))
+    installer = Installer(config, loader)
+    result = installer.install(
+        loader.load("hello"),
+        InstallOptions(ignore_dependencies=True, bottle_file=sample.bottle),
+    )[-1]
+
+    receipt = read_receipt(result.keg)
+    assert receipt["poured_from_bottle"] is True
+    assert receipt["runtime_dependencies"] == []
+    manifest = read_bottle_manifest(sample.bottle)
+    summary = receipt["bottle_manifest"]
+    assert summary["sha256"] == manifest.sha256 == sample.bottle_sha
+    assert summary["file_count"] == manifest.file_count
+    assert summary["symlink_count"] == manifest.symlink_count
+    assert summary["total_size"] == manifest.total_size
+
+
+def test_write_receipt_keeps_old_shape_without_bottle_manifest(
+    tmp_path: Path,
+) -> None:
+    keg = tmp_path / "keg"
+    keg.mkdir()
+    formula = Formula(name="receipt-fixture", version="1.0")
+    write_receipt(keg, formula, poured_from_bottle=False)
+    receipt = read_receipt(keg)
+    assert "bottle_manifest" not in receipt
+    assert receipt["version"] == "1.0"
+    assert receipt["poured_from_bottle"] is False
+
+    write_receipt(
+        keg,
+        formula,
+        poured_from_bottle=True,
+        bottle_manifest={"file_count": 1, "symlink_count": 0},
+    )
+    receipt = read_receipt(keg)
+    assert receipt["poured_from_bottle"] is True
+    assert receipt["bottle_manifest"] == {
+        "file_count": 1,
+        "symlink_count": 0,
+    }
+
+
+# -- linkage -------------------------------------------------------------
+def test_check_linkage_detects_missing_elf_reference(tmp_path: Path) -> None:
+    keg = tmp_path / "keg"
+    (keg / "bin").mkdir(parents=True)
+    (keg / "lib").mkdir()
+    (keg / "bin" / "tool").write_bytes(_synthetic_elf("libmissing.so"))
+    (keg / "share").mkdir()
+    (keg / "share" / "README").write_text("text files are ignored\n")
+
+    report = check_linkage(keg)
+    assert report.checked == 1
+    assert report.skipped == 0
+    assert len(report.issues) == 1
+    assert report.issues[0].path == "bin/tool"
+    assert report.issues[0].reference == "libmissing.so"
+    assert report.issues[0].kind == "elf"
+    assert "libmissing.so" in report.format()
+
+
+def test_check_linkage_accepts_present_elf_reference(tmp_path: Path) -> None:
+    keg = tmp_path / "keg"
+    (keg / "bin").mkdir(parents=True)
+    (keg / "lib").mkdir()
+    (keg / "bin" / "tool").write_bytes(_synthetic_elf("libpresent.so"))
+    (keg / "lib" / "libpresent.so").write_bytes(b"library")
+
+    report = check_linkage(keg)
+    assert report.checked == 1
+    assert report.issues == []
+
+
+def test_check_linkage_handles_macho_rpath(tmp_path: Path) -> None:
+    keg = tmp_path / "keg"
+    (keg / "bin").mkdir(parents=True)
+    (keg / "lib").mkdir()
+    binary = keg / "bin" / "tool"
+    binary.write_bytes(
+        _synthetic_macho(["@rpath/libmissing.dylib"], ["@loader_path/../lib"])
+    )
+
+    report = check_linkage(keg)
+    assert report.checked == 1
+    assert [issue.reference for issue in report.issues] == [
+        "@rpath/libmissing.dylib"
+    ]
+
+    (keg / "lib" / "libmissing.dylib").write_bytes(b"library")
+    assert check_linkage(keg).issues == []
+
+
+def test_check_linkage_ignores_weak_macho_reference(tmp_path: Path) -> None:
+    keg = tmp_path / "keg"
+    (keg / "bin").mkdir(parents=True)
+    (keg / "bin" / "tool").write_bytes(
+        _synthetic_macho(["@rpath/liboptional.dylib"], weak=True)
+    )
+    report = check_linkage(keg)
+    assert report.checked == 1
+    assert report.issues == []
+
+
+@pytest.mark.skipif(
+    sys.platform != "darwin", reason="macOS dyld shared-cache references"
+)
+def test_check_linkage_accepts_macos_shared_cache_reference(
+    tmp_path: Path,
+) -> None:
+    keg = tmp_path / "keg"
+    (keg / "bin").mkdir(parents=True)
+    (keg / "bin" / "tool").write_bytes(
+        _synthetic_macho(["/usr/lib/libSystem.B.dylib"])
+    )
+    report = check_linkage(keg)
+    assert report.checked == 1
+    assert report.issues == []
+
+
+def test_linkage_check_is_opt_in_for_bottles(tmp_path: Path) -> None:
+    formula, bottle = _formula_with_local_bottle(
+        tmp_path,
+        "linkage-bottle",
+        "1.0",
+        files={"bin/tool": _synthetic_elf("libmissing.so")},
+    )
+    installer = _direct_installer(tmp_path)
+    options = InstallOptions(
+        ignore_dependencies=True, bottle_file=bottle, linkage_check=True
+    )
+    with pytest.raises(LinkageError, match="dangling"):
+        installer.install(formula, options)
+    assert not installer.config.keg_path("linkage-bottle", "1.0").exists()
+
+    # Default behavior is unchanged: the same synthetic bottle installs.
+    result = installer.install(
+        formula,
+        InstallOptions(ignore_dependencies=True, bottle_file=bottle),
+    )[-1]
+    assert result.keg.is_dir()
+
+
+def test_linkage_check_env_opt_in_for_source_builds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PYBREW_LINKAGE_CHECK", "1")
+    project = _project(tmp_path, "linkage-source")
+    (project / "tool").write_bytes(_synthetic_elf("libmissing.so"))
+    tap = _make_tap(
+        tmp_path,
+        "linkage-source",
+        "1.0",
+        project,
+        '    bin.install "tool"',
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    loader = FormulaLoader(discover_taps([tap]))
+    installer = Installer(config, loader)
+    with pytest.raises(LinkageError, match="dangling"):
+        installer.install(
+            loader.load("linkage-source"),
+            InstallOptions(build_from_source=True),
+        )
+    assert not config.keg_path("linkage-source", "1.0").exists()
+
+
+# -- dependency ordering -------------------------------------------------
+def test_resolve_is_deterministic_topological_order(tmp_path: Path) -> None:
+    formulas = {
+        "app": _dependency_formula("app", ["beta", "alpha"]),
+        "beta": _dependency_formula("beta", ["base"]),
+        "alpha": _dependency_formula("alpha", ["base"]),
+        "base": _dependency_formula("base", []),
+    }
+    installer = Installer(
+        Config.default(prefix=tmp_path / "prefix", taps=[], cache=tmp_path / "cache"),
+        _MemoryLoader(formulas),
+    )
+    order = [formula.name for formula in installer.resolve(formulas["app"])]
+    assert order == ["base", "alpha", "beta", "app"]
+
+    reordered = {
+        "app": _dependency_formula("app", ["alpha", "beta"]),
+        "beta": formulas["beta"],
+        "alpha": formulas["alpha"],
+        "base": formulas["base"],
+    }
+    installer = Installer(
+        Config.default(prefix=tmp_path / "prefix", taps=[], cache=tmp_path / "cache"),
+        _MemoryLoader(reordered),
+    )
+    assert [formula.name for formula in installer.resolve(reordered["app"])] == order
+
+
+def test_resolve_reports_dependency_cycle(tmp_path: Path) -> None:
+    formulas = {
+        "a": _dependency_formula("a", ["b"]),
+        "b": _dependency_formula("b", ["c"]),
+        "c": _dependency_formula("c", ["a"]),
+    }
+    installer = Installer(
+        Config.default(prefix=tmp_path / "prefix", taps=[], cache=tmp_path / "cache"),
+        _MemoryLoader(formulas),
+    )
+    with pytest.raises(DependencyError, match="dependency cycle detected") as error:
+        installer.resolve(formulas["a"])
+    assert "a -> b -> c -> a" in str(error.value)
+
+
+def test_resolve_reports_missing_dependency(tmp_path: Path) -> None:
+    formula = _dependency_formula("missing-parent", ["not-here"])
+    installer = Installer(
+        Config.default(prefix=tmp_path / "prefix", taps=[], cache=tmp_path / "cache"),
+        _MemoryLoader({"missing-parent": formula}),
+    )
+    with pytest.raises(DependencyError, match="not available"):
+        installer.resolve(formula)

@@ -909,3 +909,21 @@ def test_uninstall_postflight_failure_reports_after_removal(
         "uninstall_preflight",
         "uninstall_postflight",
     ]
+
+
+def test_ruby_shim_exposes_cask_delegators_and_documents_no_sudo() -> None:
+    from pybrew.cask_installer import _CASK_SCRIPT_SHIM
+
+    for snippet in (
+        "def caskroom_path",
+        "def arch",
+        "def language",
+        "PYBREW_CASK_ARCH",
+        "PYBREW_CASK_LANGUAGE",
+    ):
+        assert snippet in _CASK_SCRIPT_SHIM
+
+    # Non-interactive only: requesting sudo fails loudly and there is no sudo
+    # helper that could silently escalate.
+    assert "sudo is not supported" in _CASK_SCRIPT_SHIM
+    assert "def sudo" not in _CASK_SCRIPT_SHIM

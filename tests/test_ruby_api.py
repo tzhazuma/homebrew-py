@@ -4404,9 +4404,14 @@ def test_formulary_load_formula_from_struct_mapping(
             '  rescue => error\n'
             '    bad_error = error.class.name + ":" + error.message.include?("formula struct").to_s\n'
             '  end\n'
-            '  hash_klass = Formulary.load_formula_from_struct!(\n'
-            '    "hash-license", Struct.new(:license).new({"default" => "Apache-2.0"})\n'
-            '  )\n'
+            '  begin\n'
+            '    Formulary.load_formula_from_struct!(\n'
+            '      "hash-license", Struct.new(:license).new({"default" => "Apache-2.0"})\n'
+            '    )\n'
+            '    hash_error = "none"\n'
+            '  rescue => error\n'
+            '    hash_error = error.class.name + ":" + error.message.include?("malformed").to_s\n'
+            '  end\n'
             '  (prefix/"struct.txt").write [\n'
             '    klass.is_a?(Class).to_s,\n'
             '    klass.name,\n'
@@ -4430,7 +4435,7 @@ def test_formulary_load_formula_from_struct_mapping(
             '    fallback.name,\n'
             '    fallback.is_a?(Class).to_s,\n'
             '    bad_error,\n'
-            '    hash_klass.loaded_license\n'
+            '    hash_error\n'
             '  ].join("\\n")\n'
         ),
     )
@@ -4458,7 +4463,7 @@ def test_formulary_load_formula_from_struct_mapping(
         "fallback-fixture",
         "false",
         "PybrewFormulaUnavailableError:true",
-        "Apache-2.0",
+        "PybrewFormulaUnavailableError:true",
     ]
 
 
@@ -4488,7 +4493,12 @@ def test_formulary_api_struct_cache_lookup_and_clear(
             '  got_struct = Formulary.formula_class_get_from_api(struct)\n'
             '  fallback = Formulary.load_formula_from_struct!("api-fallback-fixture")\n'
             '  partial = Struct.new(:desc).new("partial desc")\n'
-            '  partial_klass = Formulary.load_formula_from_struct!("api-partial-fixture", partial)\n'
+            '  begin\n'
+            '    Formulary.load_formula_from_struct!("api-partial-fixture", partial)\n'
+            '    partial_error = "none"\n'
+            '  rescue => error\n'
+            '    partial_error = error.class.name + ":" + error.message.include?("malformed").to_s\n'
+            '  end\n'
             '  fallback_defined = Formulary.formula_class_defined_from_api?("api-fallback-fixture").to_s\n'
             '  partial_defined = Formulary.formula_class_defined_from_api?("api-partial-fixture").to_s\n'
             '  begin\n'
@@ -4515,7 +4525,7 @@ def test_formulary_api_struct_cache_lookup_and_clear(
             '    got.new.desc,\n'
             '    fallback.is_a?(Class).to_s,\n'
             '    fallback_defined,\n'
-            '    partial_klass.is_a?(Class).to_s,\n'
+            '    partial_error,\n'
             '    partial_defined,\n'
             '    unknown_error,\n'
             '    after_clear_name, after_clear_full, after_clear_struct, cleared_error\n'
@@ -4538,8 +4548,8 @@ def test_formulary_api_struct_cache_lookup_and_clear(
         "api cache desc",
         "false",
         "false",
-        "true",
-        "true",
+        "PybrewFormulaUnavailableError:true",
+        "false",
         "PybrewFormulaUnavailableError|true",
         "false",
         "false",
@@ -6118,4 +6128,335 @@ empty = spec_eval(PybrewSourceSpec.new({}, :stable), :stable)
         "https://example.invalid/a.tar.gz",
         "true",
         "true",
+    ]
+
+
+def test_formulary_path_cache_mtime_and_stale_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-mtime-cache",
+        "1.0",
+        (
+            '  path = prefix/"mtime-formula.rb"\n'
+            '  path.write <<~RUBY\n'
+            '    class MtimeFixture < Formula\n'
+            '      version "1.0"\n'
+            '    end\n'
+            '  RUBY\n'
+            '  defined_before = Formulary.formula_class_defined_from_path?(path).to_s\n'
+            '  klass = Formulary.load_formula_from_path("mtime-fixture", path)\n'
+            '  same_load = Formulary.load_formula_from_path("mtime-fixture", path).equal?(klass)\n'
+            '  same_get = Formulary.formula_class_get_from_path(path).equal?(klass)\n'
+            '  path.write <<~RUBY\n'
+            '    class MtimeFixture < Formula\n'
+            '      version "2.0"\n'
+            '      desc "reloaded"\n'
+            '    end\n'
+            '  RUBY\n'
+            '  File.utime(Time.now + 10, Time.now + 10, path.to_s)\n'
+            '  defined_after_change = Formulary.formula_class_defined_from_path?(path).to_s\n'
+            '  reloaded = Formulary.formula_class_get_from_path(path)\n'
+            '  Formulary.clear_cache\n'
+            '  after_clear = Formulary.formula_class_defined_from_path?(path).to_s\n'
+            '  begin\n'
+            '    Formulary.formula_class_get_from_path(path)\n'
+            '    cleared_error = "none"\n'
+            '  rescue => error\n'
+            '    cleared_error = error.class.name\n'
+            '  end\n'
+            '  (prefix/"mtime.txt").write [\n'
+            '    defined_before, same_load.to_s, same_get.to_s, klass.loaded_version,\n'
+            '    defined_after_change, reloaded.loaded_version, reloaded.loaded_desc,\n'
+            '    (!reloaded.equal?(klass)).to_s, after_clear, cleared_error\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "mtime.txt").read_text().splitlines() == [
+        "false",
+        "true",
+        "true",
+        "1.0",
+        "true",
+        "2.0",
+        "reloaded",
+        "true",
+        "false",
+        "PybrewFormulaUnavailableError",
+    ]
+
+
+def test_sandbox_bounded_wrapper_with_fake_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    fake_sandbox = tmp_path / "fake-sandbox"
+    fake_sandbox.write_text("#!/bin/sh\nprintf 'sandbox:%s\\n' \"$*\"\n")
+    fake_sandbox.chmod(0o755)
+    formula = _formula(
+        "ruby-sandbox-wrapper",
+        "1.0",
+        (
+            '  default_available = Sandbox.available?\n'
+            '  default_run = Sandbox.run("echo", "hello").inspect\n'
+            '  ENV["PYBREW_SANDBOX"] = "1"\n'
+            '  ENV["PYBREW_SANDBOX_BINARY"] = "' + str(fake_sandbox) + '"\n'
+            '  enabled = Sandbox.available?\n'
+            '  output = Sandbox.run("echo", "hello")\n'
+            '  (prefix/"sandbox-wrapper.txt").write [\n'
+            '    default_available.to_s, default_run, enabled.to_s,\n'
+            '    output.to_s.strip, Sandbox.failure_reason.nil?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "sandbox-wrapper.txt").read_text().splitlines() == [
+        "false",
+        "nil",
+        "true",
+        "sandbox:echo hello",
+        "true",
+    ]
+
+
+def test_compiler_selector_probes_fake_binaries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    fake_bin = tmp_path / "fake-compilers"
+    fake_bin.mkdir()
+    (fake_bin / "clang").write_text("#!/bin/sh\necho 'clang version 50.0.0'\n")
+    (fake_bin / "gcc").write_text("#!/bin/sh\necho 'gcc 50.0.0'\n")
+    (fake_bin / "clang").chmod(0o755)
+    (fake_bin / "gcc").chmod(0o755)
+    formula = _formula(
+        "ruby-compiler-probe",
+        "1.0",
+        (
+            '  fake_bin = Pathname.new("' + str(fake_bin) + '")\n'
+            '  ENV["PATH"] = "#{fake_bin}#{File::PATH_SEPARATOR}#{ENV["PATH"]}"\n'
+            '  failing = Object.new\n'
+            '  def failing.compiler_failures\n'
+            '    [CompilerFailure.create(:clang) { version "99.0" }]\n'
+            '  end\n'
+            '  clean = Object.new\n'
+            '  def clean.compiler_failures\n'
+            '    []\n'
+            '  end\n'
+            '  (prefix/"compiler-probe.txt").write [\n'
+            '    DevelopmentTools.clang_version,\n'
+            '    DevelopmentTools.gcc_version,\n'
+            '    CompilerSelector.select_for(failing).to_s,\n'
+            '    CompilerSelector.select_for(clean).to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "compiler-probe.txt").read_text().splitlines() == [
+        "50.0.0",
+        "50.0.0",
+        "llvm_clang",
+        "clang",
+    ]
+
+
+def test_formulary_factory_alias_and_oldname_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-alias-canonical",
+        "1.0",
+        (
+            '  (prefix/"alias.txt").write [\n'
+            '    Formulary.factory("ruby-alias-only").name,\n'
+            '    Formulary.factory("ruby-oldname-only").name,\n'
+            '    Formulary.factory("ruby-alias-canonical").name,\n'
+            '    Formulary.factory("definitely-unknown").name\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.aliases = ["ruby-alias-only"]
+    formula.oldname = "ruby-oldname-only"
+    keg = _build(tmp_path, formula)
+    assert (keg / "alias.txt").read_text().splitlines() == [
+        "ruby-alias-canonical",
+        "ruby-alias-canonical",
+        "ruby-alias-canonical",
+        "definitely-unknown",
+    ]
+
+
+def test_utils_github_injectable_curl_and_write_guards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    fake_curl = tmp_path / "fake-curl"
+    fake_curl.write_text(
+        "#!/bin/sh\n"
+        'url=""\n'
+        'for arg in "$@"; do\n'
+        '  case "$arg" in http*) url="$arg" ;; esac\n'
+        'done\n'
+        'case "$url" in\n'
+        "  */repos/homebrew/foo/releases/latest) printf '%s' '{\"tag_name\":\"v1.2.3\"}' ;;\n"
+        "  */repos/homebrew/foo/releases/tags/v1.2.3) printf '%s' '{\"tag_name\":\"v1.2.3\"}' ;;\n"
+        "  */repos/homebrew/foo/actions/workflows/tests.yml/runs*) printf '%s' "
+        "'{\"workflow_runs\":[{\"id\":42,\"artifacts_url\":\"https://api.github.com/foo/artifacts\"}]}' ;;\n"
+        "  */foo/artifacts*) printf '%s' '{\"artifacts\":[{\"archive_download_url\":\"https://example.com/foo.zip\"}]}' ;;\n"
+        "  */repos/homebrew/foo/license*) printf '%s' '{\"license\":{\"spdx_id\":\"MIT\",\"key\":\"mit\"}}' ;;\n"
+        "  */repos/homebrew/foo/issues*) printf '%s' '[{\"number\":1,\"title\":\"issue one\"}]' ;;\n"
+        "  */repos/homebrew/foo) printf '%s' '{\"full_name\":\"homebrew/foo\",\"private\":true}' ;;\n"
+        "  */user) printf '%s' '{\"login\":\"tester\"}' ;;\n"
+        "  */search/issues*) printf '%s' '{\"total_count\":1,\"items\":[{\"number\":2}]}' ;;\n"
+        "  *) printf '%s' '{}' ;;\n"
+        'esac\n'
+    )
+    fake_curl.chmod(0o755)
+    formula = _formula(
+        "ruby-github",
+        "1.0",
+        (
+            '  ENV["PYBREW_GITHUB_CURL"] = "' + str(fake_curl) + '"\n'
+            '  latest = Utils::GitHub.get_latest_release("homebrew", "foo")\n'
+            '  release = Utils::GitHub.get_release("homebrew", "foo", "v1.2.3")\n'
+            '  run = Utils::GitHub.get_workflow_run("homebrew", "foo", 1)\n'
+            '  artifact_urls = Utils::GitHub.get_artifact_urls([run])\n'
+            '  license = Utils::GitHub.get_repo_license("homebrew", "foo")\n'
+            '  repo = Utils::GitHub.repository("homebrew", "foo")\n'
+            '  user = Utils::GitHub.user\n'
+            '  issues = Utils::GitHub.issues(repo: "homebrew/foo", state: "open")\n'
+            '  search = Utils::GitHub.search_issues("foo", state: "open")\n'
+            '  begin\n'
+            '    Utils::GitHub.create_issue("homebrew/foo", "t", "b")\n'
+            '    create_error = "none"\n'
+            '  rescue NotImplementedError => error\n'
+            '    create_error = error.class.name\n'
+            '  end\n'
+            '  begin\n'
+            '    Utils::GitHub.upload_release_asset("homebrew", "foo", 1, local_file: "x")\n'
+            '    upload_error = "none"\n'
+            '  rescue NotImplementedError => error\n'
+            '    upload_error = error.class.name\n'
+            '  end\n'
+            '  begin\n'
+            '    Utils::GitHub.workflow_dispatch_event("homebrew", "foo", "tests.yml", "main")\n'
+            '    dispatch_error = "none"\n'
+            '  rescue NotImplementedError => error\n'
+            '    dispatch_error = error.class.name\n'
+            '  end\n'
+            '  (prefix/"github.txt").write [\n'
+            '    latest["tag_name"], release["tag_name"], run["id"].to_s,\n'
+            '    artifact_urls.join(","), license["license"]["spdx_id"],\n'
+            '    repo["private"].to_s, user["login"], issues.first["title"],\n'
+            '    search["total_count"].to_s,\n'
+            '    Utils::GitHub.private_repo?("homebrew/foo").to_s,\n'
+            '    Utils::GitHub.url_to("repos", "homebrew", "foo"),\n'
+            '    Utils::GitHub.search_query_string("foo bar", state: "open"),\n'
+            '    create_error, upload_error, dispatch_error\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "github.txt").read_text().splitlines() == [
+        "v1.2.3",
+        "v1.2.3",
+        "42",
+        "https://example.com/foo.zip",
+        "MIT",
+        "true",
+        "tester",
+        "issue one",
+        "1",
+        "true",
+        "https://api.github.com/repos/homebrew/foo",
+        "q=foo+bar+state%3Aopen",
+        "NotImplementedError",
+        "NotImplementedError",
+        "NotImplementedError",
+    ]
+
+
+@pytest.mark.skipif(not is_macos(), reason="macOS-only detection overrides")
+def test_macos_xcode_clt_sdk_env_overrides(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-macos-detect",
+        "1.0",
+        (
+            '  fake_dev = prefix/"fake-developer"\n'
+            '  (fake_dev/"Platforms/MacOSX.platform/Developer/SDKs/Fake.sdk").mkpath\n'
+            '  fake_sdk = prefix/"fake-sdk"\n'
+            '  fake_sdk.mkpath\n'
+            '  ENV["HOMEBREW_DEVELOPER_DIR"] = fake_dev.to_s\n'
+            '  ENV["HOMEBREW_SDKROOT"] = fake_sdk.to_s\n'
+            '  ENV["HOMEBREW_SDK_VERSION"] = "14.4"\n'
+            '  ENV["HOMEBREW_XCODE_VERSION"] = "15.4"\n'
+            '  ENV["HOMEBREW_CLT_VERSION"] = "15.4.0.1"\n'
+            '  (prefix/"macos-detect.txt").write [\n'
+            '    MacOS.active_developer_dir,\n'
+            '    MacOS.sdk_path.to_s,\n'
+            '    MacOS.sdk.version.to_s,\n'
+            '    MacOS::Xcode.installed?.to_s,\n'
+            '    MacOS::Xcode.prefix.to_s,\n'
+            '    MacOS::Xcode.version.to_s,\n'
+            '    MacOS::CLT.installed?.to_s,\n'
+            '    MacOS::CLT.version.to_s,\n'
+            '    MacOS::CLT.sdk_path.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    fake_dev = keg / "fake-developer"
+    fake_sdk = keg / "fake-sdk"
+    assert (keg / "macos-detect.txt").read_text().splitlines() == [
+        str(fake_dev),
+        str(fake_sdk),
+        "14.4",
+        "true",
+        str(fake_dev),
+        "15.4",
+        "true",
+        "15.4.0.1",
+        str(fake_sdk),
+    ]
+
+
+def test_keg_ignore_interrupts_uninstall_and_noop_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-keg-uninstall",
+        "1.0",
+        (
+            '  keg_path = Pathname.new(ENV["HOMEBREW_CELLAR"])/"ruby-keg-uninstall/1.0"\n'
+            '  (keg_path/"bin").mkpath\n'
+            '  (keg_path/"bin"/"tool").write "#!/bin/sh\\n"\n'
+            '  keg = Keg.new(keg_path)\n'
+            '  keg.link\n'
+            '  (prefix/"keg-uninstall.txt").write [\n'
+            '    keg.linked?.to_s,\n'
+            '    File.symlink?(keg.optlink.to_s).to_s,\n'
+            '    keg.prepare_debug_symbols.nil?.to_s,\n'
+            '    keg.consistent_reproducible_symlink_permissions!.to_s,\n'
+            '    keg.ignore_interrupts_and_uninstall!.to_s,\n'
+            '    keg_path.exist?.to_s,\n'
+            '    File.symlink?(keg.optlink.to_s).to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "keg-uninstall.txt").read_text().splitlines() == [
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "false",
+        "false",
     ]

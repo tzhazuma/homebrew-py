@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 
 from pybrew.cellar import read_receipt
-from pybrew.installer import InstallOptions, Installer
+from pybrew.download import sha256_file
+from pybrew.installer import InstallOptions, Installer, read_bottle_manifest
+from pybrew.models import BottleFile, BottleSpec, candidate_bottle_tags
 from pybrew.paths import Config
 from pybrew.ruby_parser import parse_formula_file
 from pybrew.taps import FormulaLoader, discover_taps
@@ -47,14 +49,15 @@ def test_install_real_homebrew_bottle(tmp_path: Path) -> None:
     assert expected_version
     # The formula copy inside .brew/ is the source formula; bottles do not
     # carry their own bottle block, so attach the cached artefact's metadata.
-    from pybrew.download import sha256_file
-    from pybrew.models import BottleFile, BottleSpec, candidate_bottle_tags
-
     tag = candidate_bottle_tags()[0]
     formula.bottle = BottleSpec(
         root_url="file://" + str(bottle.parent),
         files={tag: BottleFile(tag, sha256_file(bottle), ":any")},
     )
+    manifest = read_bottle_manifest(bottle)
+    assert manifest.sha256 == sha256_file(bottle)
+    assert manifest.files
+    assert any(path.endswith("/.brew/libslirp.rb") for path in manifest.files)
 
     config = Config.default(
         prefix=tmp_path / "prefix",
@@ -77,6 +80,11 @@ def test_install_real_homebrew_bottle(tmp_path: Path) -> None:
     receipt = read_receipt(keg)
     assert receipt["poured_from_bottle"] is True
     assert receipt["runtime_dependencies"] == ["glib"]
+    summary = receipt["bottle_manifest"]
+    assert summary["sha256"] == manifest.sha256
+    assert summary["file_count"] == manifest.file_count
+    assert summary["symlink_count"] == manifest.symlink_count
+    assert summary["total_size"] == manifest.total_size
     # Real bottles are relocatable; text files should not retain placeholders.
     for path in keg.rglob("*.pc"):
         if path.is_file():

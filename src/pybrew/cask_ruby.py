@@ -76,9 +76,17 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
-from .cask import Artifact, Cask, CaskError, CaskParser, _ARTIFACT_KINDS
+from .cask import (
+    Artifact,
+    Cask,
+    CaskError,
+    CaskParser,
+    _ARTIFACT_KINDS,
+    _apply_deprecation_semantics,
+    _apply_disable_semantics,
+)
 from .errors import FormulaParseError
 
 #: Environment variable that opts a caller into arbitrary-Ruby cask parsing.
@@ -92,6 +100,9 @@ DEFAULT_RUBY = "/usr/bin/ruby"
 
 #: Upper bound for evaluating one cask definition.
 RUBY_TIMEOUT = 120.0
+
+#: Upper bound for executing one captured livecheck strategy block.
+STRATEGY_TIMEOUT = 30.0
 
 #: Artifact stanzas converted into :class:`pybrew.cask.Artifact` objects.
 #: ``_ARTIFACT_KINDS`` is the canonical list used by the default parser.
@@ -446,6 +457,212 @@ def _attach_script_sources(source: str, data: dict[str, Any]) -> None:
 
 
 # ---------------------------------------------------------------------------
+# bounded livecheck strategy execution
+# ---------------------------------------------------------------------------
+
+_STRATEGY_SHIM = r'''
+require "base64"
+require "json"
+
+source = Base64.strict_decode64("__PYBREW_STRATEGY_SOURCE__")
+page = Base64.strict_decode64("__PYBREW_STRATEGY_PAGE__")
+output = "__PYBREW_STRATEGY_OUTPUT__"
+
+begin
+  wrapped = if source.lstrip.start_with?("|")
+              "proc do " + source.strip + "\nend"
+            else
+              "proc do\n" + source + "\nend"
+            end
+  block = eval(wrapped, TOPLEVEL_BINDING, "livecheck-strategy.rb", 1)
+  value = block.call(page)
+  normalized = case value
+               when Array
+                 value.map { |item| item.is_a?(String) ? item : item.to_s }
+               when String, Integer, Float, TrueClass, FalseClass, NilClass
+                 value
+               else
+                 value.to_s
+               end
+  File.write(output, JSON.generate({ "ok" => true, "result" => normalized }))
+rescue Exception => error
+  File.write(output, JSON.generate({ "ok" => false, "error" => "#{error.class}: #{error.message}" }))
+end
+'''
+
+
+def _strategy_result(
+    *,
+    executed: bool,
+    result: Any = None,
+    error: Optional[str] = None,
+    reason: Optional[str] = None,
+    page_size: int = 0,
+    source: Optional[str] = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "executed": executed,
+        "result": result,
+        "error": error,
+        "reason": reason,
+        "page_size": page_size,
+    }
+    if source is not None:
+        payload["source"] = source
+    return payload
+
+
+def _run_strategy_block(source: str, page: str, timeout: float) -> dict[str, Any]:
+    """Run one strategy block under Ruby and return its raw JSON payload."""
+
+    ruby = _ruby_binary()
+    root = Path(tempfile.mkdtemp(prefix="pybrew-livecheck-"))
+    try:
+        script_path = root / "strategy.rb"
+        output_path = root / "strategy.json"
+        script_path.write_text(
+            _STRATEGY_SHIM.replace(
+                "__PYBREW_STRATEGY_SOURCE__",
+                base64.b64encode(source.encode("utf-8")).decode("ascii"),
+            )
+            .replace(
+                "__PYBREW_STRATEGY_PAGE__",
+                base64.b64encode(page.encode("utf-8")).decode("ascii"),
+            )
+            .replace("__PYBREW_STRATEGY_OUTPUT__", str(output_path)),
+            encoding="utf-8",
+        )
+        try:
+            completed = subprocess.run(
+                [ruby, str(script_path)],
+                cwd=str(root),
+                env=dict(os.environ),
+                stdin=subprocess.DEVNULL,
+                encoding="utf-8",
+                errors="replace",
+                capture_output=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise CaskError(
+                f"livecheck strategy execution timed out after {timeout:g}s"
+            ) from error
+        except OSError as error:
+            raise CaskError(
+                f"could not run the livecheck strategy evaluator: {error}"
+            ) from error
+        try:
+            raw = output_path.read_text(encoding="utf-8")
+        except OSError as error:
+            detail = (completed.stderr or completed.stdout or "").strip()
+            raise CaskError(
+                "livecheck strategy evaluator did not produce a result: "
+                f"{error}\n{detail or '(no output)'}"
+            ) from error
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError as error:
+            raise CaskError(
+                f"livecheck strategy evaluator returned invalid JSON: {error}"
+            ) from error
+        if not isinstance(payload, dict):
+            raise CaskError(
+                "livecheck strategy evaluator returned an unexpected result"
+            )
+        return payload
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
+def execute_livecheck_strategy(
+    cask: Cask,
+    *,
+    fetcher: Optional[Callable[[str], Any]] = None,
+    page: Optional[str | bytes] = None,
+    timeout: float = STRATEGY_TIMEOUT,
+) -> dict[str, Any]:
+    """Execute the captured livecheck ``strategy do ... end`` block (bounded).
+
+    pybrew performs no network I/O itself: the block only runs when page
+    content is supplied directly (``page``) or by an injectable ``fetcher``.
+    Arbitrary Ruby execution requires the same ``PYBREW_ALLOW_CASK_RUBY=1``
+    opt-in as the cask evaluator.  The normalized result is stored on
+    ``cask.livecheck["strategy_result"]``; the raw ``strategy_source`` is kept
+    for diagnostics.
+    """
+
+    livecheck = cask.livecheck if isinstance(cask.livecheck, dict) else {}
+    source = livecheck.get("strategy_source")
+    if not source or not str(source).strip():
+        return _strategy_result(
+            executed=False, reason="no livecheck strategy block captured"
+        )
+    if not cask_ruby_enabled():
+        return _strategy_result(
+            executed=False,
+            reason=f"set {ALLOW_ENV}=1 to execute arbitrary Ruby strategy blocks",
+            source=str(source),
+        )
+
+    page_text: Any = page
+    if page_text is None:
+        if fetcher is None:
+            return _strategy_result(
+                executed=False,
+                reason="no page content or fetcher supplied; no network is performed",
+                source=str(source),
+            )
+        url = livecheck.get("url")
+        if not isinstance(url, str) or not url:
+            return _strategy_result(
+                executed=False,
+                reason="livecheck has no URL to fetch",
+                source=str(source),
+            )
+        try:
+            page_text = fetcher(url)
+        except Exception as error:  # caller-supplied transport
+            return _strategy_result(
+                executed=False,
+                reason="fetcher failed",
+                error=f"{type(error).__name__}: {error}",
+                source=str(source),
+            )
+    if isinstance(page_text, bytes):
+        page_text = page_text.decode("utf-8", errors="replace")
+    if page_text is None:
+        return _strategy_result(
+            executed=False,
+            reason="fetcher returned no page content",
+            source=str(source),
+        )
+    page_text = str(page_text)
+
+    try:
+        payload = _run_strategy_block(str(source), page_text, timeout)
+    except CaskError as error:
+        result = _strategy_result(
+            executed=False,
+            error=str(error),
+            page_size=len(page_text),
+            source=str(source),
+        )
+    else:
+        error_text = None
+        if not payload.get("ok"):
+            error_text = str(payload.get("error") or "strategy block failed")
+        result = _strategy_result(
+            executed=True,
+            result=payload.get("result"),
+            error=error_text,
+            page_size=len(page_text),
+            source=str(source),
+        )
+    cask.livecheck["strategy_result"] = result
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Ruby bridge
 # ---------------------------------------------------------------------------
 
@@ -678,6 +895,8 @@ def _cask_from_result(
     deprecate_args = data.get("deprecate_args")
     if isinstance(deprecate_args, dict):
         cask.deprecate_args = dict(deprecate_args)
+    if data.get("deprecated") or cask.deprecation_date is not None:
+        _apply_deprecation_semantics(cask)
 
     no_autobump_reason = data.get("no_autobump_reason")
     if no_autobump_reason is not None and str(no_autobump_reason).strip():
@@ -688,7 +907,6 @@ def _cask_from_result(
 
     disabled = data.get("disabled")
     if disabled:
-        cask.disabled = True
         cask.disable_reason = str(data.get("disable_reason") or "") or None
         cask.disable_date = _optional_text(data.get("disable_date"))
         cask.disable_replacement_formula = _optional_text(
@@ -700,6 +918,7 @@ def _cask_from_result(
         disable_args = data.get("disable_args")
         if isinstance(disable_args, dict):
             cask.disable_args = dict(disable_args)
+        _apply_disable_semantics(cask)
 
     os_map = data.get("os_map")
     if isinstance(os_map, dict):

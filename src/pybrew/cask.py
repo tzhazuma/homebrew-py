@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import hashlib
 import os
 import platform
@@ -775,6 +776,59 @@ def _apply_lifecycle_fields(
         setattr(cask, f"{prefix}_replacement_cask", str(replacement_cask))
 
 
+def _today() -> datetime.date:
+    """Return the date used to activate ``deprecate!``/``disable!`` stanzas.
+
+    Tests monkeypatch this hook for deterministic past/future date behavior.
+    """
+
+    return datetime.date.today()
+
+
+def _parse_lifecycle_date(value: Any) -> Optional[datetime.date]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return datetime.date.fromisoformat(text)
+    except ValueError:
+        return None
+
+
+def _lifecycle_date_is_future(value: Any) -> bool:
+    """True when a deprecation/disable date has not been reached yet.
+
+    Missing or unparseable dates are treated as already effective so a
+    malformed cask keeps pybrew's historical immediate behavior.
+    """
+
+    parsed = _parse_lifecycle_date(value)
+    if parsed is None:
+        return False
+    return parsed > _today()
+
+
+def _apply_deprecation_semantics(cask: Cask) -> None:
+    """Defer ``deprecate!`` activation until its date (Homebrew semantics)."""
+
+    cask.deprecated = not _lifecycle_date_is_future(cask.deprecation_date)
+
+
+def _apply_disable_semantics(cask: Cask) -> None:
+    """Defer ``disable!`` until its date, promoting it to deprecation first."""
+
+    if cask.disable_date is not None and _lifecycle_date_is_future(cask.disable_date):
+        cask.disabled = False
+        cask.deprecated = True
+        cask.deprecation_reason = cask.disable_reason
+        cask.deprecation_replacement_formula = cask.disable_replacement_formula
+        cask.deprecation_replacement_cask = cask.disable_replacement_cask
+    else:
+        cask.disabled = True
+
+
 class CaskParser:
     def __init__(self, source: str, path: Optional[Path] = None, tap: Optional[str] = None):
         self.source = source
@@ -1197,13 +1251,13 @@ class CaskParser:
             if args:
                 cask.caveats = str(args[0])
         elif name in ("deprecate!", "deprecate_args"):
-            cask.deprecated = True
             cask.deprecate_args = dict(kwargs)
             _apply_lifecycle_fields(cask, "deprecation", args, kwargs)
+            _apply_deprecation_semantics(cask)
         elif name == "disable!":
-            cask.disabled = True
             cask.disable_args = dict(kwargs)
             _apply_lifecycle_fields(cask, "disable", args, kwargs)
+            _apply_disable_semantics(cask)
         elif name == "livecheck":
             self.cask.livecheck_defined = True
         elif name == "no_autobump!":

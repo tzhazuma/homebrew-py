@@ -25,3 +25,25 @@ def test_version_comparison() -> None:
     assert compare_versions("1.0.0", "1.0") > 0
     assert Version("5.3.20") > Version("5.3.9")
     assert Version("20260817.0") > Version("20260801.0")
+
+
+def test_version_numeric_and_letter_segments() -> None:
+    assert compare_versions("1.10", "1.9") > 0
+    assert compare_versions("1.9", "1.10") < 0
+    assert compare_versions("1.0a", "1.0b") < 0
+    assert compare_versions("1.0a", "1.0a") == 0
+    assert compare_versions("2.0_1", "2.0") > 0
+
+
+def test_version_string_compatibility() -> None:
+    version = Version("2026.11.04")
+
+    assert str(version) == "2026.11.04"
+    assert version == "2026.11.04"
+    assert version == Version("2026.11.04")
+    assert Version("1.10") > "1.9"
+    assert sorted([Version("1.10"), Version("1.9"), Version("1.2")]) == [
+        Version("1.2"),
+        Version("1.9"),
+        Version("1.10"),
+    ]
