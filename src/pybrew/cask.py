@@ -510,12 +510,17 @@ class Cask:
         return apps[0] if len(apps) == 1 else None
 
     def font(self) -> bool:
-        return any(artifact.kind == "font" for artifact in self.artifacts)
+        return bool(self.artifacts) and all(
+            artifact.kind == "font" for artifact in self.artifacts
+        )
 
     def url_specs(self) -> list[str]:
         return [self.url] if self.url else []
 
     def checksumable(self) -> bool:
+        strategy = str((self.url_options or {}).get("using") or "").lstrip(":").lower()
+        if strategy in {"git", "svn", "hg", "fossil"}:
+            return False
         return bool(self.sha256 or self.sha256_map)
 
     @staticmethod

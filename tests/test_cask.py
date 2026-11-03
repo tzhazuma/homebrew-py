@@ -1830,7 +1830,7 @@ def test_cask_installed_inventory_helpers(tmp_path: Path, monkeypatch: pytest.Mo
     }
     assert cask.artifacts_list() == cask.artifacts
     assert cask.single_app_artifact().source == "Demo.app"
-    assert cask.font()
+    assert cask.font() is False
     assert cask.url_specs() == ["https://example.com/demo-2.0.zip"]
     assert cask.checksumable()
 
@@ -2327,3 +2327,19 @@ def test_cask_staged_path_and_language_helpers(
     assert cask.language_groups() == {}
     assert cask.default_language_group() == "en"
     assert cask.os_version()
+
+
+def test_cask_font_and_checksumable_semantics() -> None:
+    font_only = Cask(token="fonty", version="1.0", artifacts=[Artifact("font", "A.ttf")])
+    mixed = Cask(
+        token="mixed", version="1.0",
+        artifacts=[Artifact("font", "A.ttf"), Artifact("app", "A.app")],
+    )
+    git_cask = Cask(
+        token="gitty", version="1.0", sha256="no-check",
+        url="https://example.invalid/repo", url_options={"using": "git"},
+    )
+    assert font_only.font() is True
+    assert mixed.font() is False
+    assert font_only.checksumable() is False
+    assert git_cask.checksumable() is False
