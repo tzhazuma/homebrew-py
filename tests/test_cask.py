@@ -2125,3 +2125,16 @@ end
     installer = CaskInstaller(config)
     installer.install(CaskLoader(discover_taps([tap])).load("nested-dmg"))
     assert (config.caskroom / "nested-dmg" / "1.0").is_dir()
+
+
+def test_cask_artifact_helper_methods(tmp_path: Path) -> None:
+    artifact = Artifact("app", "Example.app", target="Renamed.app")
+    assert artifact.to_s() == "Renamed.app"
+    assert artifact.english_name() == "app"
+    assert artifact.english_description() == "app Example.app"
+    assert artifact.summarize() == "Renamed.app"
+    assert artifact.staged_path_join_executable(tmp_path) == tmp_path / "Example.app"
+    assert artifact.requires_sudo() is False
+    assert artifact.dsl_key() == "app"
+    assert artifact.sort_order() == 0
+    assert artifact.to_args() == ["Example.app"]

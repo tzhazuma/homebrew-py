@@ -28,6 +28,33 @@ class Artifact:
     target: Optional[str] = None
     kwargs: dict[str, Any] = field(default_factory=dict)
 
+    def to_s(self) -> str:
+        return self.target or self.source
+
+    def english_name(self) -> str:
+        return self.kind.replace("_", " ")
+
+    def english_description(self) -> str:
+        return f"{self.english_name()} {self.source}"
+
+    def summarize(self) -> str:
+        return self.to_s()
+
+    def staged_path_join_executable(self, staged: Path | str) -> Path:
+        return Path(staged) / self.source
+
+    def requires_sudo(self) -> bool:
+        return False
+
+    def dsl_key(self) -> str:
+        return self.kind
+
+    def sort_order(self) -> int:
+        return 0
+
+    def to_args(self) -> list[str]:
+        return [self.source]
+
 
 @dataclass
 class Cask:
