@@ -79,9 +79,9 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
 - Formulary source loading has namespace/cache/error support but does not
   implement API-struct loading, `factory` tap-source loading, or full
   Homebrew loader machinery.
-- Formula test DSL: `Version`/`PkgVersion` support segments/major/minor/patch,
-  ranked pre-release tokens and revision-aware comparison (still not full
-  Homebrew token-class semantics);
+- Formula test DSL: `Version`/`PkgVersion` use a bounded homebrew-like Token
+  hierarchy, segments/major/minor/patch, canonical hashes and revision-aware
+  comparison (still not the full Homebrew Token subclasses);
   dependency tests isolate HOME/PATH/TMPDIR/PYBREW_PREFIX and hide inherited
   `PYBREW_*` markers, though Ruby constants and arbitrary non-PYBREW env remain
   process-global; lookup covers 10000 local-tap names, Alias/ symlinks and a lazy

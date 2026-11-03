@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-1068 passed, 5 skipped (local full suite, 2026-11-04 wave 7)
+1097 passed, 5 skipped (local full suite, 2026-11-04 wave 8)
 ```
 
 Breakdown of the feature slices:
@@ -1509,6 +1509,28 @@ The maintainer's close is a final scope decision; no further reopen attempts
 were made. The submitting human owns any future upstream communication and
 must not use AI to answer review comments.
 
+## Wave 8 completion batch (2026-11-04)
+
+- Full local suite: **1097 passed, 5 skipped** in ~119s.
+- Targeted slices:
+  - Ruby shim: 186 passed
+  - Superenv/source build: 44 passed
+  - Cask: 307 passed
+  - Test DSL/version: 128 passed
+  - Service: 139 passed
+- Real install verification: `scripts/verify_real_install.py` still passes
+  (build metadata + keg SBOM + install/uninstall).
+- Wave 8 changes:
+  - Strict deny-default Sandbox profile (`PYBREW_SANDBOX_STRICT=1`) with
+    bounded system/runtime read roots; default allow-default unchanged.
+  - Formulary multi-channel API JSON and lazy in-source tap alias scanning.
+  - Superenv extension-based shim dispatch, ARCHFLAGS/ARCH propagation,
+    SDK sysroot duplicate rules, OBJC/OBJCXX standards fallback.
+  - Cask steps move/chmod/link/hardlink, rate-limiter reset, safer zap roots.
+  - Version bounded Token hierarchy (Numeric/Alpha/Beta/Pre/Rc/P/Post/Letter/
+    Null) in Python and DSL Ruby.
+  - Service render-time user env re-read when formula context exists.
+
 ## Wave 7 completion batch (2026-11-04)
 
 - Full local suite: **1068 passed, 5 skipped** in ~149s.
@@ -1687,9 +1709,9 @@ edge cases), not missing method names in the audited core files.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `2f6c382` (Wave 7 JWS/Superenv/Version/Service)
-- CI run for `2f6c382`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41719651868>
+- Latest feature commit: `8425531` (Wave 8 strict Sandbox/Token hierarchy)
+- CI run for `8425531`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41725984531>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
