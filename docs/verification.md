@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-779 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+780 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -898,6 +898,12 @@ local remote, commits a change, and confirms the CLI updates it.
   `#build=` compatibility accessors; `specs` returns stable/head and
   `spec_syms` matches.
 
+## Cask artifact article/config/sandbox helpers
+
+- Added `english_article`, `config`, `dirmethod`, `cask_sandbox`,
+  `run_cask_sandbox`, `requires_sudo_q`, and `read_script_arguments` to
+  `Artifact`.
+
 ## Ruby Service object shim
 
 - Added the `Service` Ruby class: naming/default plist, `run`/command,
@@ -1416,9 +1422,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `f818d9f` (Ruby Service object shim)
-- CI run for `f818d9f`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41558872302>
+- Latest feature commit: `543f9a7` (Cask artifact helpers)
+- CI run for `543f9a7`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41559336165>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
