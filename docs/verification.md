@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-783 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+784 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -898,6 +898,12 @@ local remote, commits a change, and confirms the CLI updates it.
   `#build=` compatibility accessors; `specs` returns stable/head and
   `spec_syms` matches.
 
+## Real patch application
+
+- `PybrewPatch#apply` now reads the local patch, validates targets through
+  `Patch.ensure_targets_within!`, and runs the `patch` binary in the build root
+  (raising with output on failure). Covered by a real file patch test.
+
 ## Utils::Bottles module helpers
 
 - Added running-tag resolution, bottle filename tag/rebuild parsing, tar listing,
@@ -1434,9 +1440,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `f2bed90` (Utils::Bottles module helpers)
-- CI run for `f2bed90`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41560175291>
+- Latest feature commit: `a513ba2` (real patch application)
+- CI run for `a513ba2`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41561030527>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
