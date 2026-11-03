@@ -1753,9 +1753,9 @@ edge cases), not missing method names in the audited core files.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `c98839b` (Wave 10 binary relocation/exact version)
-- CI run for `c98839b`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41731845053>
+- Latest feature commit: `f5d17d3` (Wave 10 + CI sandbox-skip fix)
+- CI run for `f5d17d3`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41733115171>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
