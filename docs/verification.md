@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-1097 passed, 5 skipped (local full suite, 2026-11-04 wave 8)
+1115 passed, 5 skipped (local full suite, 2026-11-04 wave 9)
 ```
 
 Breakdown of the feature slices:
@@ -1509,6 +1509,29 @@ The maintainer's close is a final scope decision; no further reopen attempts
 were made. The submitting human owns any future upstream communication and
 must not use AI to answer review comments.
 
+## Wave 9 completion batch (2026-11-04)
+
+- Full local suite: **1115 passed, 5 skipped** in ~107s.
+- Targeted slices:
+  - Ruby shim: 188 passed
+  - Superenv/source build: 48 passed
+  - Cask: 318 passed
+  - Test DSL/version: 128 passed
+  - Installer: 52 passed
+- Real install verification: `scripts/verify_real_install.py` passes and now
+  asserts the Tab-compatible receipt fields (`time`, `source_modified_time`,
+  `arch`) alongside build metadata + SBOM.
+- Wave 9 changes:
+  - Keg text relocation + placeholder round-trip; GraphQL cursor pagination
+    (10 pages), rate-limit fields and Enterprise URL.
+  - Superenv `.s/.S/.asm` dispatch, mixed-language first-source behavior,
+    resource staging static names/caching/safe paths.
+  - Cask directory copy, chmod/hardlink/symlink edges, rollback diagnostics,
+    livecheck default stability.
+  - Version Token edge semantics (Null/0, revision 0, letters vs p/post,
+    preview normalization, hash consistency).
+  - Keg receipt Tab-compatible fields and real-install assertions.
+
 ## Wave 8 completion batch (2026-11-04)
 
 - Full local suite: **1097 passed, 5 skipped** in ~119s.
@@ -1709,9 +1732,9 @@ edge cases), not missing method names in the audited core files.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `8425531` (Wave 8 strict Sandbox/Token hierarchy)
-- CI run for `8425531`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41725984531>
+- Latest feature commit: `258bd2e` (Wave 9 relocation/Token edge/Tab)
+- CI run for `258bd2e`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41728871656>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success

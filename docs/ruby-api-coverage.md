@@ -57,8 +57,9 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
   profile via `apply!`, but not a verified minimal-policy engine.
   `Utils::GitHub` read/write names are complete, with injectable REST and
   GraphQL transports; repository/PR/commits/labels/files/reviews/team/
-  sponsorship have bounded GraphQL-first mappings and REST fallback, but no
-  pagination/rate-limit/Enterprise support.
+  sponsorship have GraphQL-first mappings, 10-page cursor pagination,
+  rate-limit fields, Enterprise base URL and REST fallback; binary Keg
+  relocation and full GraphQL connection coverage remain bounded.
 - Full `MacOS`/SDK/Xcode/CLT detection, `DevelopmentTools`, `SystemConfig`
   host details.
 - Services: Ruby evaluator now follows Homebrew opt/keg/global path semantics,
