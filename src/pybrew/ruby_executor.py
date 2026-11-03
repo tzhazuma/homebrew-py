@@ -2437,6 +2437,48 @@ class << ENV
     Hardware::CPU.arch
   end
 
+  def build_bottle?
+    false
+  end
+
+  def debug_symbols?
+    false
+  end
+
+  def bottle_arch
+    PybrewFormulaRef.arch.to_sym
+  rescue StandardError
+    :x86_64
+  end
+
+  def build_environment_state(*_args, **_options)
+    self
+  end
+
+  def deps
+    @pybrew_deps ||= []
+  end
+
+  def deps=(deps)
+    @pybrew_deps = Array(deps)
+  end
+
+  def keg_only_deps
+    @pybrew_keg_only_deps ||= []
+  end
+
+  def keg_only_deps=(deps)
+    @pybrew_keg_only_deps = Array(deps)
+  end
+
+  def run_time_deps
+    @pybrew_run_time_deps ||= []
+  end
+
+  def run_time_deps=(deps)
+    @pybrew_run_time_deps = Array(deps)
+  end
+
   def determine_cc
     cc
   end
@@ -3523,6 +3565,22 @@ class FormulaInstaller
     ensure
       self.class.installing.delete(name)
     end
+  end
+
+  def same_formula?(other)
+    other.respond_to?(:name) && formula.name.to_s == other.name.to_s
+  end
+
+  def fix_dynamic_linkage?(_keg = nil)
+    true
+  end
+
+  def expand_dependencies_for_formula(_formula = nil)
+    formula.respond_to?(:dependencies) ? formula.dependencies : []
+  end
+
+  def expand_dependencies_for_formula_once(_formula = nil, _keepable = [], _kept = [])
+    []
   end
 
   RECEIPT_FILENAME = "INSTALL_RECEIPT.json".freeze
@@ -6625,6 +6683,52 @@ class Tab
 
   def head?
     !!@data["HEAD"]
+  end
+
+  def versions
+    @data["versions"].is_a?(Hash) ? @data["versions"] : {}
+  end
+
+  def stable_version
+    versions["stable"]
+  end
+
+  def head_version
+    versions["head"]
+  end
+
+  def built_bottle?
+    built_as_bottle?
+  end
+
+  def to_bottle_hash
+    @data.dup
+  end
+
+  def runtime_deps_hash
+    runtime_dependencies.each_with_object({}) do |dependency, result|
+      result[dependency.to_s] = dependency
+    end
+  end
+
+  def source_modified_time
+    @data["source_modified_time"] || time
+  end
+
+  def cxxstdlib
+    @data["cxxstdlib"]
+  end
+
+  def empty_source_versions
+    []
+  end
+
+  def remap_deprecated_options(_deprecated_options = [])
+    @data
+  end
+
+  def any_args_or_options?
+    !used_options.empty? || !unused_options.empty?
   end
 
   def inspect

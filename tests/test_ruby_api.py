@@ -5701,3 +5701,49 @@ def test_utils_curl_helpers_raw(tmp_path: Path) -> None:
         "false",
         "body",
     ]
+
+
+def test_upstream_env_tab_installer_additions_raw(tmp_path: Path) -> None:
+    keg = _run_raw_body(
+        tmp_path,
+        """
+tab = Tab.new(
+  "versions" => { "stable" => "1.0", "head" => "HEAD" },
+  "used_options" => ["--with-x"],
+  "runtime_dependencies" => ["dep"],
+  "built_as_bottle" => true
+)
+installer = FormulaInstaller.new(nil)
+(prefix/"upstream.txt").write [
+  ENV.build_bottle?.to_s,
+  ENV.debug_symbols?.to_s,
+  ENV.deps.empty?.to_s,
+  ENV.keg_only_deps.empty?.to_s,
+  ENV.run_time_deps.empty?.to_s,
+  tab.versions["stable"],
+  tab.stable_version,
+  tab.head_version,
+  tab.built_bottle?.to_s,
+  tab.any_args_or_options?.to_s,
+  tab.runtime_deps_hash.empty?.to_s,
+  installer.fix_dynamic_linkage?.to_s,
+  installer.same_formula?(nil).to_s
+].join("\\n")
+""",
+        name="raw-body",
+    )
+    assert (keg / "upstream.txt").read_text().splitlines() == [
+        "false",
+        "false",
+        "true",
+        "true",
+        "true",
+        "1.0",
+        "1.0",
+        "HEAD",
+        "true",
+        "true",
+        "false",
+        "true",
+        "false",
+    ]

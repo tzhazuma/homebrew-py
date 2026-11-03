@@ -2215,3 +2215,14 @@ def test_cask_inventory_bundle_and_sha_helpers(
     assert cask.bundle_version() == "345"
     assert cask.auto_updates_bundle_outdated() is False
     assert cask.uninstall_flight_blocks() is False
+
+
+def test_cask_temp_cleanup_helpers(tmp_path: Path) -> None:
+    cask = Cask(token="tempy", version="1.0")
+    path = cask.temp()
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "file").write_text("x")
+    cask.cleanup_temp(retain=True)
+    assert path.is_dir()
+    cask.cleanup_temp()
+    assert not path.exists()

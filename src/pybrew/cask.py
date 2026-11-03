@@ -274,6 +274,18 @@ class Cask:
     def config_path(self) -> Path:
         return self.caskroom_path / ".metadata" / "config.json"
 
+    def temp(self) -> Path:
+        import tempfile
+
+        return Path(tempfile.gettempdir()) / "pybrew-cask" / self.token
+
+    def cleanup_temp(self, retain: bool = False) -> None:
+        if retain:
+            return
+        import shutil
+
+        shutil.rmtree(self.temp(), ignore_errors=True)
+
     def languages(self) -> list[str]:
         return [self.language] if self.language else ["en"]
 
