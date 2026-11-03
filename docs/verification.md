@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-789 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+790 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -898,6 +898,11 @@ local remote, commits a change, and confirms the CLI updates it.
   `#build=` compatibility accessors; `specs` returns stable/head and
   `spec_syms` matches.
 
+## Formula test lookup budget 10000
+
+- Raised the lightweight formula-test entry budget from 2000 to 10000 and added
+  a 2500-formula dynamic `Formula[expression]` lookup test.
+
 ## Bottle download/stage helpers
 
 - Added bounded download/stage API on `PybrewBottleSpec` (`skip_relocation?`,
@@ -1468,9 +1473,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `88b4491` (Bottle download/stage helpers)
-- CI run for `88b4491`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41564400462>
+- Latest feature commit: `9de6021` (formula test lookup budget 10000)
+- CI run for `9de6021`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41565200320>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
