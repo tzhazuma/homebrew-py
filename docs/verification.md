@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-784 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+785 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -898,6 +898,12 @@ local remote, commits a change, and confirms the CLI updates it.
   `#build=` compatibility accessors; `specs` returns stable/head and
   `spec_syms` matches.
 
+## Cask fossil strategy
+
+- `Downloader.fetch_vcs` supports fossil (`clone` then `open`); cask
+  `using: :fossil` installs artifacts from the checkout, covered by a fake
+  fossil executable test.
+
 ## Real patch application
 
 - `PybrewPatch#apply` now reads the local patch, validates targets through
@@ -1440,9 +1446,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `a513ba2` (real patch application)
-- CI run for `a513ba2`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41561030527>
+- Latest feature commit: `69f9f4a` (Cask fossil strategy)
+- CI run for `69f9f4a`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41561876547>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
