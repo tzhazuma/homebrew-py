@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-851 passed, 5 skipped (local full suite, 2026-11-04)
+903 passed, 5 skipped (local full suite, 2026-11-04 wave 2)
 ```
 
 Breakdown of the feature slices:
@@ -1509,6 +1509,31 @@ The maintainer's close is a final scope decision; no further reopen attempts
 were made. The submitting human owns any future upstream communication and
 must not use AI to answer review comments.
 
+## Wave 2 completion batch (2026-11-04)
+
+- Full local suite: **903 passed, 5 skipped** in ~99s.
+- Targeted slices:
+  - Ruby shim: 171 passed (`tests/test_ruby_api.py`)
+  - Installer: 36 passed, 1 skipped (`tests/test_installer.py tests/test_real_bottle.py`)
+  - Cask: 219 passed (`tests/test_cask*.py`)
+  - Test DSL/version: 115 passed (`tests/test_formula_test.py tests/test_version.py`)
+  - Source build/Superenv: 24 passed (`tests/test_source_build.py`)
+  - CLI regression: 13 passed (`tests/test_cli.py`)
+- Real install verification: `scripts/verify_real_install.py` now additionally
+  asserts the bottle/source `build` receipt, keg SBOM file_count and
+  `bin/hello.sh` entry; install + uninstall still pass.
+- Wave 2 changes:
+  - Utils::GitHub full method-name surface with injectable REST reads and
+    explicit write guards; Sandbox policy names present but explicitly fail
+    rather than pretending isolation.
+  - Cask `check_livecheck` API, stricter app/appimage/binary target safety,
+    completion/zap/upgrade cleanup tests, lifecycle-date edge tests.
+  - Test DSL bounded source-only alias scan, global-constant env isolation,
+    Python PkgVersion + DSL version improvements, Minitest compound counters.
+  - Installer Tab/SBOM receipt, source/build metadata, formula-level linkage
+    diagnostics, stale-link cleanup, hardlink manifest edge cases.
+  - Opt-in `PYBREW_SUPERENV=1` compiler shims with fake-compiler tests.
+
 ## P0/P1/P2 completion batch (2026-11-04)
 
 - Full local suite: **851 passed, 5 skipped** in ~122s.
@@ -1553,9 +1578,9 @@ edge cases), not missing method names in the audited core files.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `2e97028` (P0/P1/P2 Ruby API completion batch)
-- CI run for `2e97028`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41691268351>
+- Latest feature commit: `0dbc7e4` (Wave 2 P0/P1/P2 gaps)
+- CI run for `0dbc7e4`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41696951385>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success

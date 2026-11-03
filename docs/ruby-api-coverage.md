@@ -45,21 +45,24 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
   limited to archives with `url`+`sha256` and literal `resource("name")` calls
   (dynamic resource iteration stages all).
 - Homebrew internals: `FormulaInstaller` loaded-source flow exists; the Python
-  installer now validates bottle manifests before extraction, records a manifest
-  summary, supports opt-in linkage checks and deterministic topological order.
-  Full Tab/SBOM semantics remain bounded. `Superenv` remains env-only; `Sandbox`
-  has an opt-in explicit-command wrapper, not a policy engine. `Utils::GitHub`
-  has bounded read APIs and explicit write guards.
+  installer validates bottle manifests before extraction, records source/build
+  metadata + a keg SBOM, exposes formula-level linkage diagnostics and cleans
+  stale links. Full Homebrew Tab semantics and non-heuristic linkage remain
+  bounded. `Superenv` now has opt-in generated compiler shims but no full
+  flag-sanitizing build engine; `Sandbox` has an opt-in explicit-command wrapper
+  and explicit failures instead of a policy engine. `Utils::GitHub` read/write
+  names are complete with injectable REST reads/write guards, but no full
+  GraphQL/PR/team semantics.
 - Full `MacOS`/SDK/Xcode/CLT detection, `DevelopmentTools`, `SystemConfig`
   host details.
 - Services: Ruby evaluator mirrors pybrew's literal path helpers rather than
   Homebrew's global-prefix helpers; unknown directives are ignored.
-- Cask: livecheck strategy blocks can be executed through an explicit
-  injectable fetcher/page API (no default network/CLI transport); date-deferred
-  deprecate/disable semantics are implemented; `url_options` headers/user-agent/
-  referer/cookie are forwarded by the stock Downloader; curl/git/svn/hg/fossil
-  strategies are supported; script `arch` uses the cask arch stanza when
-  present;
+- Cask: livecheck strategy blocks can be executed through `Cask#check_livecheck`
+  (no default network/CLI transport); date-deferred deprecate/disable semantics
+  are implemented; `url_options` headers/user-agent/referer/cookie are forwarded
+  by the stock Downloader; curl/git/svn/hg/fossil strategies are supported;
+  app/appimage/binary targets are path-safety checked; script `arch` uses the
+  cask arch stanza when present;
   evaluator script-body capture is best-effort (lexer-unbalanced bodies
   warn; duplicate stanzas last-wins; `caveats do ... end` source still comes
   from the literal parser); livecheck `strategy do ... end`/url kwargs are
@@ -68,14 +71,15 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
 - Formulary source loading has namespace/cache/error support but does not
   implement API-struct loading, `factory` tap-source loading, or full
   Homebrew loader machinery.
-- Formula test DSL: `Version`/`PkgVersion` are lightweight String subclasses
-  (letter ordering/revision-aware but not Homebrew's full token parser);
-  dependency tests isolate HOME/PATH/TMPDIR/PYBREW_PREFIX, though global
-  constants and arbitrary inherited env remain process-global; lightweight
-  lookup covers up to 10000 local-tap names plus Alias/ symlink metadata, while
-  source-only aliases/unknown names still fail; MacOS/OS/Hardware and
-  Xcode/CLT/SDK helper modules exist but detection is best-effort; `skip` is a
-  Minitest-style Exception; pattern assertions depend on the host Ruby version.
+- Formula test DSL: `Version`/`PkgVersion` support segments/major/minor/patch
+  and revision-aware comparison (still not full Homebrew token semantics);
+  dependency tests isolate HOME/PATH/TMPDIR/PYBREW_PREFIX and hide inherited
+  `PYBREW_*` markers, though Ruby constants and arbitrary non-PYBREW env remain
+  process-global; lookup covers 10000 local-tap names, Alias/ symlinks and a lazy
+  bounded source-alias scan (dynamic source-only aliases need a prior scan);
+  MacOS/OS/Hardware and Xcode/CLT/SDK helpers exist but detection is best-effort;
+  `skip` is a Minitest-style Exception; pattern assertions depend on the host
+  Ruby version.
 - Any Ruby gem or third-party API used by formulae.
 
 Unknown methods fail loudly through `method_missing`/Ruby errors instead of
