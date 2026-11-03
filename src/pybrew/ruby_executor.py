@@ -7858,6 +7858,106 @@ class PybrewResource
   end
 end
 
+module Utils
+  module Bottles
+    class Tag
+      ARCHS = %i[arm64 x86_64 intel arm aarch64].freeze
+
+      attr_reader :system, :arch
+
+      def self.from_symbol(value)
+        return new(system: :all, arch: :all) if value.to_sym == :all
+
+        text = value.to_s
+        arch = nil
+        ARCHS.each do |candidate|
+          prefix = "#{candidate}_"
+          if text.start_with?(prefix)
+            arch = candidate
+            text = text[prefix.length..]
+            break
+          end
+        end
+        raise ArgumentError, "Invalid bottle tag symbol" if text.empty?
+
+        new(system: text.to_sym, arch: (arch || :x86_64).to_sym)
+      end
+
+      def self.from_arg(arg, os:, arch:)
+        arg.nil? ? new(system: os, arch: arch) : from_symbol(arg)
+      end
+
+      def initialize(system:, arch:)
+        @system = system.to_sym
+        @arch = arch.to_sym
+      end
+
+      def standardized_arch
+        return :x86_64 if %i[x86_64 intel].include?(arch)
+        return :arm64 if %i[arm64 arm aarch64].include?(arch)
+
+        arch
+      end
+
+      def macos?
+        [:ventura, :sonoma, :sequoia, :tahoe, :monterey, :big_sur,
+         :catalina, :mojave, :high_sierra, :sierra, :el_capitan,
+         :golden_gate, :macos].include?(system)
+      end
+
+      def linux?
+        system == :linux
+      end
+
+      def to_sym
+        return :all if system == :all && arch == :all
+        return system if macos? && standardized_arch == :x86_64
+
+        :"#{standardized_arch}_#{system}"
+      end
+
+      def to_unstandardized_sym
+        return to_sym if %i[intel arm].include?(arch)
+
+        :"#{arch}_#{system}"
+      end
+
+      def to_s
+        to_sym.to_s
+      end
+
+      def ==(other)
+        case other
+        when Symbol then to_sym == other
+        when self.class then system == other.system && standardized_arch == other.standardized_arch
+        else false
+        end
+      end
+      alias eql? ==
+
+      def hash
+        [system, standardized_arch].hash
+      end
+
+      def default_prefix
+        return "/home/linuxbrew/.linuxbrew" if linux?
+
+        standardized_arch == :arm64 ? "/opt/homebrew" : "/usr/local"
+      end
+
+      def default_cellar
+        "#{default_prefix}/Cellar"
+      end
+
+      def padded_prefix
+        return default_prefix if linux? || standardized_arch == :arm64
+
+        nil
+      end
+    end
+  end
+end
+
 class Patch
   CVE_PATTERN = /CVE-(\d{4})-(\d{4,})/
 

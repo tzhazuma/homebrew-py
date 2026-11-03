@@ -81,6 +81,19 @@ def _build(
     return keg
 
 
+def _run_raw_body(tmp_path: Path, body: str, name: str = "raw-body") -> Path:
+    """Execute arbitrary install-body Ruby directly, bypassing the DSL parser."""
+
+    formula = _formula(name, "1.0", body)
+    config = _config(tmp_path)
+    build_root = tmp_path / "build"
+    keg = tmp_path / "keg"
+    build_root.mkdir(exist_ok=True)
+    keg.mkdir(exist_ok=True)
+    execute_install_body(formula, config, build_root, keg)
+    return keg
+
+
 def _downloader(tmp_path: Path) -> Downloader:
     return Downloader(tmp_path / "cache" / "downloads")
 
@@ -5492,4 +5505,101 @@ def test_resource_metadata_fields_from_info(
         "MIT",
         "supplement",
         ":curl",
+    ]
+
+
+def test_bottle_tag_helpers(tmp_path: Path) -> None:
+    keg = _run_raw_body(
+        tmp_path,
+        """
+(prefix/"bottle-tag.txt").write [
+  Utils::Bottles::Tag.from_symbol(:arm64_sonoma).to_s,
+  Utils::Bottles::Tag.from_symbol(:ventura).to_s,
+  Utils::Bottles::Tag.from_symbol(:all).to_s,
+  Utils::Bottles::Tag.from_symbol(:x86_64_linux).standardized_arch.to_s,
+  Utils::Bottles::Tag.from_symbol(:arm64_sonoma).macos?.to_s
+].join("\n")
+""",
+        name="ruby-bottle-tag",
+    )
+    assert (keg / "bottle-tag.txt").read_text().splitlines() == [
+        "arm64_sonoma",
+        "ventura",
+        "all",
+        "x86_64",
+        "true",
+    ]
+
+
+def test_keg_optlink_action_raw(tmp_path: Path) -> None:
+    keg = _run_raw_body(
+        tmp_path,
+        """
+keg = Keg.new(prefix)
+path = keg.optlink
+dry = keg.optlink(true, true, false)
+linked = keg.optlink(true, false, false)
+(prefix/"optlink.txt").write [
+  path.to_s.include?("/opt/").to_s,
+  dry.nil?.to_s,
+  File.symlink?(path.to_s).to_s,
+  linked.nil?.to_s
+].join("\\n")
+""",
+        name="raw-body",
+    )
+    assert (keg / "optlink.txt").read_text().splitlines() == [
+        "true",
+        "true",
+        "true",
+        "true",
+    ]
+
+
+def test_keg_link_error_raw(tmp_path: Path) -> None:
+    keg = _run_raw_body(
+        tmp_path,
+        """
+conflict = prefix/"conflict.txt"
+conflict.write "conflict"
+error = Keg::ConflictError.new(
+  Keg.new(prefix), Pathname.new("source"), conflict, RuntimeError.new("cause")
+)
+(prefix/"link-error.txt").write [
+  error.src.to_s,
+  error.suggestion.to_s.include?("already exists").to_s,
+  error.to_s.include?("Could not symlink").to_s
+].join("\\n")
+""",
+        name="raw-body",
+    )
+    assert (keg / "link-error.txt").read_text().splitlines() == [
+        "source",
+        "true",
+        "true",
+    ]
+
+
+def test_env_determination_helpers_raw(tmp_path: Path) -> None:
+    keg = _run_raw_body(
+        tmp_path,
+        """
+(prefix/"env-determine.txt").write [
+  ENV.determine_cc.to_s.empty?.to_s,
+  ENV.determine_cxx.to_s.empty?.to_s,
+  ENV.determine_make_jobs.to_i.positive?.to_s,
+  ENV.homebrew_extra_paths.empty?.to_s,
+  ENV.reset.nil?.to_s,
+  ENV.refurbish_args.nil?.to_s
+].join("\\n")
+""",
+        name="raw-body",
+    )
+    assert (keg / "env-determine.txt").read_text().splitlines() == [
+        "false",
+        "false",
+        "true",
+        "true",
+        "true",
+        "true",
     ]
