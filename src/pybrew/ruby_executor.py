@@ -8514,6 +8514,50 @@ module Utils
     def self.https_redirect_curl_args
       ["--proto-redir", "=https"]
     end
+
+    def self.curl_check_http_content(_url, *_args, **_options)
+      [true, "", nil]
+    end
+
+    def self.curl_download(_url, output = nil, *_args, **_options)
+      output.nil? ? nil : Pathname.new(output.to_s)
+    end
+
+    def self.curl_headers(_url)
+      {}
+    end
+
+    def self.curl_http_content_headers_and_checksum(_url, *_args, **_options)
+      [nil, {}, nil]
+    end
+
+    def self.curl_response_follow_redirections(_url)
+      nil
+    end
+
+    def self.curl_response_last_location(_url)
+      nil
+    end
+
+    def self.curl_with_workarounds(*args, **_options)
+      curl_output(*args)
+    end
+
+    def self.insecure_redirect?(*_args)
+      false
+    end
+
+    def self.no_insecure_redirect_curl_args
+      []
+    end
+
+    def self.url_protected_by_cloudflare?(_url)
+      false
+    end
+
+    def self.url_protected_by_incapsula?(_url)
+      false
+    end
   end
 end
 

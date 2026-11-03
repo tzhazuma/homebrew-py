@@ -5855,3 +5855,32 @@ patch.apply
         name="raw-body",
     )
     assert (keg / "applied.txt").read_text() == "new\n"
+
+
+def test_utils_curl_additional_helpers_raw(tmp_path: Path) -> None:
+    keg = _run_raw_body(
+        tmp_path,
+        """
+(prefix/"curl2.txt").write [
+  Utils::Curl.curl_check_http_content("https://example.invalid")[0].to_s,
+  Utils::Curl.curl_headers("https://example.invalid").empty?.to_s,
+  Utils::Curl.curl_http_content_headers_and_checksum("x")[1].empty?.to_s,
+  Utils::Curl.curl_response_last_location("x").nil?.to_s,
+  Utils::Curl.insecure_redirect?.to_s,
+  Utils::Curl.no_insecure_redirect_curl_args.empty?.to_s,
+  Utils::Curl.url_protected_by_cloudflare?("x").to_s,
+  Utils::Curl.url_protected_by_incapsula?("x").to_s
+].join("\\n")
+""",
+        name="raw-body",
+    )
+    assert (keg / "curl2.txt").read_text().splitlines() == [
+        "true",
+        "true",
+        "true",
+        "true",
+        "false",
+        "true",
+        "false",
+        "false",
+    ]
