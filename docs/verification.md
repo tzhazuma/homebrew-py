@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-1115 passed, 5 skipped (local full suite, 2026-11-04 wave 9)
+1137 passed, 5 skipped (local full suite, 2026-11-04 wave 10)
 ```
 
 Breakdown of the feature slices:
@@ -1509,6 +1509,27 @@ The maintainer's close is a final scope decision; no further reopen attempts
 were made. The submitting human owns any future upstream communication and
 must not use AI to answer review comments.
 
+## Wave 10 completion batch (2026-11-04)
+
+- Full local suite: **1137 passed, 5 skipped** in ~135s.
+- Targeted slices:
+  - Ruby shim: 190 passed
+  - Superenv/source build: 50 passed
+  - Cask: 327 passed
+  - Test DSL/version: 131 passed
+  - Service: 144 passed
+- Real install verification: `scripts/verify_real_install.py` passes with
+  Tab-compatible receipt fields + SBOM.
+- Wave 10 changes:
+  - Keg Mach-O/ELF binary relocation via `install_name_tool`/`patchelf`
+    (dry-run/report, fake-tool tests); strict bwrap roots/write binds/netns.
+  - Superenv sanitized `-Wa,*`, `.S` vs `.s`, mixed-language no forced `-x`.
+  - Cask optional tracked chmod, move rollback, copy/link rollback edges.
+  - Version bounded Homebrew comparison table exactness and hash consistency.
+  - Service standalone explicit user-env re-read context.
+  - CLI `linkage --json` now includes checked/skipped/issues/unsupported/
+    corrupt/audit structures.
+
 ## Wave 9 completion batch (2026-11-04)
 
 - Full local suite: **1115 passed, 5 skipped** in ~107s.
@@ -1732,9 +1753,9 @@ edge cases), not missing method names in the audited core files.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `258bd2e` (Wave 9 relocation/Token edge/Tab)
-- CI run for `258bd2e`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41728871656>
+- Latest feature commit: `c98839b` (Wave 10 binary relocation/exact version)
+- CI run for `c98839b`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41731845053>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
