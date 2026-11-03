@@ -6496,6 +6496,205 @@ class Keg
   end
 end
 
+class Service
+  attr_reader :formula
+
+  def initialize(formula = nil, &block)
+    @formula = formula
+    @service_name = nil
+    @command = nil
+    @manual_command = nil
+    @run_at_load = nil
+    @keep_alive = false
+    @require_root = false
+    @launch_only_once = false
+    @interval = nil
+    @cron = nil
+    @environment_variables = {}
+    @macos_legacy_timers = false
+    @working_dir = nil
+    @log_path = nil
+    @error_log_path = nil
+    @process_type = nil
+    instance_eval(&block) if block
+  end
+
+  def self.from_hash(api_hash)
+    hash = api_hash.is_a?(Hash) ? api_hash : {}
+    service = new(nil)
+    service.name(hash["name"] || hash["service_name"]) if hash["name"] || hash["service_name"]
+    service.run(hash["run"] || hash["command"]) if hash["run"] || hash["command"]
+    service.keep_alive(hash["keep_alive"]) unless hash["keep_alive"].nil?
+    service.require_root(hash["require_root"]) unless hash["require_root"].nil?
+    service.run_at_load(hash["run_at_load"]) unless hash["run_at_load"].nil?
+    service.interval(hash["interval"]) if hash["interval"]
+    service.cron(hash["cron"]) if hash["cron"]
+    service.environment_variables(hash["environment_variables"] || {})
+    service
+  end
+
+  def f
+    formula
+  end
+
+  def nice_requires_root?
+    false
+  end
+
+  def name(value = nil, macos: nil, linux: nil)
+    chosen = macos || linux
+    @service_name = (chosen || value).to_s unless (chosen || value).nil?
+    @service_name || default_service_name
+  end
+
+  def default_service_name
+    formula.respond_to?(:name) ? formula.name.to_s : "service"
+  end
+
+  def default_plist_name
+    "homebrew.mxcl.#{name}"
+  end
+
+  def run(command = nil, macos: nil, linux: nil)
+    chosen = macos || linux
+    @command = Array(chosen || command) unless (chosen || command).nil?
+    @command
+  end
+
+  def command
+    @command
+  end
+
+  def command?
+    !command.nil? && !command.empty?
+  end
+
+  def manual_command
+    @manual_command || command
+  end
+
+  def run_at_load(value = nil)
+    @run_at_load = value unless value.nil?
+    @run_at_load
+  end
+
+  def keep_alive(value = nil)
+    @keep_alive = !!value unless value.nil?
+    @keep_alive
+  end
+
+  def keep_alive?
+    !!@keep_alive
+  end
+
+  def require_root(value = nil)
+    @require_root = !!value unless value.nil?
+    @require_root
+  end
+
+  def requires_root?
+    !!@require_root
+  end
+
+  def launch_only_once(value = nil)
+    @launch_only_once = !!value unless value.nil?
+    @launch_only_once
+  end
+
+  def interval(value = nil)
+    @interval = value unless value.nil?
+    @interval
+  end
+
+  def cron(value = nil)
+    @cron = value unless value.nil?
+    @cron
+  end
+
+  def timed?
+    !@interval.nil? || !@cron.nil?
+  end
+
+  def default_cron_values
+    []
+  end
+
+  def parse_cron(cron_statement = nil)
+    value = cron_statement || @cron
+    value.nil? ? [] : value.to_s.split
+  end
+
+  def environment_variables(variables = {})
+    @environment_variables.merge!(variables) if variables.is_a?(Hash)
+    @environment_variables
+  end
+
+  def effective_environment_variables
+    @environment_variables
+  end
+
+  def macos_legacy_timers(value = nil)
+    @macos_legacy_timers = !!value unless value.nil?
+    @macos_legacy_timers
+  end
+
+  def path_dirs
+    candidates = []
+    if formula.respond_to?(:opt_bin)
+      candidates << formula.opt_bin
+      candidates << formula.opt_sbin if formula.respond_to?(:opt_sbin)
+    end
+    candidates.compact
+  rescue StandardError
+    []
+  end
+
+  def path_dir(_path = nil)
+    path_dirs.first
+  end
+
+  def path_parent_dir(_path = nil)
+    found = path_dir
+    found.nil? ? nil : found.parent
+  end
+
+  def cron_weekday_to_systemd_weekday(cron_weekday)
+    value = cron_weekday.to_i
+    value.zero? ? 7 : value
+  end
+
+  def to_plist
+    payload = {
+      "Label" => default_plist_name,
+      "ProgramArguments" => Array(command),
+      "RunAtLoad" => !!run_at_load,
+      "KeepAlive" => keep_alive?
+    }
+    payload["StartInterval"] = @interval unless @interval.nil?
+    payload["EnvironmentVariables"] = @environment_variables unless @environment_variables.empty?
+    payload
+  end
+
+  def to_hash
+    to_plist
+  end
+
+  def to_systemd_unit
+    lines = ["[Unit]", "Description=#{default_plist_name}", "", "[Service]"]
+    lines << "ExecStart=#{Array(command).join(" ")}" if command?
+    lines << "Restart=always" if keep_alive?
+    @environment_variables.each { |key, value| lines << "Environment=\"#{key}=#{value}\"" }
+    lines.join("\n") + "\n"
+  end
+
+  def to_systemd_timer
+    lines = ["[Unit]", "Description=#{default_plist_name} timer", "", "[Timer]"]
+    lines << "OnUnitActiveSec=#{@interval}" unless @interval.nil?
+    lines << "OnCalendar=#{@cron}" unless @cron.nil?
+    lines.join("\n") + "\n"
+  end
+end
+
 class Tab
   attr_reader :tabfile
 

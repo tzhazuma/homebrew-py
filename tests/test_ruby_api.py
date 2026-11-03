@@ -5747,3 +5747,42 @@ installer = FormulaInstaller.new(nil)
         "true",
         "false",
     ]
+
+
+def test_service_ruby_object_helpers_raw(tmp_path: Path) -> None:
+    keg = _run_raw_body(
+        tmp_path,
+        """
+service = Service.new(nil)
+service.name("demo")
+service.run(["echo", "hi"])
+service.keep_alive(true)
+service.require_root(false)
+service.environment_variables({ "A" => "B" })
+(prefix/"service.txt").write [
+  service.default_plist_name,
+  service.command.join(" "),
+  service.command?.to_s,
+  service.keep_alive?.to_s,
+  service.requires_root?.to_s,
+  service.timed?.to_s,
+  service.path_dirs.empty?.to_s,
+  service.to_plist["Label"],
+  service.to_systemd_unit.include?("ExecStart").to_s,
+  service.cron_weekday_to_systemd_weekday(0).to_s
+].join("\\n")
+""",
+        name="raw-body",
+    )
+    assert (keg / "service.txt").read_text().splitlines() == [
+        "homebrew.mxcl.demo",
+        "echo hi",
+        "true",
+        "true",
+        "false",
+        "false",
+        "true",
+        "homebrew.mxcl.demo",
+        "true",
+        "7",
+    ]
