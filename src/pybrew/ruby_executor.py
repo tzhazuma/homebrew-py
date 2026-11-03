@@ -8353,6 +8353,103 @@ module Utils
         release.nil? ? nil : MacOS::Version.new(release)
       end
     end
+
+    class << self
+      def tag(value = nil)
+        case value
+        when Symbol
+          Tag.from_symbol(value)
+        when Tag
+          value
+        else
+          @tag ||= Tag.new(
+            system: (OS.mac? ? :macos : :linux),
+            arch: (Hardware::CPU.arch.to_s == "arm64" ? :arm64 : :x86_64)
+          )
+        end
+      end
+
+      def extname_tag_rebuild(filename)
+        match = /\.([a-z0-9_]+)\.bottle\.(?:(\d+)\.)?tar\.gz$/.match(filename.to_s)
+        match.nil? ? [] : match.to_a.map(&:to_s)
+      end
+
+      def bottle_file_list(bottle_file)
+        @bottle_file_list ||= {}
+        @bottle_file_list[bottle_file.to_s] ||= Utils.popen_read(
+          "tar", "--list", "--file", bottle_file.to_s
+        ).to_s.lines.map(&:chomp)
+      end
+
+      def receipt_path(bottle_file)
+        bottle_file_list(bottle_file).find do |line|
+          %r{.+/.+/INSTALL_RECEIPT\.json}.match?(line)
+        end
+      end
+
+      def file_from_bottle(bottle_file, file_path)
+        Utils.popen_read(
+          "tar", "--extract", "--to-stdout", "--file", bottle_file.to_s, file_path.to_s
+        ).to_s
+      end
+
+      def resolve_formula_names(bottle_file)
+        first = bottle_file_list(bottle_file).first.to_s
+        name = first.split("/").fetch(0)
+        full_name = name
+        receipt = receipt_path(bottle_file)
+        unless receipt.nil?
+          tab = Tab.from_file_content(file_from_bottle(bottle_file, receipt))
+          tap = tab.tap
+          full_name = "#{tap}/#{name}" unless tap.nil? || tap.to_s.empty?
+        end
+        [name, full_name]
+      end
+
+      def resolve_version(bottle_file)
+        first = bottle_file_list(bottle_file).first.to_s
+        version = first.split("/").fetch(1, "0")
+        PybrewVersion.new(version)
+      end
+
+      def formula_contents(bottle_file, name = nil)
+        name ||= resolve_formula_names(bottle_file)[0]
+        version = resolve_version(bottle_file)
+        file_from_bottle(bottle_file, "#{name}/#{version}/.brew/#{name}.rb")
+      end
+
+      def built_as?(formula)
+        return false unless formula.respond_to?(:latest_version_installed?) && formula.latest_version_installed?
+
+        keg = Keg.new(formula.latest_installed_prefix)
+        tab = keg.tab
+        !!tab.built_as_bottle?
+      rescue StandardError
+        false
+      end
+
+      def file_outdated?(formula, file)
+        filename = File.basename(file.to_s)
+        _match, bottle_tag, rebuild = extname_tag_rebuild(filename)
+        return false if bottle_tag.nil? || bottle_tag.empty?
+        return false unless formula.respond_to?(:bottle)
+
+        bottle = formula.bottle
+        return false if bottle.nil?
+
+        bottle_tag != bottle.tag.to_s || rebuild.to_i != bottle.rebuild.to_i
+      rescue StandardError
+        false
+      end
+
+      def load_tab(formula)
+        Tab.for_keg(Keg.new(formula.prefix))
+      end
+
+      def missing_all_bottle_publish_note
+        "publishing without one anyway"
+      end
+    end
   end
 end
 

@@ -5786,3 +5786,46 @@ service.environment_variables({ "A" => "B" })
         "true",
         "7",
     ]
+
+
+def test_utils_bottles_module_helpers_raw(tmp_path: Path) -> None:
+    bottle = tmp_path / "demo--1.0.arm64_sonoma.bottle.tar.gz"
+    with tarfile.open(bottle, "w:gz") as archive:
+        receipt = json.dumps({"tap": "homebrew/core"}).encode()
+        import io as _io
+
+        info = tarfile.TarInfo("demo/1.0/INSTALL_RECEIPT.json")
+        info.size = len(receipt)
+        archive.addfile(info, _io.BytesIO(receipt))
+        source = b"class Demo < Formula\nend\n"
+        info = tarfile.TarInfo("demo/1.0/.brew/demo.rb")
+        info.size = len(source)
+        archive.addfile(info, _io.BytesIO(source))
+    keg = _run_raw_body(
+        tmp_path,
+        f"""
+parts = Utils::Bottles.extname_tag_rebuild("demo--1.0.arm64_sonoma.bottle.tar.gz")
+names = Utils::Bottles.resolve_formula_names("{bottle}")
+(prefix/"bottles.txt").write [
+  Utils::Bottles.tag(:arm64_sonoma).to_s,
+  parts[1],
+  parts[2],
+  names[0],
+  names[1],
+  Utils::Bottles.resolve_version("{bottle}").to_s,
+  Utils::Bottles.formula_contents("{bottle}").include?("Demo").to_s,
+  Utils::Bottles.missing_all_bottle_publish_note
+].join("\\n")
+""",
+        name="raw-body",
+    )
+    assert (keg / "bottles.txt").read_text().splitlines() == [
+        "arm64_sonoma",
+        "arm64_sonoma",
+        "",
+        "demo",
+        "homebrew/core/demo",
+        "1.0",
+        "true",
+        "publishing without one anyway",
+    ]
