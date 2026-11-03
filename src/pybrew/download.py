@@ -156,6 +156,31 @@ class Downloader:
                 temporary.unlink()
         return destination
 
+    def fetch_git(self, url: str, hint: str = "git") -> Path:
+        """Clone *url* into the cache and return the checkout directory."""
+
+        safe_hint = re.sub(r"[^A-Za-z0-9._@+-]+", "-", hint).strip("-") or "git"
+        digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
+        destination = self.cache_dir / f"git-{digest}--{safe_hint}"
+        if destination.is_dir():
+            return destination
+        temporary = Path(tempfile.mkdtemp(prefix=".pybrew-git-", dir=self.cache_dir))
+        try:
+            result = subprocess.run(
+                ["git", "clone", "--depth", "1", "--quiet", url, str(temporary / "checkout")],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode != 0:
+                message = (result.stderr or result.stdout or "").strip()
+                raise DownloadError(f"{url}: git clone failed: {message}")
+            os.replace(temporary / "checkout", destination)
+        except OSError as error:
+            raise DownloadError(f"{url}: {error}") from error
+        finally:
+            shutil.rmtree(temporary, ignore_errors=True)
+        return destination
+
     def fetch_unverified(self, url: str, hint: str = "head") -> Path:
         """Fetch a HEAD source URL without a checksum (Homebrew ``head`` specs)."""
 

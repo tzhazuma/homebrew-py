@@ -2138,3 +2138,39 @@ def test_cask_artifact_helper_methods(tmp_path: Path) -> None:
     assert artifact.dsl_key() == "app"
     assert artifact.sort_order() == 0
     assert artifact.to_args() == ["Example.app"]
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="git not installed")
+def test_install_cask_git_strategy(tmp_path: Path) -> None:
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    tool = repo / "tool"
+    tool.write_text("#!/bin/sh\nexit 0\n")
+    tool.chmod(0o755)
+    subprocess.run(["git", "init", "-q", str(repo)], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "test@example.com"], check=True)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"], check=True)
+    subprocess.run(["git", "-C", str(repo), "add", "tool"], check=True)
+    subprocess.run(["git", "-C", str(repo), "commit", "-qm", "initial"], check=True)
+
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "g" / "gitty.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        f'''cask "gitty" do
+  version "1.0"
+  sha256 "no-check"
+  url "{repo.as_uri()}", using: :git
+  binary "tool"
+end
+'''
+    )
+    config = Config.default(prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache")
+    config.ensure()
+    installer = CaskInstaller(config)
+    installer.install(CaskLoader(discover_taps([tap])).load("gitty"))
+    installed = config.prefix / "bin" / "tool"
+    assert installed.is_file()
+    assert installed.stat().st_mode & 0o111

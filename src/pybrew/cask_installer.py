@@ -1151,21 +1151,30 @@ class CaskInstaller:
         if not bookkeeping_only:
             url = cask.resolved_url()
             digest = cask.resolved_sha256()
-            if not digest:
-                raise CaskError(f"{cask.token}: no sha256 for {cask.resolved_arch()}")
-            verify_cask_url(cask, url)
-            hint = f"{cask.token}-{version}.{Path(url.split('?', 1)[0]).suffix or 'download'}"
-            request_headers = cask_request_headers(cask)
-            strategy = (cask.url_options or {}).get("using")
-            kwargs: dict[str, Any] = {"hint": hint}
-            if request_headers and _download_accepts_headers(self.downloader):
-                kwargs["headers"] = request_headers
+            strategy = str((cask.url_options or {}).get("using") or "").lstrip(":").lower()
+            if strategy == "git":
+                fetch_git = getattr(self.downloader, "fetch_git", None)
+                if fetch_git is None:
+                    raise CaskError(f"{cask.token}: downloader does not support git strategy")
+                archive = fetch_git(url, hint=f"{cask.token}-{version}")
+                kind = "directory"
                 self._url_options_applied = True
-            if strategy and _download_accepts_parameter(self.downloader, "using"):
-                kwargs["using"] = str(strategy)
-                self._url_options_applied = True
-            archive = self.downloader.fetch(url, digest, **kwargs)
-            kind = _archive_kind(archive)
+                digest = None
+            else:
+                if not digest:
+                    raise CaskError(f"{cask.token}: no sha256 for {cask.resolved_arch()}")
+                verify_cask_url(cask, url)
+                hint = f"{cask.token}-{version}.{Path(url.split('?', 1)[0]).suffix or 'download'}"
+                request_headers = cask_request_headers(cask)
+                kwargs: dict[str, Any] = {"hint": hint}
+                if request_headers and _download_accepts_headers(self.downloader):
+                    kwargs["headers"] = request_headers
+                    self._url_options_applied = True
+                if strategy and _download_accepts_parameter(self.downloader, "using"):
+                    kwargs["using"] = str(strategy)
+                    self._url_options_applied = True
+                archive = self.downloader.fetch(url, digest, **kwargs)
+                kind = _archive_kind(archive)
             if cask.container in ("nupkg", "zip"):
                 kind = "zip"
             elif cask.container in ("7z", "rar"):
@@ -1258,6 +1267,10 @@ class CaskInstaller:
     ) -> list[str]:
         """Install artifacts from one archive/container into ``source_root``."""
 
+        if kind == "directory":
+            return self._install_artifacts_with_scripts(
+                cask, archive, room, version, force, cwd=archive
+            )
         if kind == "dmg":
             if not os.path.exists("/usr/bin/hdiutil"):
                 raise CaskError("dmg casks require hdiutil (macOS)")
