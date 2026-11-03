@@ -2237,3 +2237,42 @@ def test_cask_artifact_article_config_and_sandbox_helpers() -> None:
     assert artifact.run_cask_sandbox() is False
     assert artifact.requires_sudo_q() is False
     assert artifact.read_script_arguments(["a", "b"]) == ["a", "b"]
+
+
+@pytest.mark.parametrize("tool", ["svn", "hg"])
+def test_install_cask_vcs_strategies(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool: str
+) -> None:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    script = repo / "tool"
+    script.write_text("#!/bin/sh\nexit 0\n")
+    script.chmod(0o755)
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / tool
+    fake.write_text(
+        "#!/bin/sh\n"
+        'for last in "$@"; do :; done\n'
+        'mkdir -p "$last"\n'
+        'cp -R "$FAKE_REPO"/. "$last"\n'
+    )
+    fake.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}")
+    monkeypatch.setenv("FAKE_REPO", str(repo))
+    tap = tmp_path / "tap"
+    cask_path = tap / "Casks" / "v" / f"{tool}gy.rb"
+    cask_path.parent.mkdir(parents=True)
+    cask_path.write_text(
+        f'''cask "{tool}gy" do
+  version "1.0"
+  sha256 "no-check"
+  url "https://example.invalid/repo", using: :{tool}
+  binary "tool"
+end
+'''
+    )
+    config = Config.default(prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache")
+    config.ensure()
+    CaskInstaller(config).install(CaskLoader(discover_taps([tap])).load(f"{tool}gy"))
+    assert (config.prefix / "bin" / "tool").is_file()

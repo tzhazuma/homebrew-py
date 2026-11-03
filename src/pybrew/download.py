@@ -156,6 +156,38 @@ class Downloader:
                 temporary.unlink()
         return destination
 
+    def fetch_vcs(self, tool: str, url: str, hint: str = "vcs") -> Path:
+        """Check out *url* with svn/hg into the cache and return the directory."""
+
+        executable = shutil.which(tool)
+        if executable is None:
+            raise DownloadError(f"{url}: {tool} is not installed")
+        safe_hint = re.sub(r"[^A-Za-z0-9._@+-]+", "-", hint).strip("-") or "vcs"
+        digest = hashlib.sha256(f"{tool}:{url}".encode("utf-8")).hexdigest()
+        destination = self.cache_dir / f"{tool}-{digest}--{safe_hint}"
+        if destination.is_dir():
+            return destination
+        temporary = Path(tempfile.mkdtemp(prefix=f".pybrew-{tool}-", dir=self.cache_dir))
+        checkout = temporary / "checkout"
+        if tool == "svn":
+            command = [executable, "checkout", "--quiet", url, str(checkout)]
+        elif tool == "hg":
+            command = [executable, "clone", "--quiet", url, str(checkout)]
+        else:
+            shutil.rmtree(temporary, ignore_errors=True)
+            raise DownloadError(f"{url}: unsupported VCS {tool}")
+        try:
+            result = subprocess.run(command, capture_output=True, text=True)
+            if result.returncode != 0:
+                message = (result.stderr or result.stdout or "").strip()
+                raise DownloadError(f"{url}: {tool} checkout failed: {message}")
+            os.replace(checkout, destination)
+        except OSError as error:
+            raise DownloadError(f"{url}: {error}") from error
+        finally:
+            shutil.rmtree(temporary, ignore_errors=True)
+        return destination
+
     def fetch_git(self, url: str, hint: str = "git") -> Path:
         """Clone *url* into the cache and return the checkout directory."""
 

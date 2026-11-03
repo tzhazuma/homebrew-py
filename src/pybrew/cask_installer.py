@@ -1152,11 +1152,19 @@ class CaskInstaller:
             url = cask.resolved_url()
             digest = cask.resolved_sha256()
             strategy = str((cask.url_options or {}).get("using") or "").lstrip(":").lower()
-            if strategy == "git":
-                fetch_git = getattr(self.downloader, "fetch_git", None)
-                if fetch_git is None:
-                    raise CaskError(f"{cask.token}: downloader does not support git strategy")
-                archive = fetch_git(url, hint=f"{cask.token}-{version}")
+            if strategy in ("git", "svn", "hg"):
+                if strategy == "git":
+                    fetch_vcs = getattr(self.downloader, "fetch_git", None)
+                else:
+                    fetch_vcs = getattr(self.downloader, "fetch_vcs", None)
+                if fetch_vcs is None:
+                    raise CaskError(
+                        f"{cask.token}: downloader does not support {strategy} strategy"
+                    )
+                if strategy == "git":
+                    archive = fetch_vcs(url, hint=f"{cask.token}-{version}")
+                else:
+                    archive = fetch_vcs(strategy, url, hint=f"{cask.token}-{version}")
                 kind = "directory"
                 self._url_options_applied = True
                 digest = None
