@@ -50,8 +50,9 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
   (`pybrew linkage`, Mach-O/ELF/RPATH with corrupt/unsupported separation) and
   cleans stale links. Full Homebrew Tab/SBOM semantics and a full dyld/ld.so
   simulation remain bounded. `Superenv` has opt-in generated shims with bounded
-  flag/rpath sanitization, macOS SDKROOT/xcrun, bounded `-std` and compiler
-  wrappers, but no full Homebrew Superenv engine. `Sandbox` auto-detects
+  flag/rpath sanitization, macOS SDKROOT/xcrun + LDFLAGS, bounded `PYBREW_ARCH`,
+  C/C++/OBJC/OBJCXX standards and compiler wrappers, but no full Homebrew
+  Superenv engine. `Sandbox` auto-detects
   `sandbox-exec`/`bwrap`, collects allow/deny rules and generates a bounded
   profile via `apply!`, but not a verified minimal-policy engine.
   `Utils::GitHub` read/write names are complete, with injectable REST and

@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-1035 passed, 5 skipped (local full suite, 2026-11-04 wave 6)
+1068 passed, 5 skipped (local full suite, 2026-11-04 wave 7)
 ```
 
 Breakdown of the feature slices:
@@ -1509,6 +1509,30 @@ The maintainer's close is a final scope decision; no further reopen attempts
 were made. The submitting human owns any future upstream communication and
 must not use AI to answer review comments.
 
+## Wave 7 completion batch (2026-11-04)
+
+- Full local suite: **1068 passed, 5 skipped** in ~149s.
+- Targeted slices:
+  - Ruby shim: 182 passed
+  - Superenv/source build: 41 passed
+  - Cask: 293 passed
+  - Test DSL/version: 127 passed
+  - Service: 132 passed
+- Real install verification: `scripts/verify_real_install.py` still passes
+  (build metadata + keg SBOM + install/uninstall).
+- Wave 7 changes:
+  - Formulary remote ETag/Last-Modified conditional cache, bearer token,
+    HS256 JWS verification with explicit failures.
+  - Superenv LDFLAGS SDK, `PYBREW_ARCH`, OBJC/OBJCXX shims/standards,
+    syslibroot-aware sanitizer.
+  - Cask generic `steps:` (`mkdir`/`copy`/`symlink`), per-host livecheck
+    token bucket, connection Retry-After, configurable redirect headers;
+    CLI `--header/--timeout`.
+  - Version default switched to Homebrew null-token semantics with legacy
+    opt-out.
+  - Literal service parser reads bounded user env overrides; declared vs
+    effective environment and renderer PATH behavior documented/tested.
+
 ## Wave 6 completion batch (2026-11-04)
 
 - Full local suite: **1035 passed, 5 skipped** in ~115s.
@@ -1663,9 +1687,9 @@ edge cases), not missing method names in the audited core files.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `5e86fda` (Wave 6 dyld/GraphQL/Service env)
-- CI run for `5e86fda`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41715829630>
+- Latest feature commit: `2f6c382` (Wave 7 JWS/Superenv/Version/Service)
+- CI run for `2f6c382`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41719651868>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
