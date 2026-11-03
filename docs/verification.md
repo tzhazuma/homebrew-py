@@ -1509,6 +1509,20 @@ The maintainer's close is a final scope decision; no further reopen attempts
 were made. The submitting human owns any future upstream communication and
 must not use AI to answer review comments.
 
+## API surface audit (2026-11-03)
+
+Method-name audit against Homebrew `origin/main` (`57cac9d`) reports **0
+missing** for:
+
+`formula.rb`, `keg.rb`, `tab/tab.rb`, `formula_installer.rb`, `formulary.rb`,
+`utils.rb`, `development_tools.rb`, `system_config.rb`, `service.rb`,
+`bottle.rb`, `os/mac/xcode.rb`, `extend/ENV/super.rb`, `extend/ENV/shared.rb`.
+
+Utility surfaces additionally cover `Utils::Path/Git/Curl/Bottles/Svn/
+Analytics/SPDX`. Remaining gaps are semantic depth (`Sandbox`/`Superenv`
+execution, real bottle pour, network `Utils::GitHub`, exotic cask/livecheck
+edge cases), not missing method names in the audited core files.
+
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
