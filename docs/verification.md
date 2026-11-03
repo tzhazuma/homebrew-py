@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-1007 passed, 5 skipped (local full suite, 2026-11-04 wave 5)
+1035 passed, 5 skipped (local full suite, 2026-11-04 wave 6)
 ```
 
 Breakdown of the feature slices:
@@ -1509,6 +1509,26 @@ The maintainer's close is a final scope decision; no further reopen attempts
 were made. The submitting human owns any future upstream communication and
 must not use AI to answer review comments.
 
+## Wave 6 completion batch (2026-11-04)
+
+- Full local suite: **1035 passed, 5 skipped** in ~115s.
+- Targeted slices:
+  - Ruby shim: 180 passed (GitHub GraphQL)
+  - Installer/linkage: 60 passed
+  - Cask: 279 passed
+  - Test DSL/version: 126 passed
+  - Service: 124 passed
+- Real install verification: `scripts/verify_real_install.py` still passes
+  (build metadata + keg SBOM + install/uninstall).
+- Wave 6 changes:
+  - GitHub GraphQL transport + GraphQL-first PR/repo/team/sponsorship mappings.
+  - dyld/ld.so `$LIB`/`$PLATFORM`, LC_RPATH stack, DYLD/LD env paths,
+    DT_RUNPATH precedence and DT_AUDIT diagnostics.
+  - Cask optional brotli, Retry-After/jitter/retry budget, cross-origin
+    redirect header stripping; generic artifact `steps:` explicit limit.
+  - Version opt-in Homebrew null-token mode and hash alignment.
+  - Service declared vs effective environment separation with user overrides.
+
 ## Wave 5 completion batch (2026-11-04)
 
 - Full local suite: **1007 passed, 5 skipped** in ~109s.
@@ -1643,9 +1663,9 @@ edge cases), not missing method names in the audited core files.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `687536e` (Wave 5 Sandbox/linkage/Version/Service)
-- CI run for `687536e`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41708290740>
+- Latest feature commit: `5e86fda` (Wave 6 dyld/GraphQL/Service env)
+- CI run for `5e86fda`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41715829630>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success

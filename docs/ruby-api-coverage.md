@@ -54,8 +54,10 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
   wrappers, but no full Homebrew Superenv engine. `Sandbox` auto-detects
   `sandbox-exec`/`bwrap`, collects allow/deny rules and generates a bounded
   profile via `apply!`, but not a verified minimal-policy engine.
-  `Utils::GitHub` read/write names are complete with injectable REST reads/write
-  guards, but no full GraphQL/PR/team semantics.
+  `Utils::GitHub` read/write names are complete, with injectable REST and
+  GraphQL transports; repository/PR/commits/labels/files/reviews/team/
+  sponsorship have bounded GraphQL-first mappings and REST fallback, but no
+  pagination/rate-limit/Enterprise support.
 - Full `MacOS`/SDK/Xcode/CLT detection, `DevelopmentTools`, `SystemConfig`
   host details.
 - Services: Ruby evaluator now follows Homebrew opt/keg/global path semantics,
