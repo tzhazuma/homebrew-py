@@ -5953,3 +5953,31 @@ spec = PybrewBottleSpec.new(
         "true",
         "https://ghcr.io/v2/homebrew/core",
     ]
+
+
+def test_bottle_specification_download_stage_helpers_raw(tmp_path: Path) -> None:
+    keg = _run_raw_body(
+        tmp_path,
+        """
+spec = PybrewBottleSpec.new("current_tag" => "all", "files" => {})
+(prefix/"bottle-stage.txt").write [
+  spec.skip_relocation?.to_s,
+  spec.fallback_on_error?.to_s,
+  spec.compatible_locations_from_tab?.to_s,
+  spec.stage_from_download_queue?.to_s,
+  spec.staged_from_download_queue?.to_s,
+  spec.with_verified_snapshot { "ok" },
+  spec.with_corrupt_download_retry { "retry" }
+].join("\\n")
+""",
+        name="raw-body",
+    )
+    assert (keg / "bottle-stage.txt").read_text().splitlines() == [
+        "false",
+        "false",
+        "true",
+        "false",
+        "false",
+        "ok",
+        "retry",
+    ]

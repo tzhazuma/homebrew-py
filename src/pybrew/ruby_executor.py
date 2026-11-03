@@ -3231,6 +3231,70 @@ class PybrewBottleSpec
     to_str
   end
 
+  def skip_relocation?
+    false
+  end
+
+  def fallback_on_error?
+    false
+  end
+
+  def compatible_locations_from_tab?
+    true
+  end
+
+  def stage_from_download_queue?
+    false
+  end
+
+  def staged_from_download_queue?
+    false
+  end
+
+  def stage_from_download_queue(*_args)
+    nil
+  end
+
+  def staged_path_from_download_queue(*_args)
+    nil
+  end
+
+  def staged_path_from_download_queue_marker(*_args)
+    nil
+  end
+
+  def purge_staged_from_download_queue(*_args)
+    nil
+  end
+
+  def discard_corrupt_cached_download(*_args)
+    nil
+  end
+
+  def extract_snapshot(*_args)
+    nil
+  end
+
+  def fetch_tab(*_args)
+    nil
+  end
+
+  def select_download_strategy(*_args)
+    nil
+  end
+
+  def github_packages_manifest_resource(*_args)
+    nil
+  end
+
+  def with_corrupt_download_retry(*_args)
+    block_given? ? yield : nil
+  end
+
+  def with_verified_snapshot(*_args)
+    block_given? ? yield : nil
+  end
+
   def bottle_for_tag(tag)
     key = tag.to_s
     info = @files[key]
