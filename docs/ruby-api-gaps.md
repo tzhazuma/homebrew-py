@@ -27,10 +27,10 @@ claiming full parity with every file under `Library/Homebrew`.
 | livecheck strategy execution | Partial | Strategy block source is captured as text; never executed |
 | livecheck `url_options` | Partial | Header/user-agent/etc. captured best-effort |
 | Cask script shim | Partial | No sudo; `arch` uses cask arch stanza when set; MacOS naming static; url_options reach the stock Downloader over HTTP(S) |
-| Test DSL arbitrary formula lookup | Partial | Bounded tap index (50 metadata entries/run); dynamic/uninstalled/unreferenced and alias-only lookups fail clearly |
+| Test DSL arbitrary formula lookup | Partial | Lightweight metadata for up to 10000 local-tap formulae (only referenced sources are parsed); dynamic lookups work, but alias-only/unknown names still fail clearly |
 | Test DSL dependency test isolation | Partial | Dependency tests use isolated testpath/cwd/PYBREW_PREFIX/TMPDIR; PATH/HOME/global constants remain parent/global; MacOS SDK discovery is best-effort and not a full Homebrew locator |
 | Test DSL version object / revision | Partial | String-compatible `Version`/`PkgVersion` with revision-aware `pkg_version`; not Homebrew's full token parser |
-| Test DSL MacOS/OS/Hardware helpers | Partial | sdk_path/sdk_version/release names, OS.version, CPU flags/features exist; versioned SDK selection and Xcode/CLT modules missing |
+| Test DSL MacOS/OS/Hardware helpers | Partial | sdk_path/sdk_version/release names, OS.version, CPU flags/features, Xcode/CLT/SDK helper modules exist; detection remains best-effort/local-only |
 | Minitest surface | Partial | skip semantics, pattern assertions, assertion counter are approximate |
 
 ## P2 — Keg, MacOS, Utils, services
@@ -39,7 +39,7 @@ claiming full parity with every file under `Library/Homebrew`.
 | --- | --- | --- |
 | Keg internal path/link details | Partial | relative-path handling, optlink action semantics, some record helpers |
 | MacOS SDK/Xcode/CLT detection | Partial | best-effort/local-only |
-| Utils modules | Partial | `Utils::Path`/Git/Curl/Gzip/Tar/Zip/Cp/Popen; no Bottles/Svn/analytics |
+| Utils modules | Partial | `Utils::Path`/Git/Curl/Gzip/Tar/Zip/Cp/Popen/Bottles/Svn/Analytics/SPDX surfaces exist; network/backends remain bounded |
 | SystemConfig host details | Partial | sections exist; host-specific output is minimal |
 | Service Ruby helpers | Partial | mirrors pybrew paths; unknown directives recorded and surfaced by CLI |
 | Patch/resource edge cases | Partial | exotic patch forms and dynamic resource iteration limited |
