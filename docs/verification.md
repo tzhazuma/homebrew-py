@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-766 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+767 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -1408,9 +1408,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `fe7cae6` (nested dmg containers)
-- CI run for `fe7cae6`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41548945520>
+- Latest feature commit: `5a64a1b` (homebrew_curl strategy alias)
+- CI run for `5a64a1b`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41549887530>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
