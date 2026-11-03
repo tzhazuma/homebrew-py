@@ -5919,3 +5919,37 @@ spec.add("x86_64_linux", checksum: "ghi", cellar: "/home/linuxbrew/.linuxbrew/Ce
         "ghi",
         "true",
     ]
+
+
+def test_bottle_specification_metadata_helpers_raw(tmp_path: Path) -> None:
+    keg = _run_raw_body(
+        tmp_path,
+        """
+spec = PybrewBottleSpec.new(
+  "root_url" => "https://ghcr.io/v2/homebrew/core",
+  "current_tag" => "arm64_sonoma",
+  "files" => {
+    "arm64_sonoma" => { "sha256" => "abc", "cellar" => "/opt/homebrew/Cellar", "total_size" => 12 }
+  }
+)
+(prefix/"bottle-meta.txt").write [
+  spec.json["root_url"],
+  spec.total_size.to_s,
+  spec.built_cellar,
+  spec.compatible_locations?.to_s,
+  spec.extname,
+  spec.tab_attributes.empty?.to_s,
+  spec.to_s
+].join("\\n")
+""",
+        name="raw-body",
+    )
+    assert (keg / "bottle-meta.txt").read_text().splitlines() == [
+        "https://ghcr.io/v2/homebrew/core",
+        "12",
+        "/opt/homebrew/Cellar",
+        "true",
+        ".bottle.tar.gz",
+        "true",
+        "https://ghcr.io/v2/homebrew/core",
+    ]

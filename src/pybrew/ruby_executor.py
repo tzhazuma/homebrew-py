@@ -3187,6 +3187,50 @@ class PybrewBottleSpec
     other.is_a?(PybrewBottleSpec) && @files == other.files
   end
 
+  def json
+    @info
+  end
+
+  def total_size
+    @files.values.sum { |entry| entry.is_a?(Hash) ? entry["total_size"].to_i : 0 }
+  end
+
+  def built_cellar
+    cellar
+  end
+
+  def compatible_locations?
+    true
+  end
+
+  def extname
+    ".bottle.tar.gz"
+  end
+
+  def url_encode
+    nil
+  end
+
+  def github_packages
+    nil
+  end
+
+  def tab_attributes
+    {}
+  end
+
+  def filename
+    nil
+  end
+
+  def to_str
+    root_url.to_s
+  end
+
+  def to_s
+    to_str
+  end
+
   def bottle_for_tag(tag)
     key = tag.to_s
     info = @files[key]
