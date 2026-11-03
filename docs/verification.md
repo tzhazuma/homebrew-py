@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-1137 passed, 5 skipped (local full suite, 2026-11-04 wave 10)
+1143 passed, 5 skipped (local full suite, 2026-11-04 wave 11)
 ```
 
 Breakdown of the feature slices:
@@ -1509,6 +1509,22 @@ The maintainer's close is a final scope decision; no further reopen attempts
 were made. The submitting human owns any future upstream communication and
 must not use AI to answer review comments.
 
+## Wave 11 completion batch (2026-11-04)
+
+- Full local suite: **1143 passed, 5 skipped** in ~134s.
+- Targeted slices:
+  - Ruby shim: 192 passed
+  - Superenv/source build: 53 passed
+  - CLI: 19 passed
+- Real install verification: `scripts/verify_real_install.py` passes with
+  Tab-compatible receipt fields + SBOM.
+- Wave 11 changes:
+  - Mach-O ad-hoc codesign after binary relocation, explicit symlink
+    retargeting, ELF `--remove-rpath`, stricter bwrap user/capability flags.
+  - Superenv mixed-language split API and bounded `-Wa,*` allow-list with
+    dropped-flag diagnostics.
+  - `doctor --linkage` and structured `linkage --json` diagnostics.
+
 ## Wave 10 completion batch (2026-11-04)
 
 - Full local suite: **1137 passed, 5 skipped** in ~135s.
@@ -1753,9 +1769,9 @@ edge cases), not missing method names in the audited core files.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `f5d17d3` (Wave 10 + CI sandbox-skip fix)
-- CI run for `f5d17d3`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41733115171>
+- Latest feature commit: `aa24aa4` (Wave 11 codesign/Superenv/doctor)
+- CI run for `aa24aa4`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41736864419>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success

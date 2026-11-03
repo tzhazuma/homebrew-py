@@ -6,7 +6,7 @@ claiming full parity with every file under `Library/Homebrew`.
 
 ## Current baseline
 
-- Full test suite: 1137 passed, 5 skipped (2026-11-04 full local suite, wave 10)
+- Full test suite: 1143 passed, 5 skipped (2026-11-04 full local suite, wave 11)
 - CI: Ubuntu 3.9 / 3.12 + macOS 3.12
 - Optional Ruby bridge remains opt-in; default parser behavior is unchanged.
 
@@ -17,7 +17,7 @@ claiming full parity with every file under `Library/Homebrew`.
 | Formulary source loader | Partial | `load_formula_from_path` evaluates a metadata-only `PybrewLoadedFormula`; path+mtime cache, stale reload, API-struct validation, local/channeled/remote API JSON (ETag/Last-Modified, bearer token, HS256 JWS), tap `Aliases/` plus bounded in-source `formula_alias`/`alias_name` scanning. No full multi-channel remote subsetting/embedded-key/RS256 |
 | Formulary class cache / reload semantics | Completed | Path+mtime class cache with flags/namespace keys, stale reload and `clear_cache` invalidation; covered by tests |
 | FormulaInstaller fetch/build/deps/link/cleanup | Partial | Loaded-source flow runs fetch/build/deps/link/clean/finish; Python installer has bottle manifest pre-validation/summary, source/build metadata + keg SBOM + Tab-compatible receipt fields (time/source_modified_time/compiler/arch/changed_files), formula-level/all-installed linkage reports, stale-link cleanup, hardlink handling and deterministic order. Bounded dyld/ld.so approximation |
-| Compiler selection / Superenv build env | Partial | PATH-based compiler probing, opt-in Superenv shims with flag/rpath sanitization, SDKROOT/xcrun + `-isysroot`, `PYBREW_ARCH`/ARCHFLAGS, `.c/.cc/.cpp/.m/.mm/.s/.S` dispatch, sanitized `-Wa,*`, mixed-language no forced `-x`, C/C++/OBJC/OBJCXX standards/wrappers. Still not full Homebrew Superenv |
+| Compiler selection / Superenv build env | Partial | PATH-based compiler probing, opt-in Superenv shims with flag/rpath sanitization, SDKROOT/xcrun/LDFLAGS, arch/ARCHFLAGS, source-extension dispatch, bounded `-Wa,*` allow-list + diagnostics, mixed-language split API/no forced `-x`, C/C++/OBJC/OBJCXX standards/wrappers. Still not full Homebrew Superenv |
 | Sandbox execution | Partial | Default stays safe no-sandbox; opt-in backend auto-detects `sandbox-exec`/`bwrap`, collects allow/deny rules and generates `allow default`/strict deny-default profiles or stricter bwrap bind/unshare-net args via `apply!`; missing backend fails clearly. No seccomp/capability hardening; roots/ops are hand-written |
 
 ## P1 — Cask and test DSL
@@ -37,7 +37,7 @@ claiming full parity with every file under `Library/Homebrew`.
 
 | Item | Status | Notes |
 | --- | --- | --- |
-| Keg internal path/link details | Partial | relative-path handling, optlink, `remove_old_aliases`, record/stale-link cleanup, all-installed linkage, text relocation and bounded Mach-O/ELF binary relocation via `install_name_tool`/`patchelf` (dry-run/report/fake-tool tests). No re-signing, symlink retargeting or ELF rpath deletion |
+| Keg internal path/link details | Partial | relative-path handling, optlink, alias/record cleanup, linkage, text relocation, Mach-O/ELF binary relocation (`install_name_tool`/`patchelf`), optional ad-hoc codesign, explicit symlink retargeting, ELF `--remove-rpath` and strict bwrap hardening. Fake-tool tests; no entitlements/custom identity/signature verification |
 | MacOS SDK/Xcode/CLT detection | Partial | env overrides (developer dir/SDK/Xcode/CLT versions) and Xcode detection bug fix; broad host detection remains best-effort |
 | Utils modules | Partial | `Utils::Path`/Git/Curl/Gzip/Tar/Zip/Cp/Popen/Bottles/Svn/Analytics/SPDX exist; GitHub has GraphQL transport, GraphQL-first repository/PR/commits/labels/files/reviews/team/sponsorship with cursor pagination (10 pages) and rate-limit fields, REST fallback and Enterprise base URL; Sandbox rules/profile generation is bounded |
 | SystemConfig host details | Partial | sections exist; host-specific output is minimal |

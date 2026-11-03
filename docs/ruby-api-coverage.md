@@ -58,8 +58,9 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
   `Utils::GitHub` read/write names are complete, with injectable REST and
   GraphQL transports; repository/PR/commits/labels/files/reviews/team/
   sponsorship have GraphQL-first mappings, 10-page cursor pagination,
-  rate-limit fields, Enterprise base URL and REST fallback; binary Keg
-  relocation and full GraphQL connection coverage remain bounded.
+  rate-limit fields, Enterprise base URL and REST fallback; Keg relocation
+  covers text/binary/codesign/symlink-retarget edges with fake-tool tests, and
+  full GraphQL connection coverage remains bounded.
 - Full `MacOS`/SDK/Xcode/CLT detection, `DevelopmentTools`, `SystemConfig`
   host details.
 - Services: Ruby evaluator now follows Homebrew opt/keg/global path semantics,
