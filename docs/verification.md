@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-780 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+782 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -898,6 +898,12 @@ local remote, commits a change, and confirms the CLI updates it.
   `#build=` compatibility accessors; `specs` returns stable/head and
   `spec_syms` matches.
 
+## Cask svn/hg strategies
+
+- `Downloader.fetch_vcs` checks out svn/hg URLs into the cache; cask
+  `using: :svn`/`:hg` installs artifacts from the checkout, with fake-VCS
+  tests for both strategies.
+
 ## Cask artifact article/config/sandbox helpers
 
 - Added `english_article`, `config`, `dirmethod`, `cask_sandbox`,
@@ -1422,9 +1428,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `543f9a7` (Cask artifact helpers)
-- CI run for `543f9a7`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41559336165>
+- Latest feature commit: `e7ae268` (Cask svn/hg strategies)
+- CI run for `e7ae268`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41559761702>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
