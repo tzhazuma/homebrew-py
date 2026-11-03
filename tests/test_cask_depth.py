@@ -1666,3 +1666,172 @@ def test_zap_refuses_home_directory(cask_env: SimpleNamespace) -> None:
     with pytest.raises(CaskError, match="refusing to zap unsafe path"):
         cask_env.installer.zap(cask)
     assert Path(home).exists()
+
+
+# ---------------------------------------------------------------------------
+# Wave 9: directory copy, chmod document/receipt, link edges
+# ---------------------------------------------------------------------------
+
+
+def test_generic_artifact_steps_directory_copy(
+    cask_env: SimpleNamespace,
+) -> None:
+    _write_steps_cask(
+        cask_env,
+        '  artifact "ignored", steps: [["copy", "tree", "nested/copied-tree"]]',
+        entries={
+            "tree/readme.txt": b"tree readme\n",
+            "tree/nested/keep.txt": b"keep\n",
+        },
+    )
+
+    result = cask_env.installer.install(cask_env.loader.load("steps"))
+
+    copied = cask_env.config.applications / "nested" / "copied-tree"
+    assert (copied / "readme.txt").read_text() == "tree readme\n"
+    assert (copied / "nested" / "keep.txt").read_text() == "keep\n"
+    assert result.artifacts == [str(copied)]
+
+    cask_env.installer.uninstall("steps")
+    assert not copied.exists()
+
+
+def test_generic_artifact_steps_chmod_does_not_track_receipt(
+    cask_env: SimpleNamespace,
+) -> None:
+    import os
+    import stat as stat_module
+
+    preexisting = cask_env.config.prefix / "share" / "pre.txt"
+    preexisting.parent.mkdir(parents=True, exist_ok=True)
+    preexisting.write_text("preexisting\n", encoding="utf-8")
+    _write_steps_cask(
+        cask_env,
+        (
+            '  artifact "ignored", dirmethod: :prefix, steps: ['
+            '["chmod", "600", "share/pre.txt"]]'
+        ),
+    )
+
+    cask_env.installer.install(cask_env.loader.load("steps"))
+
+    assert stat_module.S_IMODE(os.stat(preexisting).st_mode) == 0o600
+    cask_env.installer.uninstall("steps")
+    # chmod is a modification, not a receipt-tracked installed path.
+    assert preexisting.is_file()
+
+
+def test_generic_artifact_steps_symlink_directory(
+    cask_env: SimpleNamespace,
+) -> None:
+    _write_steps_cask(
+        cask_env,
+        (
+            '  artifact "ignored", steps: ['
+            '["mkdir", "real-dir"], '
+            '["symlink", "real-dir", "alias-dir"]]'
+        ),
+    )
+
+    cask_env.installer.install(cask_env.loader.load("steps"))
+
+    alias = cask_env.config.applications / "alias-dir"
+    assert alias.is_symlink()
+    assert alias.is_dir()
+
+
+def test_generic_artifact_steps_hardlink_rejects_symlink_source(
+    cask_env: SimpleNamespace,
+) -> None:
+    staging = cask_env.tmp_path / "staging"
+    staging.mkdir()
+    real = staging / "real.txt"
+    real.write_text("payload\n", encoding="utf-8")
+    (staging / "link.txt").symlink_to(real)
+    cask = parse_cask_source('cask "unit" do\n  version "1.0"\nend\n')
+
+    with pytest.raises(CaskError, match="must be a file"):
+        cask_env.installer._plan_generic_step(
+            cask,
+            cask_env.config.applications,
+            staging,
+            ["hardlink", "link.txt", "out.txt"],
+        )
+
+
+def test_generic_artifact_steps_unknown_op_suggests(
+    cask_env: SimpleNamespace,
+) -> None:
+    _write_steps_cask(
+        cask_env, '  artifact "ignored", steps: [["cpy", "x"]]'
+    )
+
+    with pytest.raises(CaskError, match="did you mean 'copy'"):
+        cask_env.installer.install(cask_env.loader.load("steps"))
+
+
+def test_generic_artifact_steps_execution_failure_rolls_back_all(
+    cask_env: SimpleNamespace,
+) -> None:
+    _write_steps_cask(
+        cask_env,
+        (
+            '  artifact "ignored", steps: ['
+            '["mkdir", "rollback-dir"], '
+            '["copy", "files/app.txt", "rollback-dir/app.txt"], '
+            '["chmod", "644", "rollback-dir/missing.txt"]]'
+        ),
+    )
+
+    with pytest.raises(
+        CaskError, match="must be an existing non-symlink path"
+    ):
+        cask_env.installer.install(cask_env.loader.load("steps"))
+    assert not (cask_env.config.applications / "rollback-dir").exists()
+
+
+# ---------------------------------------------------------------------------
+# Wave 9: suite regular-file target and recursive zap
+# ---------------------------------------------------------------------------
+
+
+def test_uninstall_suite_regular_file_target(cask_env: SimpleNamespace) -> None:
+    archive = cask_env.tmp_path / "Suite-1.0.zip"
+    digest = _make_zip(
+        archive, {"Suite Folder/App1.app/Contents/Info.plist": b"<plist/>"}
+    )
+    _write_cask(
+        cask_env.tap,
+        "suite",
+        "1.0",
+        digest,
+        archive,
+        artifacts='  suite "Suite Folder", target: "Replaced Suite"',
+    )
+    cask_env.installer.install(cask_env.loader.load("suite"))
+    path = cask_env.config.applications / "Replaced Suite"
+    import shutil
+
+    shutil.rmtree(path)
+    path.write_text("user file\n", encoding="utf-8")
+
+    cask_env.installer.uninstall("suite")
+
+    assert not path.exists()
+
+
+def test_zap_removes_directory_recursively(
+    cask_env: SimpleNamespace,
+) -> None:
+    cask = parse_cask_source('cask "zappy" do\n  version "1.0"\nend\n')
+    tree = cask_env.config.prefix / "zap-tree"
+    nested = tree / "nested"
+    nested.mkdir(parents=True)
+    keep = nested / "keep.txt"
+    keep.write_text("remove", encoding="utf-8")
+    cask.zap = [str(tree)]
+
+    removed = cask_env.installer.zap(cask)
+
+    assert removed == [tree]
+    assert not tree.exists()

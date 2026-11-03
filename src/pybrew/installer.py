@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Optional
@@ -1944,6 +1945,13 @@ class Installer:
                 )
 
         sbom = build_keg_sbom(keg)
+        build_metadata = _build_metadata(
+            options, from_bottle, bottle_tag, self.environment
+        )
+        compiler = (
+            build_metadata.get("environment", {}).get("PYBREW_CC")
+            or build_metadata.get("environment", {}).get("CC")
+        )
         write_receipt(
             keg,
             formula,
@@ -1954,9 +1962,16 @@ class Installer:
             ),
             sbom=sbom,
             source_metadata=_source_metadata(formula, options),
-            build_metadata=_build_metadata(
-                options, from_bottle, bottle_tag, self.environment
+            build_metadata=build_metadata,
+            installed_time=int(time.time()),
+            source_modified_time=(
+                int(formula.path.stat().st_mtime)
+                if formula.path is not None and formula.path.exists()
+                else None
             ),
+            compiler=compiler,
+            arch=platform.machine(),
+            changed_files=[],
         )
         linked = False
         if options.link:

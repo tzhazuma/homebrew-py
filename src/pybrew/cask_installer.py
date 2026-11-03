@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import glob
 import inspect
 import json
@@ -1870,9 +1871,12 @@ class CaskInstaller:
         ``["symlink", relative_link_target, target]`` (``link`` is an alias),
         and ``["chmod", octal_mode, target]``.  Targets are relative to the
         artifact's dirmethod base (absolute targets must stay inside it);
-        symlink targets must be relative and stay inside the base.  All
+        symlink targets must be relative and stay inside the base.  ``copy``
+        handles files and whole directories (``copytree``).  All
         structural/source/target validation happens before anything is
-        installed; chmod existence is checked when that step executes.
+        installed; chmod existence is checked when that step executes and
+        chmod-affected paths are deliberately not added to the receipt (they
+        are modifications, not newly installed paths).
         """
 
         if not isinstance(step, (list, tuple)) or len(step) < 2:
@@ -1905,10 +1909,13 @@ class CaskInstaller:
                     f"{cask.token}: generic artifact {op} source "
                     f"{step[1]!r} not found"
                 )
-            if op == "hardlink" and source.is_dir():
+            if op == "hardlink" and (
+                source.is_dir() or source.is_symlink()
+            ):
                 raise CaskError(
                     f"{cask.token}: generic artifact hardlink source "
-                    f"{step[1]!r} must be a file"
+                    f"{step[1]!r} must be a file (not a directory or "
+                    "symlink)"
                 )
             return {
                 "op": op,
@@ -2001,10 +2008,24 @@ class CaskInstaller:
                     cask, base_dir, step[2]
                 ),
             }
+        supported = [
+            "mkdir",
+            "copy",
+            "move",
+            "hardlink",
+            "symlink",
+            "link",
+            "chmod",
+        ]
+        suggestion = difflib.get_close_matches(op, supported, n=1)
+        hint = (
+            f"; did you mean {suggestion[0]!r}?"
+            if suggestion
+            else ""
+        )
         raise CaskError(
-            f"{cask.token}: unsupported generic artifact step {op!r}; "
-            "supported steps: mkdir, copy, move, hardlink, symlink/link, "
-            "chmod"
+            f"{cask.token}: unsupported generic artifact step {op!r}"
+            f"{hint}; supported steps: {', '.join(supported)}"
         )
 
     def _install_generic_artifact_steps(
@@ -2069,6 +2090,9 @@ class CaskInstaller:
                 elif op == "copy":
                     source = Path(item["source"])
                     if source.is_dir():
+                        destination.parent.mkdir(
+                            parents=True, exist_ok=True
+                        )
                         shutil.copytree(source, destination, symlinks=True)
                     else:
                         destination.parent.mkdir(

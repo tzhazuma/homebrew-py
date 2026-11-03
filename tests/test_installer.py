@@ -1683,3 +1683,28 @@ def test_check_linkage_macho_rpath_stack_uses_later_entries(
 
     assert report.checked == 1
     assert report.issues == []
+
+
+def test_write_receipt_tab_compatible_fields(tmp_path: Path) -> None:
+    keg = tmp_path / "Cellar" / "tab-fixture" / "1.0"
+    keg.mkdir(parents=True)
+    source = tmp_path / "tab-fixture.rb"
+    source.write_text("class TabFixture < Formula; end\n", encoding="utf-8")
+    formula = Formula(name="tab-fixture", version="1.0")
+    formula.path = source
+    write_receipt(
+        keg,
+        formula,
+        poured_from_bottle=False,
+        installed_time=1234,
+        source_modified_time=5678,
+        compiler="clang",
+        arch="arm64",
+        changed_files=["bin/tool"],
+    )
+    receipt = read_receipt(keg)
+    assert receipt["time"] == 1234
+    assert receipt["source_modified_time"] == 5678
+    assert receipt["compiler"] == "clang"
+    assert receipt["arch"] == "arm64"
+    assert receipt["changed_files"] == ["bin/tool"]

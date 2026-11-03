@@ -184,11 +184,36 @@ class Token:
             return NotImplemented
         if type(self) is NullToken or type(other) is NullToken:
             return self._compare_null(other)
-        if self.group != other.group:
-            return -1 if self.group < other.group else 1
-        if self.rank != other.rank:
-            return -1 if self.rank < other.rank else 1
-        return _compare_token_values(self, other)
+        if type(self) is NumericToken or type(other) is NumericToken:
+            if type(self) is NumericToken and type(other) is NumericToken:
+                return (self.value > other.value) - (self.value < other.value)
+            return 1 if type(self) is NumericToken else -1
+
+        self_pre = isinstance(self, PreReleaseToken)
+        other_pre = isinstance(other, PreReleaseToken)
+        if self_pre and other_pre:
+            if self.rank != other.rank:
+                return -1 if self.rank < other.rank else 1
+            return _compare_token_values(self, other)
+        if self_pre:
+            # Homebrew's Pre/Alpha/Beta/Rc tokens compare lexically against
+            # unknown letters but sort before P/Post.
+            if isinstance(other, (PToken, PostToken)):
+                return -1
+            return _compare_token_text(self, other)
+        if other_pre:
+            if isinstance(self, (PToken, PostToken)):
+                return 1
+            return _compare_token_text(self, other)
+
+        if isinstance(self, PostToken) or isinstance(other, PostToken):
+            if isinstance(self, PostToken) and isinstance(other, PostToken):
+                return (self.revision > other.revision) - (self.revision < other.revision)
+            return -1 if isinstance(self, PostToken) else 1
+        if isinstance(self, PToken) and isinstance(other, PToken):
+            return (self.revision > other.revision) - (self.revision < other.revision)
+        # P vs Letter and Letter vs Letter are lexical (Homebrew StringToken).
+        return _compare_token_text(self, other)
 
     def _compare_null(self, other: "Token") -> int:
         if type(self) is NullToken and type(other) is NullToken:
@@ -215,23 +240,25 @@ class Token:
         return self.compare(other) < 0
 
     def __hash__(self) -> int:
+        # Equal tokens must hash equally: Null == NumericToken(0), and
+        # revision-0 tokens compare equal to their raw text form.
         if type(self) is NullToken:
-            return hash(("numeric", 0, 0))
+            return hash(0)
         if type(self) is NumericToken:
-            return hash(("numeric", self.value, 0))
-        return hash((self.class_name, self.value, self.revision))
+            return hash(self.value)
+        return hash(self.to_s())
 
 
 def _compare_token_values(left: Token, right: Token) -> int:
-    left_value = left.value
-    right_value = right.value
-    if isinstance(left_value, int) and isinstance(right_value, int):
-        return (left_value > right_value) - (left_value < right_value)
-    left_text = str(left_value)
-    right_text = str(right_value)
-    if left_text != right_text:
-        return -1 if left_text < right_text else 1
+    """Compare same-class pre-release tokens by numeric revision."""
+
     return (left.revision > right.revision) - (left.revision < right.revision)
+
+
+def _compare_token_text(left: Token, right: Token) -> int:
+    left_text = left.to_s()
+    right_text = right.to_s()
+    return (left_text > right_text) - (left_text < right_text)
 
 
 class NumericToken(Token):

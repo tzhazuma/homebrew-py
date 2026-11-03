@@ -2507,8 +2507,20 @@ def test_dsl_version_matches_python_token_semantics(tmp_path: Path) -> None:
   assert Version::BetaToken.new("beta") < Version::PreToken.new("pre")
   assert Version::PreToken.new("pre") < Version::RcToken.new("rc1")
   assert Version::RcToken.new("rc1") < Version::PToken.new("p1")
-  assert Version::PToken.new("p1") < Version::PostToken.new("post1")
+  assert Version::PostToken.new("post1") < Version::PToken.new("p1")
   assert Version::PostToken.new("post1") < Version::LetterToken.new("foo")
+  assert Version::PToken.new("p1") > Version::LetterToken.new("foo")
+  assert Version::PToken.new("p1") < Version::LetterToken.new("zoo")
+  assert Version::PreToken.new("pre") > Version::LetterToken.new("foo")
+  assert Version::AlphaToken.new("alpha") < Version::LetterToken.new("foo")
+  assert Version::RcToken.new("rc1") > Version::LetterToken.new("foo")
+  assert Version.new("1.0-preview") == Version.new("1.0-pre")
+  assert_equal ["numeric", "numeric", "pre"], Version.new("1.0-preview").token_classes
+  assert Version::AlphaToken.new("alpha", 0) == Version::AlphaToken.new("alpha")
+  assert_equal Version::AlphaToken.new("alpha", 0).hash,
+               Version::AlphaToken.new("alpha").hash
+  assert Version::PToken.new("p", 0) == Version::LetterToken.new("p")
+  assert_equal Version::PToken.new("p", 0).hash, Version::LetterToken.new("p").hash
   assert Version::NullToken.new == Version::NumericToken.new(0)
   assert Version::NullToken.new < Version::NumericToken.new(1)
   assert Version::NullToken.new > Version::AlphaToken.new("alpha")
@@ -2528,7 +2540,7 @@ def test_dsl_version_matches_python_token_semantics(tmp_path: Path) -> None:
   assert_equal 2, PkgVersion.parse("1.0-alpha_2").revision
   assert PkgVersion.parse("1.0-alpha_2").pre_release?
   assert Version.new("1.0-beta2") < Version.new("1.0-beta10")
-  assert Version.new("1.0-post1") > Version.new("1.0-p1")
+  assert Version.new("1.0-post1") < Version.new("1.0-p1")
   assert_equal 0, Version.new("1.0") <=> PkgVersion.parse("1.0_0")
   refute_equal Version.new("1.0"), PkgVersion.parse("1.0_2")
   assert_equal ["numeric", "numeric", "alpha"], Version.new("1.0-alpha2").token_classes

@@ -110,6 +110,9 @@ def main() -> int:
         assert receipt["build"]["from_bottle"] is False, receipt
         assert receipt["sbom"]["file_count"] >= 1, receipt
         assert any(item["path"] == "bin/hello.sh" for item in receipt["sbom"]["files"])
+        assert receipt["time"] > 0, receipt
+        assert receipt["source_modified_time"] > 0, receipt
+        assert receipt["arch"], receipt
         run = subprocess.run([str(binary)], text=True, capture_output=True)
         assert run.stdout.strip() == "hello-from-pybrew", run
         print("installed:", keg)

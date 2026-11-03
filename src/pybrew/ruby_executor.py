@@ -7097,6 +7097,121 @@ class Keg
     !!@require_relocation
   end
 
+  def relocation_repository_path
+    defined?(HOMEBREW_REPOSITORY) ? HOMEBREW_REPOSITORY : HOMEBREW_PREFIX
+  end
+
+  def relocation_placeholder_pairs
+    {
+      HOMEBREW_PREFIX.to_s => "@@HOMEBREW_PREFIX@@",
+      HOMEBREW_CELLAR.to_s => "@@HOMEBREW_CELLAR@@",
+      relocation_repository_path.to_s => "@@HOMEBREW_REPOSITORY@@",
+    }
+  end
+
+  def relocation_mapping(replacements = {})
+    mapping = {}
+    if replacements.is_a?(Hash)
+      replacements.each { |from, to| mapping[from.to_s] = to.to_s }
+    end
+    if mapping.empty?
+      relocation_placeholder_pairs.each { |from, to| mapping[from] = to }
+    end
+    mapping
+  end
+
+  def relocation_text_files(files = nil)
+    entries = if files.nil?
+      Dir.glob((@path/"**/*").to_s, File::FNM_DOTMATCH)
+    else
+      Array(files).map(&:to_s)
+    end
+    entries.map { |entry| Pathname.new(entry) }.select do |path|
+      next false if path.symlink?
+      next false unless path.file?
+      next false if path.to_s.include?("/.git/")
+      next false if path.size > 5 * 1024 * 1024
+      next false if %w[
+        .o .a .so .dylib .pyc .pyo .class .jar .png .jpg .jpeg .gif .zip
+        .gz .bz2 .xz .tar .pdf
+      ].include?(path.extname.downcase)
+
+      true
+    end
+  end
+
+  def relocation_text_file?(path)
+    data = path.binread
+    return false if data.include?("\0")
+
+    data.dup.force_encoding(Encoding::UTF_8).valid_encoding?
+  rescue ScriptError, StandardError
+    false
+  end
+
+  def relocation_report(replacements = {}, files: nil)
+    mapping = relocation_mapping(replacements)
+    details = {}
+    relocation_text_files(files).each do |path|
+      next unless relocation_text_file?(path)
+
+      text = path.binread
+      count = mapping.keys.reject(&:empty?).reduce(0) do |sum, from|
+        sum + text.scan(from).length
+      end
+      details[path.to_s] = count if count > 0
+    end
+    {
+      "files" => details.keys,
+      "matches" => details.values.reduce(0, :+),
+      "details" => details,
+      "dry_run" => true,
+    }
+  end
+
+  def relocate(replacements = {}, dry_run: false, files: nil)
+    mapping = relocation_mapping(replacements)
+    changed = []
+    replacements_count = 0
+    relocation_text_files(files).each do |path|
+      next unless relocation_text_file?(path)
+
+      original = path.binread
+      text = original
+      mapping.sort_by { |from, _to| -from.length }.each do |from, to|
+        next if from.empty?
+
+        text = text.gsub(from, to)
+      end
+      next if text == original
+
+      replacements_count += mapping.keys.reject(&:empty?).reduce(0) do |sum, from|
+        sum + original.scan(from).length
+      end
+      changed << path.to_s
+      path.binwrite(text) unless dry_run
+    end
+    {
+      "files" => changed,
+      "replacements" => replacements_count,
+      "dry_run" => !!dry_run,
+    }
+  end
+
+  def relocate_text_files(replacements = {}, dry_run: false, files: nil)
+    relocate(replacements, dry_run: dry_run, files: files)
+  end
+
+  def relocate_to_placeholders(dry_run: false, files: nil)
+    relocate({}, dry_run: dry_run, files: files)
+  end
+
+  def relocate_from_placeholders(dry_run: false, files: nil)
+    mapping = {}
+    relocation_placeholder_pairs.each { |from, to| mapping[to] = from }
+    relocate(mapping, dry_run: dry_run, files: files)
+  end
+
   def prepare_debug_symbols
     nil
   end
@@ -10332,9 +10447,28 @@ module Utils
       value.empty? ? nil : value
     end
 
+    def api_url
+      raw = ENV["PYBREW_GITHUB_API_URL"].to_s.strip
+      raw.empty? ? API_URL : raw.chomp("/")
+    end
+
+    def graphql_url
+      explicit = ENV["PYBREW_GITHUB_GRAPHQL_URL"].to_s.strip
+      return explicit unless explicit.empty?
+
+      base = api_url
+      return GRAPHQL_URL if base == API_URL
+
+      if base.end_with?("/api/v3")
+        "#{base.sub(%r{/api/v3\z}, "")}/api/graphql"
+      else
+        "#{base}/graphql"
+      end
+    end
+
     def url_to(*subroutes)
       parts = subroutes.flatten.compact.map(&:to_s).reject(&:empty?)
-      ([API_URL] + parts).join("/")
+      ([api_url] + parts).join("/")
     end
 
     def search_query_string(*main_params, **qualifiers)
@@ -10648,19 +10782,43 @@ module Utils
                  "-H", "Content-Type: application/json"]
       token_value = token
       command += ["-H", "Authorization: bearer #{token_value}"] unless token_value.to_s.empty?
-      command += ["--data", payload, GRAPHQL_URL]
+      command += ["--data", payload, graphql_url]
       output = Utils.popen_read(*command, safe: true).to_s
       begin
         JSON.parse(output)
       rescue ScriptError, StandardError => error
         raise PybrewGitHubGraphqlError,
-              "malformed GraphQL JSON from #{GRAPHQL_URL}: #{error.class}: #{error.message}"
+              "malformed GraphQL JSON from #{graphql_url}: #{error.class}: #{error.message}"
       end
     rescue PybrewGitHubGraphqlError
       raise
     rescue ScriptError, StandardError => error
       raise PybrewGitHubGraphqlError,
             "GitHub GraphQL transport failed: #{error.class}: #{error.message}"
+    end
+
+    def record_graphql_rate_limit(data)
+      rate = data.is_a?(Hash) ? data["rateLimit"] : nil
+      return nil unless rate.is_a?(Hash)
+
+      @graphql_rate_limit = {
+        "remaining" => rate["remaining"],
+        "reset_at" => rate["resetAt"],
+        "cost" => rate["cost"],
+      }
+      nil
+    end
+
+    def graphql_rate_limit
+      @graphql_rate_limit
+    end
+
+    def graphql_rate_limit_remaining
+      @graphql_rate_limit.nil? ? nil : @graphql_rate_limit["remaining"]
+    end
+
+    def graphql_pagination_truncated?
+      !!@graphql_pagination_truncated
     end
 
     def graphql_data(query, variables = {})
@@ -10679,12 +10837,43 @@ module Utils
       unless data.is_a?(Hash) && !data.empty?
         raise PybrewGitHubGraphqlError, "GitHub GraphQL response contained no data"
       end
+      record_graphql_rate_limit(data)
       data
+    end
+
+    # Walk GraphQL cursor pagination (pageInfo.hasNextPage/endCursor), stopping
+    # after max_pages.  The returned nodes are concatenated in page order.
+    def graphql_paginated_nodes(query, variables, data_path, max_pages: 10)
+      nodes = []
+      after = nil
+      pages = 0
+      @graphql_pagination_truncated = false
+      loop do
+        vars = (variables || {}).dup
+        vars["after"] = after unless after.nil?
+        data = graphql_data(query, vars)
+        container = Array(data_path).reduce(data) do |memo, key|
+          memo.is_a?(Hash) ? memo[key] : nil
+        end
+        nodes.concat(Array(container.is_a?(Hash) ? container["nodes"] : nil))
+        page_info = container.is_a?(Hash) ? container["pageInfo"] : nil
+        pages += 1
+        break unless page_info.is_a?(Hash) && page_info["hasNextPage"]
+
+        if pages >= max_pages
+          @graphql_pagination_truncated = true
+          break
+        end
+        after = page_info["endCursor"]
+        break if after.nil? || after.to_s.empty?
+      end
+      nodes
     end
 
     def graphql_repository(user, repo)
       data = graphql_data(<<~GRAPHQL, { "owner" => user.to_s, "name" => repo.to_s })
         query($owner: String!, $name: String!) {
+          rateLimit { remaining resetAt cost }
           repository(owner: $owner, name: $name) {
             name description homepageUrl isPrivate
             licenseInfo { spdxId }
@@ -10717,16 +10906,18 @@ module Utils
       return [] if owner.nil? || repo.nil?
 
       states = state.nil? ? nil : [state.to_s.upcase]
-      data = graphql_data(<<~GRAPHQL, { "owner" => owner, "name" => repo, "states" => states })
-        query($owner: String!, $name: String!, $states: [PullRequestState!]) {
+      nodes = graphql_paginated_nodes(<<~GRAPHQL, { "owner" => owner, "name" => repo, "states" => states },
+        query($owner: String!, $name: String!, $states: [PullRequestState!], $after: String) {
+          rateLimit { remaining resetAt cost }
           repository(owner: $owner, name: $name) {
-            pullRequests(first: 100, states: $states, orderBy: { field: UPDATED_AT, direction: DESC }) {
+            pullRequests(first: 100, states: $states, after: $after, orderBy: { field: UPDATED_AT, direction: DESC }) {
+              pageInfo { hasNextPage endCursor }
               nodes { number title url state }
             }
           }
         }
       GRAPHQL
-      nodes = data.dig("repository", "pullRequests", "nodes")
+        ["repository", "pullRequests"])
       regex = pull_request_title_regex(name, version)
       Array(nodes).select do |pr|
         pr.is_a?(Hash) && pr["url"].to_s.include?("/pull/") && regex.match?(pr["title"].to_s)
@@ -10741,17 +10932,21 @@ module Utils
     end
 
     def graphql_pull_request_commits(user, repo, pull_request)
-      data = graphql_data(<<~GRAPHQL,
-        query($owner: String!, $name: String!, $number: Int!) {
+      nodes = graphql_paginated_nodes(<<~GRAPHQL,
+        query($owner: String!, $name: String!, $number: Int!, $after: String) {
+          rateLimit { remaining resetAt cost }
           repository(owner: $owner, name: $name) {
             pullRequest(number: $number) {
-              commits(first: 100) { nodes { oid messageHeadline } }
+              commits(first: 100, after: $after) {
+                pageInfo { hasNextPage endCursor }
+                nodes { oid messageHeadline }
+              }
             }
           }
         }
       GRAPHQL
-        { "owner" => user.to_s, "name" => repo.to_s, "number" => pull_request.to_i })
-      nodes = data.dig("repository", "pullRequest", "commits", "nodes")
+        { "owner" => user.to_s, "name" => repo.to_s, "number" => pull_request.to_i },
+        ["repository", "pullRequest", "commits"])
       Array(nodes).map do |commit|
         {
           "sha" => commit["oid"],
@@ -10761,17 +10956,21 @@ module Utils
     end
 
     def graphql_pull_request_labels(user, repo, pull_request)
-      data = graphql_data(<<~GRAPHQL,
-        query($owner: String!, $name: String!, $number: Int!) {
+      nodes = graphql_paginated_nodes(<<~GRAPHQL,
+        query($owner: String!, $name: String!, $number: Int!, $after: String) {
+          rateLimit { remaining resetAt cost }
           repository(owner: $owner, name: $name) {
             pullRequest(number: $number) {
-              labels(first: 100) { nodes { name } }
+              labels(first: 100, after: $after) {
+                pageInfo { hasNextPage endCursor }
+                nodes { name }
+              }
             }
           }
         }
       GRAPHQL
-        { "owner" => user.to_s, "name" => repo.to_s, "number" => pull_request.to_i })
-      nodes = data.dig("repository", "pullRequest", "labels", "nodes")
+        { "owner" => user.to_s, "name" => repo.to_s, "number" => pull_request.to_i },
+        ["repository", "pullRequest", "labels"])
       Array(nodes).map { |label| { "name" => label["name"] } }
     end
 
@@ -10779,34 +10978,40 @@ module Utils
       owner, repo = tap_remote_repo.to_s.split("/", 2)
       return [] if owner.nil? || repo.nil?
 
-      data = graphql_data(<<~GRAPHQL,
-        query($owner: String!, $name: String!, $number: Int!) {
+      nodes = graphql_paginated_nodes(<<~GRAPHQL,
+        query($owner: String!, $name: String!, $number: Int!, $after: String) {
+          rateLimit { remaining resetAt cost }
           repository(owner: $owner, name: $name) {
             pullRequest(number: $number) {
-              files(first: 100) { nodes { path } }
+              files(first: 100, after: $after) {
+                pageInfo { hasNextPage endCursor }
+                nodes { path }
+              }
             }
           }
         }
       GRAPHQL
-        { "owner" => owner, "name" => repo, "number" => pull_request.to_i })
-      nodes = data.dig("repository", "pullRequest", "files", "nodes")
+        { "owner" => owner, "name" => repo, "number" => pull_request.to_i },
+        ["repository", "pullRequest", "files"])
       Array(nodes).map { |file| { "filename" => file["path"] } }
     end
 
     def graphql_repository_approved_reviews(user, repo, pull_request, commit: nil)
-      data = graphql_data(<<~GRAPHQL,
-        query($owner: String!, $name: String!, $number: Int!) {
+      nodes = graphql_paginated_nodes(<<~GRAPHQL,
+        query($owner: String!, $name: String!, $number: Int!, $after: String) {
+          rateLimit { remaining resetAt cost }
           repository(owner: $owner, name: $name) {
             pullRequest(number: $number) {
-              reviews(first: 100) {
+              reviews(first: 100, after: $after) {
+                pageInfo { hasNextPage endCursor }
                 nodes { state authorAssociation author { login } commit { oid } }
               }
             }
           }
         }
       GRAPHQL
-        { "owner" => user.to_s, "name" => repo.to_s, "number" => pull_request.to_i })
-      nodes = data.dig("repository", "pullRequest", "reviews", "nodes")
+        { "owner" => user.to_s, "name" => repo.to_s, "number" => pull_request.to_i },
+        ["repository", "pullRequest", "reviews"])
       result = []
       Array(nodes).each do |review|
         next unless review.is_a?(Hash) && review["state"].to_s == "APPROVED"
@@ -10822,30 +11027,38 @@ module Utils
     end
 
     def graphql_members_by_team(org, team)
-      data = graphql_data(<<~GRAPHQL, { "org" => org.to_s, "team" => team.to_s })
-        query($org: String!, $team: String!) {
+      nodes = graphql_paginated_nodes(<<~GRAPHQL, { "org" => org.to_s, "team" => team.to_s },
+        query($org: String!, $team: String!, $after: String) {
+          rateLimit { remaining resetAt cost }
           organization(login: $org) {
             team(slug: $team) {
-              members(first: 100) { nodes { login } }
+              members(first: 100, after: $after) {
+                pageInfo { hasNextPage endCursor }
+                nodes { login }
+              }
             }
           }
         }
       GRAPHQL
-      nodes = data.dig("organization", "team", "members", "nodes")
+        ["organization", "team", "members"])
       Array(nodes).map { |member| { "login" => member["login"] } }
     end
 
     def graphql_sponsorship_tiers(user)
-      data = graphql_data(<<~GRAPHQL, { "login" => user.to_s })
-        query($login: String!) {
+      nodes = graphql_paginated_nodes(<<~GRAPHQL, { "login" => user.to_s },
+        query($login: String!, $after: String) {
+          rateLimit { remaining resetAt cost }
           user(login: $login) {
             sponsorsListing {
-              tiers(first: 100) { nodes { name monthlyPriceInCents } }
+              tiers(first: 100, after: $after) {
+                pageInfo { hasNextPage endCursor }
+                nodes { name monthlyPriceInCents }
+              }
             }
           }
         }
       GRAPHQL
-      nodes = data.dig("user", "sponsorsListing", "tiers", "nodes")
+        ["user", "sponsorsListing", "tiers"])
       Array(nodes).map do |tier|
         {
           "name" => tier["name"],

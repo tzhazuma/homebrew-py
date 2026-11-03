@@ -7713,3 +7713,135 @@ def test_formulary_tap_source_alias_declarations(
         "true",
         "true",
     ]
+
+
+def test_keg_relocation_paths_and_placeholders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    keg = _run_raw_body(
+        tmp_path,
+        """
+keg_path = prefix
+(keg_path/"bin").mkpath
+text_file = keg_path/"bin"/"tool"
+text_file.write "prefix=#{HOMEBREW_PREFIX}\\nplain\\n"
+binary = keg_path/"bin"/"blob.bin"
+binary.binwrite "prefix=\\0#{HOMEBREW_PREFIX}"
+outside = Pathname.new(Dir.tmpdir)/"pybrew-reloc-outside-#{Process.pid}.txt"
+outside.write "prefix=#{HOMEBREW_PREFIX}"
+link = keg_path/"bin"/"linked"
+link.make_symlink(outside) unless link.symlink?
+keg = Keg.new(keg_path)
+mapping = { HOMEBREW_PREFIX.to_s => "@@HOMEBREW_PREFIX@@" }
+report = keg.relocation_report(mapping)
+dry = keg.relocate(mapping, dry_run: true)
+dry_text = text_file.read
+real = keg.relocate(mapping)
+real_text = text_file.read
+round_file = keg_path/"bin"/"round"
+round_file.write "cellar=#{HOMEBREW_CELLAR}"
+keg.relocate_to_placeholders(files: [round_file])
+placeholder_text = round_file.read
+keg.relocate_from_placeholders(files: [round_file])
+restored_text = round_file.read
+(prefix/"relocation.txt").write [
+  report["files"].length.to_s, report["matches"].to_s,
+  dry["dry_run"].to_s, dry_text.include?("@@HOMEBREW_PREFIX@@").to_s,
+  real["replacements"].to_s, real_text.include?("@@HOMEBREW_PREFIX@@").to_s,
+  real_text.include?("plain").to_s,
+  placeholder_text.include?("@@HOMEBREW_CELLAR@@").to_s,
+  restored_text.include?(HOMEBREW_CELLAR.to_s).to_s,
+  outside.read.include?("@@HOMEBREW_PREFIX@@").to_s,
+  outside.delete.to_s
+].join("\\n")
+""",
+        name="ruby-keg-relocation",
+    )
+    assert (keg / "relocation.txt").read_text().splitlines() == [
+        "1",
+        "1",
+        "true",
+        "false",
+        "1",
+        "true",
+        "true",
+        "true",
+        "true",
+        "false",
+        "1",
+    ]
+
+
+def test_utils_github_graphql_pagination_rate_limit_enterprise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    paginated_argv = tmp_path / "paginated-argv.txt"
+    paginated = tmp_path / "paginated-graphql-curl"
+    paginated.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' \"$@\" > \"" + str(paginated_argv) + "\"\n"
+        "url=\"\"\n"
+        "payload=\"\"\n"
+        "prev=\"\"\n"
+        "for arg in \"$@\"; do\n"
+        "  case \"$arg\" in http*) url=\"$arg\" ;; esac\n"
+        "  if [ \"$prev\" = \"--data\" ]; then payload=\"$arg\"; fi\n"
+        "  prev=\"$arg\"\n"
+        "done\n"
+        "case \"$payload\" in\n"
+        "  *'\"after\":\"c1\"'*) printf '%s' '{\"data\":{\"rateLimit\":{\"remaining\":42,\"resetAt\":\"2026-01-01T00:00:00Z\",\"cost\":1},\"repository\":{\"pullRequests\":{\"pageInfo\":{\"hasNextPage\":false,\"endCursor\":null},\"nodes\":[{\"number\":8,\"title\":\"foo: update two\",\"url\":\"https://github.com/homebrew/foo/pull/8\",\"state\":\"OPEN\"}]}}}}' ;;\n"
+        "  *) printf '%s' '{\"data\":{\"rateLimit\":{\"remaining\":42,\"resetAt\":\"2026-01-01T00:00:00Z\",\"cost\":1},\"repository\":{\"pullRequests\":{\"pageInfo\":{\"hasNextPage\":true,\"endCursor\":\"c1\"},\"nodes\":[{\"number\":7,\"title\":\"foo: update one\",\"url\":\"https://github.com/homebrew/foo/pull/7\",\"state\":\"OPEN\"}]}}}}' ;;\n"
+        "esac\n"
+    )
+    paginated.chmod(0o755)
+    enterprise_argv = tmp_path / "enterprise-argv.txt"
+    enterprise = tmp_path / "enterprise-graphql-curl"
+    enterprise.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' \"$@\" > \"" + str(enterprise_argv) + "\"\n"
+        "printf '%s' '{\"data\":{\"viewer\":{\"login\":\"octo\"}}}'\n"
+    )
+    enterprise.chmod(0o755)
+    endless = tmp_path / "endless-graphql-curl"
+    endless.write_text(
+        "#!/bin/sh\n"
+        "printf '%s' '{\"data\":{\"rateLimit\":{\"remaining\":9},\"repository\":{\"pullRequests\":{\"pageInfo\":{\"hasNextPage\":true,\"endCursor\":\"same\"},\"nodes\":[{\"number\":1,\"title\":\"foo: endless\",\"url\":\"https://github.com/homebrew/foo/pull/1\",\"state\":\"OPEN\"}]}}}}'\n"
+    )
+    endless.chmod(0o755)
+    monkeypatch.setenv("PYBREW_GITHUB_CURL", str(paginated))
+    formula = _formula(
+        "ruby-graphql-pagination",
+        "1.0",
+        (
+            '  prs = Utils::GitHub.graphql_fetch_pull_requests("foo", "homebrew/foo", state: "open")\n'
+            '  numbers = prs.map { |pr| pr["number"] }.join(",")\n'
+            '  rate = Utils::GitHub.graphql_rate_limit_remaining.to_s\n'
+            '  truncated = Utils::GitHub.graphql_pagination_truncated?.to_s\n'
+            '  ENV["PYBREW_GITHUB_API_URL"] = "https://ghe.example/api/v3"\n'
+            '  gql_url = Utils::GitHub.graphql_url\n'
+            '  rest_url = Utils::GitHub.url_to("repos", "a", "b")\n'
+            '  ENV["PYBREW_GITHUB_CURL"] = "' + str(enterprise) + '"\n'
+            '  Utils::GitHub.graphql_data("query { viewer { login } }")\n'
+            '  argv = Pathname.new("' + str(enterprise_argv) + '").read\n'
+            '  ENV["PYBREW_GITHUB_CURL"] = "' + str(endless) + '"\n'
+            '  endless_prs = Utils::GitHub.graphql_fetch_pull_requests("foo", "homebrew/foo", state: "open")\n'
+            '  (prefix/"graphql-pagination.txt").write [\n'
+            '    numbers, rate, truncated, gql_url, rest_url,\n'
+            '    argv.include?(gql_url).to_s, endless_prs.length.to_s,\n'
+            '    Utils::GitHub.graphql_pagination_truncated?.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "graphql-pagination.txt").read_text().splitlines() == [
+        "7,8",
+        "42",
+        "false",
+        "https://ghe.example/api/graphql",
+        "https://ghe.example/api/v3/repos/a/b",
+        "true",
+        "10",
+        "true",
+    ]

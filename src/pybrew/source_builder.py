@@ -28,6 +28,7 @@ executed with the host Ruby interpreter instead; see
 from __future__ import annotations
 
 import glob
+import hashlib
 import os
 import platform
 import posixpath
@@ -586,9 +587,16 @@ class InstallParser:
         elif name == "resource":
             self.advance()
             args = self._parse_argument_list()
-            if not args or not isinstance(args[0], (StringExpr, Literal)):
-                raise UnsupportedInstall(f"{self.formula.name}: resource without a literal name")
-            resource_name = self._static_name(args[0])
+            if not args:
+                raise UnsupportedInstall(
+                    f"{self.formula.name}: resource without a name"
+                )
+            static_name = self._static_expr_value(args[0])
+            if not isinstance(static_name, str) or not static_name:
+                raise UnsupportedInstall(
+                    f"{self.formula.name}: resource name must be a static string"
+                )
+            resource_name = static_name
             if not (
                 self.peek().kind == "punct"
                 and self.peek().value == "."
@@ -1340,6 +1348,8 @@ SOURCE_LANGUAGES = {
     ".cxx": "c++",
     ".m": "objc",
     ".mm": "objc++",
+    ".s": "assembler",
+    ".asm": "assembler",
 }
 EXPLICIT_LANGUAGES = {
     "c": "c",
@@ -1354,6 +1364,8 @@ EXPLICIT_LANGUAGES = {
     "objective-c++": "objc++",
     "objective-c++-header": "objc++",
     "objective-c++-cpp-output": "objc++",
+    "assembler": "assembler",
+    "assembler-with-cpp": "assembler-with-cpp",
 }
 OPTIONS_WITH_VALUES = frozenset(
     {
@@ -1379,7 +1391,11 @@ OPTIONS_WITH_VALUES = frozenset(
 
 
 def detect_language(args, default):
-    """Return (language, explicit_x_seen) using bounded extension detection."""
+    """Return (language, explicit_x_seen).
+
+    The first recognized source extension selects the driver; an explicit -x
+    language overrides extension detection.
+    """
 
     explicit_seen = False
     explicit_language = None
@@ -1409,8 +1425,11 @@ def detect_language(args, default):
             index += 1
             continue
         if extension_language is None:
-            extension_language = SOURCE_LANGUAGES.get(
-                os.path.splitext(token)[1].lower()
+            suffix = os.path.splitext(token)[1]
+            extension_language = (
+                "assembler-with-cpp"
+                if suffix == ".S"
+                else SOURCE_LANGUAGES.get(suffix.lower())
             )
         index += 1
     if explicit_seen:
@@ -1427,11 +1446,17 @@ if not explicit_language:
         language_flags = ["-x", "objective-c"]
     elif language == "objc++":
         language_flags = ["-x", "objective-c++"]
+    elif language == "assembler":
+        language_flags = ["-x", "assembler"]
+    elif language == "assembler-with-cpp":
+        language_flags = ["-x", "assembler-with-cpp"]
 driver_spec = {
     "c": driver_cc,
     "c++": driver_cxx,
     "objc": driver_objc,
     "objc++": driver_objcxx,
+    "assembler": driver_cc,
+    "assembler-with-cpp": driver_cc,
 }.get(language, driver_cc)
 
 filtered = []
@@ -1805,13 +1830,18 @@ _SOURCE_LANGUAGE_EXTENSIONS = {
     ".cxx": "c++",
     ".m": "objc",
     ".mm": "objc++",
+    ".s": "assembler",
+    ".asm": "assembler",
 }
 
 
 def source_language(path: str) -> Optional[str]:
     """Return the bounded language for a source filename extension."""
 
-    return _SOURCE_LANGUAGE_EXTENSIONS.get(os.path.splitext(path)[1].lower())
+    suffix = os.path.splitext(path)[1]
+    if suffix == ".S":
+        return "assembler-with-cpp"
+    return _SOURCE_LANGUAGE_EXTENSIONS.get(suffix.lower())
 
 
 def architecture_environment(
@@ -1993,10 +2023,11 @@ def install_superenv_shims(
     This is deliberately opt-in via ``PYBREW_SUPERENV=1``.  The shims are thin
     wrappers around the selected real compilers that add the keg include/lib
     paths and sanitize system include/library flags at invocation time.  The
-    helper also detects .c/.cc/.cpp/.m/.mm inputs and dispatches to the
-    corresponding C/C++/ObjC/ObjC++ driver, adding only bounded language flags
-    when no explicit ``-x`` was supplied.  This is a bounded compatibility
-    layer, not Homebrew's full Superenv.
+    helper also detects .c/.cc/.cpp/.m/.mm/.s/.S/.asm inputs and dispatches to
+    the corresponding C/C++/ObjC/ObjC++/assembler driver.  The first recognized
+    source extension selects the driver; an explicit ``-x`` wins.  Bounded
+    language flags are added only when no explicit ``-x`` was supplied.  This
+    is a bounded compatibility layer, not Homebrew's full Superenv.
     """
 
     env = dict(environment)
@@ -2441,21 +2472,26 @@ class SourceBuilder:
                 raise UnsupportedInstall(
                     f"{ctx.formula.name}: resource {action.name!r} requires a downloader"
                 )
-            archive = self.downloader.fetch(
-                resource.url,
-                resource.sha256,
-                hint=f"{ctx.formula.name}-{action.name}",
-            )
-            stage = ctx.build_root / ".pybrew-resources" / action.name
-            if stage.exists():
-                shutil.rmtree(stage)
-            stage.mkdir(parents=True)
-            self._extract_resource(archive, stage)
-            children = [
-                candidate for candidate in stage.iterdir() if candidate.name != "__MACOSX"
-            ]
-            if len(children) == 1 and children[0].is_dir():
-                stage = children[0]
+            stage = self._resource_stages.get(action.name)
+            if stage is None or not stage.is_dir():
+                archive = self.downloader.fetch(
+                    resource.url,
+                    resource.sha256,
+                    hint=f"{ctx.formula.name}-{action.name}",
+                )
+                stage = self._resource_stage_path(ctx.build_root, action.name)
+                if stage.exists():
+                    shutil.rmtree(stage)
+                stage.mkdir(parents=True)
+                self._extract_resource(archive, stage)
+                children = [
+                    candidate
+                    for candidate in stage.iterdir()
+                    if candidate.name != "__MACOSX"
+                ]
+                if len(children) == 1 and children[0].is_dir():
+                    stage = children[0]
+                self._resource_stages[action.name] = stage
             previous = ctx.cwd
             ctx.cwd = stage.resolve()
             try:
@@ -2469,6 +2505,20 @@ class SourceBuilder:
                     self._execute(child, ctx)
         else:  # pragma: no cover
             raise UnsupportedInstall(f"unknown build action: {action!r}")
+
+    @staticmethod
+    def _resource_stage_path(build_root: Path, name: str) -> Path:
+        """Deterministic, path-safe stage directory for a resource name."""
+
+        safe = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._")
+        if not safe:
+            safe = "resource"
+        if len(safe) > 80:
+            safe = safe[:80].rstrip("._") or "resource"
+        if safe != name or len(name) > 80:
+            digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
+            safe = f"{safe[:80]}-{digest}"
+        return build_root / ".pybrew-resources" / safe
 
     def _extract_resource(self, archive: Path, destination: Path) -> None:
         import tarfile

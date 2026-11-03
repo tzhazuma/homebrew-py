@@ -3663,3 +3663,73 @@ def test_livecheck_transport_uses_default_redirect_policy(
     handler = captured["handler"]
     assert handler.strip_headers == LIVECHECK_SENSITIVE_HEADERS
     assert handler.preserve_headers == frozenset()
+
+
+# ---------------------------------------------------------------------------
+# Wave 9: livecheck defaults are CLI-independent and stable
+# ---------------------------------------------------------------------------
+
+
+def test_livecheck_default_constants_are_stable() -> None:
+    import pybrew.cask as cask_module
+
+    assert cask_module.LIVECHECK_MAX_REDIRECTS == 5
+    assert cask_module.LIVECHECK_RATE_LIMIT_CAPACITY == 10.0
+    assert cask_module.LIVECHECK_RATE_LIMIT_REFILL == 2.0
+    assert cask_module.LIVECHECK_SENSITIVE_HEADERS == frozenset(
+        {"authorization", "cookie", "cookie2", "proxy-authorization"}
+    )
+
+
+def test_livecheck_status_online_uses_default_transport_partial(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import Cask
+
+    captured: dict[str, object] = {}
+
+    def fake_fetcher(url: str, **kwargs: object) -> str:
+        captured["url"] = url
+        captured["kwargs"] = kwargs
+        return "tool-2.0"
+
+    monkeypatch.setattr(
+        "pybrew.cask.livecheck_http_fetcher", fake_fetcher
+    )
+    cask = Cask(
+        token="defaults",
+        version="2.0",
+        livecheck={
+            "url": "https://example.com/tool",
+            "regex": r"tool-(\d+(?:\.\d+)*)",
+        },
+    )
+
+    status = cask.livecheck_status(online=True)
+
+    assert status["status"] == "up_to_date"
+    assert captured["url"] == "https://example.com/tool"
+    assert "headers" in captured["kwargs"]
+
+
+def test_livecheck_status_offline_never_uses_default_transport(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import Cask
+
+    def forbidden_fetcher(*_args: object, **_kwargs: object):
+        raise AssertionError("offline livecheck must not fetch")
+
+    monkeypatch.setattr(
+        "pybrew.cask.livecheck_http_fetcher", forbidden_fetcher
+    )
+    cask = Cask(
+        token="offline-defaults",
+        version="1.0",
+        livecheck={"regex": r"v(\d+)"},
+    )
+
+    status = cask.livecheck_status()
+
+    assert status["status"] == "unknown"
+    assert "no network" in (status["reason"] or "")

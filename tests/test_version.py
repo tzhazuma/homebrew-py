@@ -117,7 +117,7 @@ def test_version_prerelease_and_token_semantics() -> None:
     assert Version("1.0").pre_release is False
     assert alpha < beta < pre < rc < Version("1.0") < patch
     assert Version("1.0-beta2") < Version("1.0-beta10")
-    assert Version("1.0-post1") > Version("1.0-p1")
+    assert Version("1.0-post1") < Version("1.0-p1")
     assert Version("1.0.0") == Version("1.0")
     assert alpha.revision == 0
     assert PkgVersion("1.0-alpha", 3).pre_release is True
@@ -247,8 +247,19 @@ def test_version_token_hierarchy_and_precedence() -> None:
     assert BetaToken("beta") < PreToken("pre")
     assert PreToken("pre") < RcToken("rc1")
     assert RcToken("rc1") < PToken("p1")
-    assert PToken("p1") < PostToken("post1")
+    assert PostToken("post1") < PToken("p1")
     assert PostToken("post1") < LetterToken("foo")
+    assert PToken("p1") > LetterToken("foo")
+    assert PToken("p1") < LetterToken("zoo")
+    assert PreToken("pre") > LetterToken("foo")
+    assert AlphaToken("alpha") < LetterToken("foo")
+    assert RcToken("rc1") > LetterToken("foo")
+    assert Version("1.0-preview") == Version("1.0-pre")
+    assert Version("1.0-preview").token_classes == ["numeric", "numeric", "pre"]
+    assert AlphaToken("alpha", 0) == AlphaToken("alpha")
+    assert hash(AlphaToken("alpha", 0)) == hash(AlphaToken("alpha"))
+    assert PToken("p", 0) == LetterToken("p")
+    assert hash(PToken("p", 0)) == hash(LetterToken("p"))
     assert NullToken() == NumericToken(0)
     assert NullToken() < NumericToken(1)
     assert NullToken() > AlphaToken("alpha")

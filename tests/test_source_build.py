@@ -1709,6 +1709,9 @@ def test_source_language_detection_is_bounded() -> None:
     assert source_builder.source_language("unit.cxx") == "c++"
     assert source_builder.source_language("unit.m") == "objc"
     assert source_builder.source_language("unit.mm") == "objc++"
+    assert source_builder.source_language("unit.s") == "assembler"
+    assert source_builder.source_language("unit.S") == "assembler-with-cpp"
+    assert source_builder.source_language("unit.asm") == "assembler"
     assert source_builder.source_language("unit.h") is None
     assert source_builder.source_language("README") is None
 
@@ -1835,3 +1838,180 @@ def test_superenv_shims_dispatch_by_source_extension(tmp_path: Path) -> None:
     assert "-x" in explicit_argv and "c" in explicit_argv
     assert "objective-c" not in explicit_argv
     assert not objc_report.exists()
+
+
+def test_superenv_shims_dispatch_assembler_extensions(tmp_path: Path) -> None:
+    import subprocess
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    fake_bin = tmp_path / "fake-bin"
+    cc = _fake_compiler(fake_bin, "clang", "cc-report.txt")
+    cxx = _fake_compiler(fake_bin, "clang++", "cxx-report.txt")
+    prepared = source_builder.build_environment(
+        config,
+        {
+            "PATH": str(fake_bin),
+            "PYBREW_SUPERENV": "1",
+            "PYBREW_CC": str(cc),
+            "PYBREW_CXX": str(cxx),
+        },
+    )
+    env = prepared.env
+
+    for source, expected in (
+        ("unit.s", "assembler"),
+        ("unit.S", "assembler-with-cpp"),
+        ("unit.asm", "assembler"),
+    ):
+        subprocess.run(
+            [env["CC"], "-c", source],
+            cwd=tmp_path,
+            env=env,
+            check=True,
+        )
+        argv = shlex.split(_compiler_report(tmp_path / "cc-report.txt")["argv"])
+        assert "-x" in argv
+        assert argv[argv.index("-x") + 1] == expected
+
+    subprocess.run(
+        [env["CXX"], "-x", "assembler", "-c", "unit.S"],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+    )
+    argv = shlex.split(_compiler_report(tmp_path / "cc-report.txt")["argv"])
+    assert argv.count("-x") == 1
+    assert argv[argv.index("-x") + 1] == "assembler"
+
+
+def test_superenv_shims_mixed_language_first_source_wins(
+    tmp_path: Path,
+) -> None:
+    import subprocess
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    fake_bin = tmp_path / "fake-bin"
+    cc = _fake_compiler(fake_bin, "clang", "cc-report.txt")
+    cxx = _fake_compiler(fake_bin, "clang++", "cxx-report.txt")
+    objc = _fake_compiler(fake_bin, "clang-objc", "objc-report.txt")
+    prepared = source_builder.build_environment(
+        config,
+        {
+            "PATH": str(fake_bin),
+            "PYBREW_SUPERENV": "1",
+            "PYBREW_CC": str(cc),
+            "PYBREW_CXX": str(cxx),
+            "PYBREW_OBJC": str(objc),
+        },
+    )
+    env = prepared.env
+
+    subprocess.run(
+        [env["CC"], "-c", "first.c", "second.m"],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+    )
+    argv = shlex.split(_compiler_report(tmp_path / "cc-report.txt")["argv"])
+    assert "first.c" in argv and "second.m" in argv
+    assert "objective-c" not in argv
+    assert not (tmp_path / "objc-report.txt").exists()
+
+    subprocess.run(
+        [env["CC"], "-c", "first.m", "second.c"],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+    )
+    argv = shlex.split(_compiler_report(tmp_path / "objc-report.txt")["argv"])
+    assert "first.m" in argv and "second.c" in argv
+    assert argv[argv.index("-x") + 1] == "objective-c"
+
+
+def test_resource_stage_path_is_safe_and_deterministic(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    formula = Formula(name="stage-path", version="1.0")
+    builder = source_builder.SourceBuilder(formula, config)
+    normal = builder._resource_stage_path(tmp_path, "data")
+    assert normal == tmp_path / ".pybrew-resources" / "data"
+    assert builder._resource_stage_path(tmp_path, "data") == normal
+    unsafe = builder._resource_stage_path(tmp_path, "../escape/data")
+    assert unsafe.parent == tmp_path / ".pybrew-resources"
+    assert ".." not in unsafe.parts
+    assert builder._resource_stage_path(tmp_path, "../escape/data") == unsafe
+    long_name = "x" * 200
+    long_path = builder._resource_stage_path(tmp_path, long_name)
+    assert long_path.parent == tmp_path / ".pybrew-resources"
+    assert len(long_path.name) < 120
+    assert builder._resource_stage_path(tmp_path, long_name) == long_path
+
+
+def test_resource_stage_dynamic_names_order_and_duplicates(
+    tmp_path: Path,
+) -> None:
+    main_project = tmp_path / "main-project"
+    main_project.mkdir()
+    (main_project / "README").write_text("main\n")
+    extra_project = tmp_path / "extra-project"
+    extra_project.mkdir()
+    (extra_project / "extra.txt").write_text("extra payload\n")
+    data_project = tmp_path / "data-project"
+    data_project.mkdir()
+    (data_project / "data.txt").write_text("data payload\n")
+    main_archive = _tar(
+        main_project,
+        tmp_path / "src" / "resource-order-1.0.tar.gz",
+        "resource-order-1.0",
+    )
+    extra_archive = _tar(
+        extra_project,
+        tmp_path / "src" / "extra-1.0.tar.gz",
+        "extra-1.0",
+    )
+    data_archive = _tar(
+        data_project,
+        tmp_path / "src" / "data-1.0.tar.gz",
+        "data-1.0",
+    )
+    tap = tmp_path / "tap"
+    (tap / "Formula").mkdir(parents=True)
+    (tap / "Formula" / "resource-order.rb").write_text(
+        f'''class ResourceOrder < Formula
+  desc "resource order fixture"
+  homepage "https://example.com/resource-order"
+  url "{main_archive.as_uri()}"
+  sha256 "{_sha(main_archive)}"
+
+  resource "extra" do
+    url "{extra_archive.as_uri()}"
+    sha256 "{_sha(extra_archive)}"
+  end
+
+  resource "data" do
+    url "{data_archive.as_uri()}"
+    sha256 "{_sha(data_archive)}"
+  end
+
+  def install
+    name = "data"
+    resource(name).stage do
+      bin.install "data.txt"
+    end
+    resource("extra").stage do
+      share.install "extra.txt"
+    end
+    resource("data").stage do
+      share.install "data.txt"
+    end
+  end
+end
+'''
+    )
+    _config, result = _install(tmp_path, tap, "resource-order")
+    assert (result.keg / "bin" / "data.txt").read_text() == "data payload\n"
+    assert (result.keg / "share" / "extra.txt").read_text() == "extra payload\n"
+    assert (result.keg / "share" / "data.txt").read_text() == "data payload\n"

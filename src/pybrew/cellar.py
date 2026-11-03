@@ -319,6 +319,12 @@ def write_receipt(
     sbom: Optional[Mapping[str, Any]] = None,
     source_metadata: Optional[Mapping[str, Any]] = None,
     build_metadata: Optional[Mapping[str, Any]] = None,
+    *,
+    installed_time: Optional[int] = None,
+    source_modified_time: Optional[int] = None,
+    compiler: Optional[str] = None,
+    arch: Optional[str] = None,
+    changed_files: Optional[list[str]] = None,
 ) -> Path:
     source_payload: dict[str, Any] = {
         "path": str(formula.path) if formula.path else None,
@@ -338,6 +344,16 @@ def write_receipt(
         "built_as_bottle": poured_from_bottle,
         "installed_on_request": not installed_as_dependency,
     }
+    if installed_time is not None:
+        payload["time"] = int(installed_time)
+    if source_modified_time is not None:
+        payload["source_modified_time"] = int(source_modified_time)
+    if compiler:
+        payload["compiler"] = compiler
+    if arch:
+        payload["arch"] = arch
+    if changed_files is not None:
+        payload["changed_files"] = list(changed_files)
     if bottle_manifest is not None:
         # Additive summary; existing receipt consumers only read known keys.
         payload["bottle_manifest"] = dict(bottle_manifest)

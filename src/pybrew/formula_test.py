@@ -295,15 +295,48 @@ class FormulaTestContext
       def compare(other)
         return nil unless other.is_a?(Token)
 
-        if is_a?(NullToken) || other.is_a?(NullToken)
-          compare_null(other)
-        elsif group != other.group
-          group < other.group ? -1 : 1
-        elsif rank != other.rank
-          rank < other.rank ? -1 : 1
-        else
-          compare_value(other)
+        return compare_null(other) if is_a?(NullToken) || other.is_a?(NullToken)
+
+        if is_a?(NumericToken) || other.is_a?(NumericToken)
+          if is_a?(NumericToken) && other.is_a?(NumericToken)
+            return value <=> other.value
+          end
+
+          return is_a?(NumericToken) ? 1 : -1
         end
+
+        self_pre = is_a?(PreReleaseToken)
+        other_pre = other.is_a?(PreReleaseToken)
+        if self_pre && other_pre
+          return rank <=> other.rank unless rank == other.rank
+
+          return revision <=> other.revision
+        end
+        if self_pre
+          return -1 if other.is_a?(PToken) || other.is_a?(PostToken)
+
+          return compare_text(other)
+        end
+        if other_pre
+          return 1 if is_a?(PToken) || is_a?(PostToken)
+
+          return compare_text(other)
+        end
+
+        if is_a?(PostToken) || other.is_a?(PostToken)
+          if is_a?(PostToken) && other.is_a?(PostToken)
+            return revision <=> other.revision
+          end
+
+          return is_a?(PostToken) ? -1 : 1
+        end
+        return revision <=> other.revision if is_a?(PToken) && other.is_a?(PToken)
+
+        compare_text(other)
+      end
+
+      def compare_text(other)
+        to_s <=> other.to_s
       end
 
       def compare_null(other)
@@ -321,14 +354,7 @@ class FormulaTestContext
       end
 
       def compare_value(other)
-        if value.is_a?(Integer) && other.value.is_a?(Integer)
-          value <=> other.value
-        else
-          comparison = value.to_s <=> other.value.to_s
-          return comparison unless comparison.zero?
-
-          revision <=> other.revision
-        end
+        revision <=> other.revision
       end
 
       def ==(other)
@@ -343,13 +369,10 @@ class FormulaTestContext
       alias eql? ==
 
       def hash
-        if is_a?(NullToken)
-          ["numeric", 0, 0].hash
-        elsif is_a?(NumericToken)
-          ["numeric", value, 0].hash
-        else
-          [class_name, value, revision].hash
-        end
+        return 0.hash if is_a?(NullToken)
+        return value.hash if is_a?(NumericToken)
+
+        to_s.hash
       end
     end
 
