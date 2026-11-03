@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import os
+import shlex
 import tarfile
 from pathlib import Path
 
@@ -807,3 +808,309 @@ def test_opt_in_superenv_compiler_shims(tmp_path: Path) -> None:
     assert str(config.prefix / "include") in report["argv"]
     assert "-L" in report["argv"]
     assert report["CC"] == env["CC"]
+
+
+def test_sanitize_build_flags_is_bounded_and_preserves_safe_flags(
+    tmp_path: Path,
+) -> None:
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    prefix = config.prefix
+    include = f"-I{prefix / 'include'}"
+    library = f"-L{prefix / 'lib'}"
+    subinclude = f"-I{prefix / 'include' / 'nested'}"
+    sublibrary = f"-L{prefix / 'lib' / 'nested'}"
+    flags = " ".join(
+        [
+            "-O3",
+            "-ggdb",
+            "-DNDEBUG",
+            "-std=c11",
+            "-fPIC",
+            "-I/usr/include",
+            "-I/usr/include/nested",
+            "-I/usr/local/include",
+            "-isystem",
+            "/usr/include",
+            "-L/usr/lib",
+            "-L/usr/lib64",
+            "-L/usr/local/lib",
+            "-L/lib",
+            "-L/lib64",
+            "-Wl,-rpath,/usr/lib",
+            "-Wl,-rpath,/usr/local/lib",
+            "-Wl,-rpath,/opt/foreign/lib",
+            subinclude,
+            sublibrary,
+            include,
+            include,
+            "-isystem",
+            str(prefix / "include"),
+            library,
+            library,
+            f"-Wl,-rpath,{prefix / 'lib'}",
+        ]
+    )
+    sanitized = source_builder.sanitize_build_flags(flags, prefix)
+    tokens = shlex.split(sanitized)
+
+    for safe in ("-O3", "-ggdb", "-DNDEBUG", "-std=c11", "-fPIC"):
+        assert safe in tokens
+    assert subinclude in tokens
+    assert sublibrary in tokens
+    for unsafe in (
+        "/usr/include",
+        "/usr/include/nested",
+        "/usr/local/include",
+        "/usr/lib",
+        "/usr/lib64",
+        "/usr/local/lib",
+        "/lib",
+        "/lib64",
+    ):
+        assert unsafe not in tokens
+        for flag_prefix in ("-I", "-L", "-isystem", "-Wl,-rpath,"):
+            assert not any(
+                token.startswith(flag_prefix + unsafe) for token in tokens
+            ), (unsafe, tokens)
+    assert tokens.count(include) == 1
+    assert tokens.count(library) == 1
+    assert f"-Wl,-rpath,{prefix / 'lib'}" in tokens
+    assert not any(
+        token.startswith("-Wl,-rpath,/opt/foreign") for token in tokens
+    )
+    assert "-isystem" not in tokens
+
+    dropped = shlex.split(
+        source_builder.sanitize_build_flags(
+            f"{include} {subinclude} {library} {sublibrary}",
+            prefix,
+            drop_prefix_flags=True,
+        )
+    )
+    assert include not in dropped
+    assert library not in dropped
+    assert subinclude in dropped
+    assert sublibrary in dropped
+
+
+def test_superenv_build_environment_sanitizes_flags_and_keeps_explicit(
+    tmp_path: Path,
+) -> None:
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    prefix = config.prefix
+    fake_bin = tmp_path / "fake-bin"
+    cc = _fake_compiler(fake_bin, "clang", "cc-report.txt")
+    cxx = _fake_compiler(fake_bin, "clang++", "cxx-report.txt")
+    include = f"-I{prefix / 'include'}"
+    library = f"-L{prefix / 'lib'}"
+    prepared = source_builder.build_environment(
+        config,
+        {
+            "PATH": str(fake_bin),
+            "PYBREW_SUPERENV": "1",
+            "CC": "plain-cc",
+            "CXX": "plain-cxx",
+            "PYBREW_CC": str(cc),
+            "PYBREW_CXX": str(cxx),
+            "CFLAGS": f"-O2 -g -I/usr/include {include} {include}",
+            "CXXFLAGS": "-O3 -I/usr/local/include -fPIC",
+            "LDFLAGS": (
+                f"-L/usr/lib -Wl,-rpath,/usr/lib "
+                f"-Wl,-rpath,/opt/foreign/lib {library} -lfoo"
+            ),
+            "CPPFLAGS": "-DSAFE=1 -I/usr/include",
+        },
+    )
+    env = prepared.env
+    assert prepared.superenv is not None
+    assert prepared.superenv.helper.is_file()
+    assert env["HOMEBREW_CC"] == str(cc)
+    assert env["HOMEBREW_CXX"] == str(cxx)
+    assert env["CC"] == str(prepared.superenv.root / "cc")
+    assert env["CXX"] == str(prepared.superenv.root / "c++")
+    assert env["PATH"].startswith(f"{prepared.superenv.root}{os.pathsep}")
+
+    cflags = shlex.split(env["CFLAGS"])
+    assert cflags[:3] == ["-O2", "-g", include]
+    assert cflags.count(include) == 1
+    assert "/usr/include" not in env["CFLAGS"]
+
+    cxxflags = shlex.split(env["CXXFLAGS"])
+    assert "-O3" in cxxflags and "-fPIC" in cxxflags
+    assert "/usr/local/include" not in env["CXXFLAGS"]
+
+    ldflags = shlex.split(env["LDFLAGS"])
+    assert "-lfoo" in ldflags
+    assert ldflags.count(library) == 1
+    assert "/usr/lib" not in env["LDFLAGS"]
+    assert not any("/usr/lib" in token for token in ldflags)
+    assert "/opt/foreign/lib" not in env["LDFLAGS"]
+    assert not any("/opt/foreign" in token for token in ldflags)
+
+    cppflags = shlex.split(env["CPPFLAGS"])
+    assert "-DSAFE=1" in cppflags
+    assert "/usr/include" not in env["CPPFLAGS"]
+    assert not any("/usr/include" in token for token in cppflags)
+
+
+def test_superenv_shims_sanitize_flags_at_build_time(tmp_path: Path) -> None:
+    import subprocess
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    prefix = config.prefix
+    fake_bin = tmp_path / "fake-bin"
+    cc = _fake_compiler(fake_bin, "clang", "cc-report.txt")
+    cxx = _fake_compiler(fake_bin, "clang++", "cxx-report.txt")
+    prepared = source_builder.build_environment(
+        config,
+        {
+            "PATH": str(fake_bin),
+            "PYBREW_SUPERENV": "1",
+            "PYBREW_CC": str(cc),
+            "PYBREW_CXX": str(cxx),
+        },
+    )
+    env = prepared.env
+    include = str(prefix / "include")
+    library = str(prefix / "lib")
+    subinclude = str(prefix / "include" / "nested")
+    sublibrary = str(prefix / "lib" / "nested")
+    unsafe_arguments = [
+        "-O3",
+        "-ggdb",
+        "-DSAFE=1",
+        "-I/usr/include",
+        "-I",
+        "/usr/include/nested",
+        "-isystem",
+        include,
+        "-L/usr/lib",
+        "-L",
+        "/usr/local/lib",
+        "-Wl,-rpath,/usr/lib",
+        "-Wl,-rpath,/opt/foreign/lib",
+        f"-I{include}",
+        f"-L{library}",
+        f"-I{subinclude}",
+        f"-L{sublibrary}",
+        "-fPIC",
+    ]
+
+    subprocess.run(
+        [env["CC"], *unsafe_arguments],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+    )
+    argv = shlex.split(_compiler_report(tmp_path / "cc-report.txt")["argv"])
+    for safe in ("-O3", "-ggdb", "-DSAFE=1", "-fPIC"):
+        assert safe in argv
+    assert argv.count("-isystem") == 1
+    assert argv.count(include) == 1
+    assert argv.count("-L") == 1
+    assert argv.count(library) == 1
+    assert f"-I{subinclude}" in argv
+    assert f"-L{sublibrary}" in argv
+    assert not any("/usr/include" in token for token in argv)
+    assert not any("/usr/lib" in token for token in argv)
+    assert not any("/usr/local/lib" in token for token in argv)
+    assert not any("/opt/foreign/lib" in token for token in argv)
+
+    subprocess.run(
+        [env["CXX"], *unsafe_arguments],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+    )
+    cxx_argv = shlex.split(_compiler_report(tmp_path / "cxx-report.txt")["argv"])
+    assert cxx_argv.count("-isystem") == 1
+    assert cxx_argv.count(include) == 1
+    assert cxx_argv.count("-L") == 1
+    assert cxx_argv.count(library) == 1
+    assert f"-I{subinclude}" in cxx_argv
+    assert f"-L{sublibrary}" in cxx_argv
+    assert "-O3" in cxx_argv and "-ggdb" in cxx_argv and "-fPIC" in cxx_argv
+
+
+def test_superenv_source_build_sanitizes_flags_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prefix = tmp_path / "prefix"
+    fake_bin = tmp_path / "fake-bin"
+    cc = _fake_compiler(fake_bin, "clang", "cc-report.txt")
+    cxx = _fake_compiler(fake_bin, "clang++", "cxx-report.txt")
+    monkeypatch.setenv(
+        "PATH", f"{fake_bin}{os.pathsep}{os.environ.get('PATH', '')}"
+    )
+    monkeypatch.setenv("PYBREW_SUPERENV", "1")
+    monkeypatch.setenv("PYBREW_CC", str(cc))
+    monkeypatch.setenv("PYBREW_CXX", str(cxx))
+    monkeypatch.setenv("CFLAGS", "-O2 -I/usr/include")
+    monkeypatch.setenv("LDFLAGS", "-L/usr/lib -Wl,-rpath,/usr/lib")
+    for name in ("CC", "CXX"):
+        monkeypatch.delenv(name, raising=False)
+
+    project = tmp_path / "superenv-src"
+    project.mkdir()
+    (project / "README").write_text("superenv fixture\n", encoding="utf-8")
+    tap, _ = _make_tap(
+        tmp_path,
+        "superenv-fixture",
+        "1.0",
+        project,
+        "\n".join(
+            [
+                '    system ENV["CC"], "-O3", "-ggdb", "-DSAFE=1", '
+                '"-I/usr/include", "-L/usr/lib", '
+                '"-Wl,-rpath,/usr/lib", "-Wl,-rpath,/opt/foreign/lib", '
+                '"-I#{prefix}/include", "-L#{prefix}/lib"',
+                '    bin.install "cc-report.txt"',
+            ]
+        ),
+    )
+    _config, result = _install(tmp_path, tap, "superenv-fixture")
+    report = _compiler_report(result.keg / "bin" / "cc-report.txt")
+    argv = shlex.split(report["argv"])
+    for safe in ("-O3", "-ggdb", "-DSAFE=1"):
+        assert safe in argv
+    assert argv.count("-isystem") == 1
+    assert argv.count(str(prefix / "include")) == 1
+    assert argv.count("-L") == 1
+    assert argv.count(str(prefix / "lib")) == 1
+    assert not any("/usr/include" in token for token in argv)
+    assert not any("/usr/lib" in token for token in argv)
+    assert not any("/opt/foreign/lib" in token for token in argv)
+    assert report["CC"] == str(
+        prefix / "var" / "pybrew" / "superenv" / "shims" / "cc"
+    )
+    assert "/usr/include" not in report["CFLAGS"]
+    assert "/usr/lib" not in report["LDFLAGS"]
+
+
+def test_default_build_environment_does_not_sanitize_without_superenv(
+    tmp_path: Path,
+) -> None:
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    prefix = config.prefix
+    prepared = source_builder.build_environment(
+        config,
+        {
+            "PATH": "/usr/bin:/bin",
+            "CFLAGS": "-O2 -I/usr/include",
+            "LDFLAGS": "-L/usr/lib -Wl,-rpath,/usr/lib",
+        },
+    )
+    assert prepared.superenv is None
+    assert prepared.env["CFLAGS"] == (
+        f"-O2 -I/usr/include -I{prefix / 'include'}"
+    )
+    assert prepared.env["LDFLAGS"] == (
+        f"-L/usr/lib -Wl,-rpath,/usr/lib -L{prefix / 'lib'}"
+    )

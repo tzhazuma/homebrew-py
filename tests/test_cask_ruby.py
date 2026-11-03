@@ -1943,3 +1943,85 @@ def test_evaluator_invalid_lifecycle_dates_are_immediate(
         )
     )
     assert disabled.disabled is True
+
+
+# ---------------------------------------------------------------------------
+# Cask#livecheck_status with a bounded strategy block
+# ---------------------------------------------------------------------------
+
+
+def _status_cask(allow_ruby: None, version: str = "1.2.3"):
+    return evaluate_cask_source(
+        _source(
+            f'  version "{version}"\n'
+            '  livecheck do\n'
+            '    url "https://example.com/tool"\n'
+            '    strategy :page_match do |page|\n'
+            '      page.scan(/tool-(\\d+(?:\\.\\d+)*)/).flatten\n'
+            '    end\n'
+            '  end\n'
+        )
+    )
+
+
+@requires_ruby
+def test_livecheck_status_strategy_up_to_date_and_outdated(
+    allow_ruby: None,
+) -> None:
+    cask = _status_cask(allow_ruby)
+
+    up = cask.livecheck_status(page="tool-1.2.3")
+    assert up["status"] == "up_to_date"
+    assert up["source"] == "strategy"
+    assert up["candidates"] == ["1.2.3"]
+    assert up["result"]["executed"] is True
+
+    out = cask.livecheck_status(page="tool-2.0")
+    assert out["status"] == "outdated"
+    assert out["latest_version"] == "2.0"
+
+
+@requires_ruby
+def test_livecheck_status_strategy_csv_version(allow_ruby: None) -> None:
+    cask = _status_cask(allow_ruby, version="1.2.3,4")
+
+    result = cask.livecheck_status(page="tool-4")
+
+    assert result["current_versions"] == ["1.2.3", "4"]
+    assert result["status"] == "up_to_date"
+
+
+@requires_ruby
+def test_livecheck_status_strategy_fetcher(allow_ruby: None) -> None:
+    cask = _status_cask(allow_ruby)
+    calls: list[str] = []
+
+    def fetcher(url: str) -> str:
+        calls.append(url)
+        return "tool-9.9"
+
+    result = cask.livecheck_status(fetcher=fetcher)
+
+    assert calls == ["https://example.com/tool"]
+    assert result["status"] == "outdated"
+    assert result["latest_version"] == "9.9"
+
+
+@requires_ruby
+def test_livecheck_status_strategy_error(allow_ruby: None) -> None:
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  livecheck do\n'
+            '    url "https://example.com/tool"\n'
+            '    strategy :page_match do |page|\n'
+            '      raise "status boom"\n'
+            '    end\n'
+            '  end\n'
+        )
+    )
+
+    result = cask.livecheck_status(page="anything")
+
+    assert result["status"] == "error"
+    assert "status boom" in (result["error"] or "")

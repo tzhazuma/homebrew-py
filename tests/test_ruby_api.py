@@ -6668,3 +6668,156 @@ def test_formulary_struct_json_hash_and_malformed_edge(
         "true",
         "PybrewFormulaUnavailableError:true",
     ]
+
+
+def test_formulary_api_json_loading_and_factory_api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    api_path = tmp_path / "formula.jws.json"
+    api_path.write_text(
+        json.dumps(
+            {
+                "formulae": [
+                    {
+                        "name": "json-one",
+                        "full_name": "homebrew/core/json-one",
+                        "desc": "json one",
+                        "homepage": "https://example.com/json-one",
+                        "version": "1.5",
+                        "license": "MIT",
+                        "dependencies": {"dep": ["build"]},
+                    },
+                    {
+                        "name": "json-two",
+                        "desc": "json two",
+                        "homepage": "https://example.com/json-two",
+                        "version": "2.0",
+                        "license": {"default": "Apache-2.0"},
+                    },
+                ]
+            }
+        )
+    )
+    monkeypatch.setenv("PYBREW_FORMULA_API_JSON", str(api_path))
+    formula = _formula(
+        "ruby-api-json",
+        "1.0",
+        (
+            '  api_path = Pathname.new(ENV["PYBREW_FORMULA_API_JSON"])\n'
+            '  loaded = Formulary.load_formula_from_api!\n'
+            '  factory_one = Formulary.factory("json-one", from: :api)\n'
+            '  one = Formulary.formula_class_get_from_api("json-one")\n'
+            '  factory_full = Formulary.factory("homebrew/core/json-one", from: :api)\n'
+            '  inline = Formulary.load_formula_from_api!({\n'
+            '    "name" => "inline-one", "desc" => "inline desc",\n'
+            '    "homepage" => "https://inline.example", "version" => "3.0"\n'
+            '  })\n'
+            '  inline_cached = Formulary.formula_class_get_from_api("inline-one")\n'
+            '  malformed_error = begin\n'
+            '    Formulary.load_formula_from_api!({"desc" => "no version"})\n'
+            '    "none"\n'
+            '  rescue => error\n'
+            '    error.class.name + "|" + error.message.include?("malformed").to_s\n'
+            '  end\n'
+            '  missing_error = begin\n'
+            '    Formulary.load_formula_from_api!(path: api_path.dirname/"missing.json")\n'
+            '    "none"\n'
+            '  rescue => error\n'
+            '    error.class.name + "|" + error.message.include?("not found").to_s\n'
+            '  end\n'
+            '  missing_factory_error = begin\n'
+            '    Formulary.factory("not-in-api", from: :api)\n'
+            '    "none"\n'
+            '  rescue => error\n'
+            '    error.class.name + "|" + error.message.include?("API").to_s\n'
+            '  end\n'
+            '  api_path.write(JSON.generate({"formulae" => [{\n'
+            '    "name" => "json-one", "full_name" => "homebrew/core/json-one",\n'
+            '    "desc" => "json one v2", "homepage" => "https://example.com/json-one",\n'
+            '    "version" => "9.9", "license" => "MIT"\n'
+            '  }]}))\n'
+            '  File.utime(Time.now + 10, Time.now + 10, api_path.to_s)\n'
+            '  Formulary.load_formula_from_api!\n'
+            '  stale_version = Formulary.formula_class_get_from_api("json-one").loaded_version\n'
+            '  (prefix/"api-json.txt").write [\n'
+            '    loaded.is_a?(Array).to_s, loaded.length.to_s,\n'
+            '    one.loaded_desc, one.loaded_version, one.loaded_license,\n'
+            '    one.new.dependencies.map(&:name).join(","),\n'
+            '    factory_one.equal?(one).to_s, factory_full.equal?(one).to_s,\n'
+            '    inline_cached.loaded_desc, inline_cached.loaded_version,\n'
+            '    malformed_error, missing_error, missing_factory_error, stale_version\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "api-json.txt").read_text().splitlines() == [
+        "true",
+        "2",
+        "json one",
+        "1.5",
+        "MIT",
+        "dep",
+        "true",
+        "true",
+        "inline desc",
+        "3.0",
+        "PybrewFormulaUnavailableError|true",
+        "PybrewFormulaUnavailableError|true",
+        "PybrewFormulaUnavailableError|true",
+        "9.9",
+    ]
+
+
+def test_formulary_tap_alias_directory_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    tap_root = tmp_path / "taps" / "homebrew" / "testtap"
+    (tap_root / "Formula").mkdir(parents=True)
+    (tap_root / "Aliases").mkdir(parents=True)
+    (tap_root / "Formula" / "real-formula.rb").write_text(
+        'class RealFormula < Formula\n'
+        '  desc "real formula"\n'
+        '  version "1.0"\n'
+        'end\n'
+    )
+    os.symlink("../Formula/real-formula.rb", tap_root / "Aliases" / "literal-alias.rb")
+    os.symlink("../Formula/real-formula.rb", tap_root / "Aliases" / "qualified-alias.rb")
+    monkeypatch.setenv("PYBREW_TAPS", str(tap_root))
+    formula = _formula(
+        "ruby-tap-alias",
+        "1.0",
+        (
+            '  literal = Formulary.tap_alias_path("literal-alias")\n'
+            '  qualified = Formulary.tap_alias_path("homebrew/testtap/qualified-alias")\n'
+            '  klass = Formulary.resolve_tap_alias!("literal-alias")\n'
+            '  factory_klass = Formulary.factory("qualified-alias")\n'
+            '  metadata_klass = Formulary.factory("metadata-alias")\n'
+            '  unknown_error = begin\n'
+            '    Formulary.resolve_tap_alias!("missing-alias")\n'
+            '    "none"\n'
+            '  rescue => error\n'
+            '    error.class.name\n'
+            '  end\n'
+            '  (prefix/"tap-alias.txt").write [\n'
+            '    literal.basename.to_s, qualified.basename.to_s,\n'
+            '    klass.loaded_name, klass.loaded_desc,\n'
+            '    factory_klass.loaded_name,\n'
+            '    metadata_klass.name,\n'
+            '    Formulary.tap_aliases.sort.join(","), unknown_error\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.aliases = ["metadata-alias"]
+    keg = _build(tmp_path, formula)
+    assert (keg / "tap-alias.txt").read_text().splitlines() == [
+        "literal-alias.rb",
+        "qualified-alias.rb",
+        "real-formula",
+        "real formula",
+        "real-formula",
+        "ruby-tap-alias",
+        "literal-alias,qualified-alias",
+        "PybrewFormulaUnavailableError",
+    ]

@@ -8236,13 +8236,20 @@ module Formulary
     end
 
     if options[:from].to_s == "api"
+      ensure_api_json_loaded
       begin
         api_formula = formula_class_get_from_api(ref)
         (@factory_cache ||= {})[cache_key] = api_formula if factory_cached?
         return api_formula
-      rescue StandardError
-        nil
+      rescue PybrewFormulaUnavailableError
+        raise if api_json_configured?
       end
+    end
+
+    tap_alias_formula = resolve_tap_alias(ref)
+    unless tap_alias_formula.nil?
+      (@factory_cache ||= {})[cache_key] = tap_alias_formula if factory_cached?
+      return tap_alias_formula
     end
 
     reference = Formula[ref]
@@ -8280,6 +8287,190 @@ module Formulary
       return Formula[canonical_name] if aliases.include?(name) || oldname == name
     end
     nil
+  end
+
+  API_JSON_ENV = "PYBREW_FORMULA_API_JSON"
+  TAPS_ENV = "PYBREW_TAPS"
+
+  # Bounded local Homebrew API JSON support.  The file is expected to contain
+  # a single formula struct, an array of structs, or {"formulae": [...]}.
+  def api_json_path
+    configured = ENV[API_JSON_ENV].to_s.strip
+    return Pathname.new(configured) unless configured.empty?
+
+    candidate = HOMEBREW_PREFIX/"var/homebrew/api/formula.jws.json"
+    candidate.file? ? candidate : nil
+  end
+
+  def api_json_configured?
+    !ENV[API_JSON_ENV].to_s.strip.empty? || !api_json_path.nil?
+  end
+
+  def api_json_file_entries(file)
+    path = Pathname.new(file.to_s)
+    mtime = File.mtime(path.to_s).to_f
+    cached = (@api_json_cache ||= {})
+    return cached[:entries] if cached[:path] == path.to_s && cached[:mtime] == mtime
+
+    begin
+      text = path.open("r") { |io| ensure_utf8_encoding(io).read }
+      data = JSON.parse(text)
+    rescue ScriptError, StandardError => error
+      raise PybrewFormulaUnavailableError,
+            "malformed API JSON at #{path}: #{error.class}: #{error.message}"
+    end
+    entries = api_json_entries(data, path)
+    @api_json_cache = { path: path.to_s, mtime: mtime, entries: entries }
+    entries
+  end
+
+  def api_json_entries(data, source = nil)
+    entries = case data
+              when Hash
+                if data["formulae"].is_a?(Array)
+                  data["formulae"]
+                elsif data["formula"].is_a?(Hash)
+                  [data["formula"]]
+                elsif data["name"] || data[:name] || data["full_name"] || data[:full_name]
+                  [data]
+                else
+                  raise PybrewFormulaUnavailableError,
+                        "malformed API JSON at #{source}: expected a formula struct, " \
+                        "an array of structs, or {\"formulae\": [...]}"
+                end
+              when Array
+                data
+              else
+                raise PybrewFormulaUnavailableError,
+                      "malformed API JSON at #{source}: expected an object or array"
+              end
+    entries = entries.select { |entry| entry.is_a?(Hash) }
+    if entries.empty?
+      raise PybrewFormulaUnavailableError,
+            "malformed API JSON at #{source}: no formula structs found"
+    end
+    entries
+  end
+
+  def api_struct_name(entry)
+    name = entry["name"] || entry[:name]
+    name = entry["full_name"] || entry[:full_name] if name.nil? || name.to_s.empty?
+    if name.nil? || name.to_s.empty?
+      raise PybrewFormulaUnavailableError,
+            "malformed API JSON struct: formula entry is missing name/full_name"
+    end
+    name.to_s.split("/").last
+  end
+
+  # Map local API JSON into PybrewLoadedFormula classes via the bounded
+  # load_formula_from_struct! cache path.  Raises clear errors for missing or
+  # malformed files/structs.
+  def load_formula_from_api!(source = nil, path: nil)
+    file = nil
+    entries =
+      if source.is_a?(Hash) || source.is_a?(Array)
+        api_json_entries(source, path || "inline API JSON")
+      else
+        file = path
+        if file.nil? && (source.is_a?(String) || source.is_a?(Pathname))
+          file = source
+        end
+        file = api_json_path if file.nil?
+        file = Pathname.new(file.to_s) unless file.nil?
+        if file.nil? || !file.file?
+          raise PybrewFormulaUnavailableError,
+                "API JSON file not found: #{file.nil? ? "(none configured)" : file}; " \
+                "set #{API_JSON_ENV} to a local formula JSON file"
+        end
+        api_json_file_entries(file)
+      end
+
+    loaded = entries.map do |entry|
+      entry_name = api_struct_name(entry)
+      load_formula_from_struct!(entry_name, entry)
+    end
+    if !file.nil? && file.file?
+      @api_json_loaded = { path: file.to_s, mtime: File.mtime(file.to_s).to_f }
+    end
+    loaded.length == 1 ? loaded.first : loaded
+  end
+
+  def ensure_api_json_loaded
+    file = api_json_path
+    return nil if file.nil? || !file.file?
+
+    mtime = File.mtime(file.to_s).to_f
+    loaded = @api_json_loaded
+    return nil if loaded && loaded[:path] == file.to_s && loaded[:mtime] == mtime
+
+    load_formula_from_api!(path: file)
+    @api_json_loaded = { path: file.to_s, mtime: mtime }
+    nil
+  end
+
+  # Local tap roots come from the pybrew config payload and/or PYBREW_TAPS.
+  def tap_roots
+    roots = []
+    Array(PYBREW_CONFIG["taps"]).each { |tap| roots << Pathname.new(tap.to_s) }
+    ENV[TAPS_ENV].to_s.split(File::PATH_SEPARATOR).each do |tap|
+      roots << Pathname.new(tap.to_s) unless tap.to_s.empty?
+    end
+    roots.select(&:directory?).map { |root| root.expand_path }.uniq
+  end
+
+  def tap_alias_paths
+    tap_roots.flat_map do |root|
+      aliases_dir = root/"Aliases"
+      next [] unless aliases_dir.directory?
+
+      aliases_dir.children.select { |child| child.file? || child.symlink? }
+                 .sort_by { |child| child.basename.to_s }
+    end
+  end
+
+  def tap_aliases
+    tap_alias_paths.map { |path| path.basename(".rb").to_s }
+  end
+
+  def tap_alias_path(alias_name)
+    wanted = alias_name.to_s.split("/").last.to_s.sub(/\.rb\z/, "")
+    return nil if wanted.empty?
+
+    tap_alias_paths.find { |path| path.basename(".rb").to_s == wanted }
+  end
+
+  def tap_alias_target(alias_name)
+    alias_path = tap_alias_path(alias_name)
+    return nil if alias_path.nil?
+
+    target = alias_path.symlink? ? alias_path.realpath : alias_path
+    return nil unless target.file?
+
+    [target.basename(".rb").to_s, target]
+  rescue Errno::ENOENT, Errno::EACCES
+    nil
+  end
+
+  def resolve_tap_alias(alias_name)
+    found = tap_alias_target(alias_name)
+    return nil if found.nil?
+
+    canonical, target = found
+    load_formula_from_path(canonical, target)
+  rescue ScriptError, StandardError
+    nil
+  end
+
+  def resolve_tap_alias!(alias_name)
+    found = tap_alias_target(alias_name)
+    if found.nil?
+      raise PybrewFormulaUnavailableError,
+            "no local tap alias named #{alias_name.inspect} in " \
+            "#{tap_roots.join(", ")} (expected Aliases/<name>.rb)"
+    end
+
+    canonical, target = found
+    load_formula_from_path(canonical, target)
   end
 
   def factory_load_source(reference, options = {})
@@ -8666,6 +8857,8 @@ module Formulary
     @path_cache = {}
     @factory_cache = {}
     @api_cache = {}
+    @api_json_cache = {}
+    @api_json_loaded = nil
     nil
   end
 
@@ -11133,6 +11326,7 @@ def execute_install_body(
         "cellar": str(config.cellar),
         "head_version": "HEAD" if getattr(formula.head, "url", None) else None,
         "cellar": str(config.cellar),
+        "taps": [str(tap) for tap in getattr(config, "taps", [])],
         "formulae": formulae,
         "resources": resources,
     }

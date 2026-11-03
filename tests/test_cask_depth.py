@@ -661,3 +661,236 @@ def test_zap_refuses_paths_outside_allowed_roots(
     with pytest.raises(CaskError, match="outside allowed roots"):
         cask_env.installer.zap(cask)
     assert outside.exists()
+
+
+# ---------------------------------------------------------------------------
+# suite artifacts (Homebrew "moved" directory semantics) and generic artifact
+# ---------------------------------------------------------------------------
+
+
+def test_suite_artifact_copies_directory(cask_env: SimpleNamespace) -> None:
+    archive = cask_env.tmp_path / "Suite-1.0.zip"
+    digest = _make_zip(
+        archive,
+        {
+            "Suite Folder/App1.app/Contents/Info.plist": b"<plist/>",
+            "Suite Folder/readme.txt": b"readme\n",
+        },
+    )
+    _write_cask(
+        cask_env.tap,
+        "suite",
+        "1.0",
+        digest,
+        archive,
+        artifacts='  suite "Suite Folder"',
+    )
+
+    result = cask_env.installer.install(cask_env.loader.load("suite"))
+
+    destination = cask_env.config.applications / "Suite Folder"
+    assert (destination / "App1.app/Contents/Info.plist").is_file()
+    assert (destination / "readme.txt").read_text() == "readme\n"
+    assert result.artifacts == [str(destination)]
+
+    cask_env.installer.uninstall("suite")
+    assert not destination.exists()
+
+
+def test_suite_artifact_honors_explicit_target(cask_env: SimpleNamespace) -> None:
+    archive = cask_env.tmp_path / "Suite-1.0.zip"
+    digest = _make_zip(
+        archive,
+        {
+            "Suite Folder/App1.app/Contents/Info.plist": b"<plist/>",
+        },
+    )
+    _write_cask(
+        cask_env.tap,
+        "suite",
+        "1.0",
+        digest,
+        archive,
+        artifacts='  suite "Suite Folder", target: "My Suite"',
+    )
+
+    cask_env.installer.install(cask_env.loader.load("suite"))
+
+    destination = cask_env.config.applications / "My Suite"
+    assert (destination / "App1.app/Contents/Info.plist").is_file()
+    assert not (cask_env.config.applications / "Suite Folder").exists()
+
+
+@pytest.mark.parametrize("target", ["../escape", "~/escape"])
+def test_suite_artifact_target_cannot_escape(
+    cask_env: SimpleNamespace, target: str
+) -> None:
+    archive = cask_env.tmp_path / "Suite-1.0.zip"
+    digest = _make_zip(
+        archive, {"Suite Folder/App1.app/Contents/Info.plist": b"<plist/>"}
+    )
+    _write_cask(
+        cask_env.tap,
+        "suite",
+        "1.0",
+        digest,
+        archive,
+        artifacts=f'  suite "Suite Folder", target: "{target}"',
+    )
+
+    with pytest.raises(CaskError, match="unsafe artifact target"):
+        cask_env.installer.install(cask_env.loader.load("suite"))
+
+
+def test_generic_artifact_is_an_explicit_limitation(
+    cask_env: SimpleNamespace,
+) -> None:
+    archive = cask_env.tmp_path / "Generic-1.0.zip"
+    digest = _make_zip(archive, {"Generic.app/Contents/Info.plist": b"<plist/>"})
+    _write_cask(
+        cask_env.tap,
+        "generic",
+        "1.0",
+        digest,
+        archive,
+        artifacts='  artifact "Generic.app"',
+    )
+
+    with pytest.raises(
+        CaskError, match="generic `artifact` stanza is not supported"
+    ):
+        cask_env.installer.install(cask_env.loader.load("generic"))
+
+
+# ---------------------------------------------------------------------------
+# receipt cleanup safety (tampered receipts must not delete outside files)
+# ---------------------------------------------------------------------------
+
+
+def _tamper_receipt(room: Path, extra_path: Path) -> None:
+    receipt_path = room / ".metadata" / "receipt.json"
+    payload = json.loads(receipt_path.read_text())
+    payload["installed"].append(str(extra_path))
+    receipt_path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_uninstall_ignores_unsafe_receipt_paths(cask_env: SimpleNamespace) -> None:
+    archive = cask_env.tmp_path / "SafeReceipt-1.0.zip"
+    digest = _make_zip(archive, {"payload/Safe.ttf": b"safe"})
+    _write_cask(
+        cask_env.tap,
+        "safereceipt",
+        "1.0",
+        digest,
+        archive,
+        artifacts='  font "payload/Safe.ttf"',
+    )
+    result = cask_env.installer.install(cask_env.loader.load("safereceipt"))
+    font = cask_env.library_root / "Fonts" / "Safe.ttf"
+    assert font.is_file()
+
+    outside = cask_env.tmp_path / "outside-receipt.txt"
+    outside.write_text("do not delete", encoding="utf-8")
+    _tamper_receipt(result.room, outside)
+
+    cask_env.installer.uninstall("safereceipt")
+
+    assert outside.read_text() == "do not delete"
+    assert not font.exists()
+    assert not result.room.exists()
+
+
+def test_force_reinstall_ignores_unsafe_receipt_paths(
+    cask_env: SimpleNamespace,
+) -> None:
+    archive = cask_env.tmp_path / "SafeReceipt-1.0.zip"
+    digest = _make_zip(archive, {"payload/Safe.ttf": b"safe"})
+    _write_cask(
+        cask_env.tap,
+        "safereceipt",
+        "1.0",
+        digest,
+        archive,
+        artifacts='  font "payload/Safe.ttf"',
+    )
+    cask = cask_env.loader.load("safereceipt")
+    result = cask_env.installer.install(cask)
+
+    outside = cask_env.tmp_path / "outside-reinstall.txt"
+    outside.write_text("do not delete", encoding="utf-8")
+    _tamper_receipt(result.room, outside)
+
+    cask_env.installer.install(cask_env.loader.load("safereceipt"), force=True)
+
+    assert outside.read_text() == "do not delete"
+
+
+def test_upgrade_ignores_unsafe_old_receipt_paths(
+    cask_env: SimpleNamespace,
+) -> None:
+    archive = cask_env.tmp_path / "SafeReceipt-1.0.zip"
+    digest = _make_zip(archive, {"payload/Safe.ttf": b"safe"})
+    _write_cask(
+        cask_env.tap,
+        "safereceipt",
+        "1.0",
+        digest,
+        archive,
+        artifacts='  font "payload/Safe.ttf"',
+    )
+    first = cask_env.installer.install(cask_env.loader.load("safereceipt"))
+
+    outside = cask_env.tmp_path / "outside-upgrade.txt"
+    outside.write_text("do not delete", encoding="utf-8")
+    _tamper_receipt(first.room, outside)
+
+    _write_cask(
+        cask_env.tap,
+        "safereceipt",
+        "2.0",
+        digest,
+        archive,
+        artifacts='  font "payload/Safe.ttf"',
+    )
+    cask_env.installer.upgrade(cask_env.loader.load("safereceipt"))
+
+    assert outside.read_text() == "do not delete"
+
+
+# ---------------------------------------------------------------------------
+# zap symlink safety
+# ---------------------------------------------------------------------------
+
+
+def test_zap_refuses_symlink_outside_allowed_roots(
+    cask_env: SimpleNamespace,
+) -> None:
+    cask = parse_cask_source('cask "zappy" do\n  version "1.0"\nend\n')
+    # The system temp dir is deliberately an allowed zap root (tests/trash), so
+    # use a target that is truly outside home/prefix/temp.
+    outside = Path("/etc/hosts")
+    link = cask_env.config.prefix / "outside-link.txt"
+    link.symlink_to(outside)
+    cask.zap = [str(link)]
+
+    with pytest.raises(CaskError, match="outside allowed roots"):
+        cask_env.installer.zap(cask)
+    assert outside.exists()
+    assert link.is_symlink()
+
+
+def test_zap_removes_symlink_without_touching_target(
+    cask_env: SimpleNamespace,
+) -> None:
+    cask = parse_cask_source('cask "zappy" do\n  version "1.0"\nend\n')
+    real = cask_env.config.prefix / "real-target.txt"
+    real.write_text("keep", encoding="utf-8")
+    link = cask_env.config.prefix / "inside-link.txt"
+    link.symlink_to(real)
+    cask.zap = [str(link)]
+
+    removed = cask_env.installer.zap(cask)
+
+    assert removed == [link]
+    assert not link.is_symlink()
+    assert real.read_text() == "keep"

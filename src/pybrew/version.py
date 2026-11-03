@@ -3,6 +3,14 @@
 Homebrew infers a formula version from its stable URL unless the formula sets
 one explicitly.  This module implements the common detection patterns used by
 homebrew-core, plus a small natural-order comparison used by ``deps``/``list``.
+
+Token semantics are a bounded approximation of Homebrew's ``Version`` parser:
+numeric and letter tokens, ranked pre-release words (alpha < beta < pre < rc <
+p < post), and the ``PkgVersion`` revision suffix are supported.  Deviations
+are intentional and documented on :class:`Version`: most notably
+``Version("1.0.0") > Version("1.0")`` (Homebrew's null token compares equal to
+a numeric zero), composite tokens such as ``alpha5`` are compared as separate
+letter/numeric tokens, and only :class:`PkgVersion` has a revision.
 """
 
 from __future__ import annotations
@@ -104,6 +112,30 @@ def _tokens(version: str) -> list[object]:
     return tokens
 
 
+#: Approximate Homebrew pre-release ranking (lower sorts earlier).
+_PRE_RELEASE_RANK = {
+    "alpha": 0,
+    "beta": 1,
+    "pre": 2,
+    "preview": 2,
+    "rc": 3,
+    "p": 4,
+    "post": 5,
+}
+
+
+def _compare_text_tokens(left: str, right: str) -> int:
+    left_rank = _PRE_RELEASE_RANK.get(left)
+    right_rank = _PRE_RELEASE_RANK.get(right)
+    if left_rank is not None and right_rank is not None:
+        if left_rank == right_rank:
+            return 0
+        return -1 if left_rank < right_rank else 1
+    if left == right:
+        return 0
+    return -1 if left < right else 1
+
+
 def compare_versions(left: str, right: str) -> int:
     """Return -1/0/1 for natural ordering of two version strings.
 
@@ -131,7 +163,7 @@ def compare_versions(left: str, right: str) -> int:
             return 1  # numeric segment sorts after a text segment
         if isinstance(b, int):
             return -1
-        return -1 if str(a) < str(b) else 1
+        return _compare_text_tokens(str(a), str(b))
     return 0
 
 
@@ -142,6 +174,16 @@ class Version:
     The token parser exposes numeric/letter segments plus ``major``,
     ``minor`` and ``patch``; comparisons stay String-compatible and match
     :func:`compare_versions`.
+
+    Intentional deviations from Homebrew's parser:
+
+    * no composite token classes (``alpha5`` is the tokens ``"alpha", 5``);
+    * pre-release words are ranked approximately rather than by token class;
+    * extra numeric segments stay significant: ``Version("1.0.0") >
+      Version("1.0")`` whereas Homebrew compares the missing/null token equal
+      to a numeric zero;
+    * ``revision`` is always 0 on ``Version`` and meaningful only on
+      :class:`PkgVersion`.
     """
 
     __slots__ = ("value",)
@@ -160,6 +202,34 @@ class Version:
         """Numeric/letter tokens, e.g. ``"1.2.3-beta"`` -> ``[1, 2, 3, "beta"]``."""
 
         return _tokens(self.value)
+
+    @property
+    def tokens(self) -> list[object]:
+        """Alias for :attr:`segments` (Homebrew's token list)."""
+
+        return self.segments
+
+    @property
+    def pre_release_tokens(self) -> list[str]:
+        """Recognized pre-release words in this version (lower case)."""
+
+        return [
+            token
+            for token in self.segments
+            if isinstance(token, str) and token in _PRE_RELEASE_RANK
+        ]
+
+    @property
+    def pre_release(self) -> bool:
+        """Whether the version contains a recognized pre-release token."""
+
+        return bool(self.pre_release_tokens)
+
+    @property
+    def revision(self) -> int:
+        """Revision number; plain versions have no revision (0)."""
+
+        return 0
 
     def _segment(self, index: int) -> int:
         tokens = self.segments
@@ -245,6 +315,14 @@ class PkgVersion(Version):
     @property
     def segments(self) -> list[object]:
         return self._version.segments
+
+    @property
+    def pre_release_tokens(self) -> list[str]:
+        return self._version.pre_release_tokens
+
+    @property
+    def pre_release(self) -> bool:
+        return self._version.pre_release
 
     @property
     def major(self) -> int:

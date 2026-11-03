@@ -74,3 +74,27 @@ def test_pkg_version_revision_behavior() -> None:
     assert pkg == "1.2.3_2"
     assert PkgVersion.parse("1.2.3").revision == 0
     assert str(PkgVersion("1.2.3", 0)) == "1.2.3"
+
+
+def test_version_prerelease_and_token_semantics() -> None:
+    alpha = Version("1.0-alpha")
+    beta = Version("1.0-beta")
+    pre = Version("1.0-pre")
+    rc = Version("1.0-rc1")
+    patch = Version("1.0-p1")
+
+    assert alpha.tokens == [1, 0, "alpha"]
+    assert (alpha.major, alpha.minor, alpha.patch) == (1, 0, 0)
+    assert alpha.pre_release is True
+    assert alpha.pre_release_tokens == ["alpha"]
+    assert Version("1.0").pre_release is False
+    assert alpha < beta < pre < rc < patch < Version("1.0")
+    assert Version("1.0-beta2") < Version("1.0-beta10")
+    assert Version("1.0-post1") > Version("1.0-p1")
+    assert Version("1.0.0") > Version("1.0")  # documented deviation
+    assert alpha.revision == 0
+    assert PkgVersion("1.0-alpha", 3).pre_release is True
+    assert PkgVersion.parse("1.0-alpha_2").revision == 2
+    assert PkgVersion.parse("1.0-alpha_2").pre_release_tokens == ["alpha"]
+    assert Version("1.0") == PkgVersion("1.0", 0)
+    assert Version("1.0") != PkgVersion("1.0", 2)

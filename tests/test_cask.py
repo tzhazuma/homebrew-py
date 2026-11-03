@@ -2606,3 +2606,139 @@ def test_cask_livecheck_result_property() -> None:
 
     bare = Cask(token="bare")
     assert bare.livecheck_result is None
+
+
+# ---------------------------------------------------------------------------
+# Cask#livecheck_status (regex path, no Ruby needed)
+# ---------------------------------------------------------------------------
+
+
+def test_version_csv_splits_commas() -> None:
+    cask = parse_cask_source(
+        'cask "csv" do\n  version "1.2.3,4.5, 6"\nend\n'
+    )
+    assert cask.version_csv == ["1.2.3", "4.5", "6"]
+
+    plain = parse_cask_source('cask "plain" do\n  version "1.0"\nend\n')
+    assert plain.version_csv == ["1.0"]
+
+    latest = parse_cask_source('cask "latest" do\n  version "latest"\nend\n')
+    assert latest.version_csv == ["latest"]
+
+
+def test_livecheck_status_regex_up_to_date_and_outdated() -> None:
+    from pybrew.cask import Cask
+
+    cask = Cask(
+        token="regexy",
+        version="2.0",
+        livecheck={"regex": r"tool-(\d+(?:\.\d+)*)"},
+    )
+
+    up = cask.livecheck_status(page="tool-2.0 released")
+    assert up["status"] == "up_to_date"
+    assert up["source"] == "regex"
+    assert up["candidates"] == ["2.0"]
+
+    out = cask.livecheck_status(page="tool-3.1 released")
+    assert out["status"] == "outdated"
+    assert out["latest_version"] == "3.1"
+
+    multi = cask.livecheck_status(page="tool-1.0 and tool-2.0")
+    assert multi["status"] == "up_to_date"
+
+
+def test_livecheck_status_csv_version_matches_component() -> None:
+    from pybrew.cask import Cask
+
+    cask = Cask(
+        token="csv",
+        version="1.2.3,4",
+        livecheck={"regex": r"build-(\d+)"},
+    )
+
+    result = cask.livecheck_status(page="build-4")
+    assert result["current_versions"] == ["1.2.3", "4"]
+    assert result["status"] == "up_to_date"
+
+    outdated = cask.livecheck_status(page="build-5")
+    assert outdated["status"] == "outdated"
+    assert outdated["latest_version"] == "5"
+
+
+def test_livecheck_status_offline_and_unknown() -> None:
+    from pybrew.cask import Cask
+
+    regex = Cask(
+        token="offline",
+        version="1.0",
+        livecheck={"regex": r"v(\d+)"},
+    )
+    offline = regex.livecheck_status()
+    assert offline["status"] == "unknown"
+    assert "no network" in (offline["reason"] or "")
+
+    none = Cask(token="none", version="1.0")
+    unknown = none.livecheck_status(page="anything")
+    assert unknown["status"] == "unknown"
+    assert "no livecheck strategy or regex" in (unknown["reason"] or "")
+
+    latest = Cask(
+        token="latest",
+        version="latest",
+        livecheck={"regex": r"v(\d+)"},
+    )
+    latest_status = latest.livecheck_status(page="v2")
+    assert latest_status["status"] == "unknown"
+    assert "no comparable current version" in (latest_status["reason"] or "")
+
+
+def test_livecheck_status_invalid_regex_is_error() -> None:
+    from pybrew.cask import Cask
+
+    cask = Cask(token="bad", version="1.0", livecheck={"regex": "("})
+
+    result = cask.livecheck_status(page="anything")
+
+    assert result["status"] == "error"
+    assert "invalid livecheck regex" in (result["error"] or "")
+
+
+def test_livecheck_status_uses_injected_fetcher() -> None:
+    from pybrew.cask import Cask
+
+    calls: list[str] = []
+    cask = Cask(
+        token="fetched",
+        version="2.0",
+        url="https://example.com/tool",
+        livecheck={"regex": r"v(\d+(?:\.\d+)*)"},
+    )
+
+    def fetcher(url: str) -> str:
+        calls.append(url)
+        return "v2.0"
+
+    result = cask.livecheck_status(fetcher=fetcher)
+
+    assert calls == ["https://example.com/tool"]
+    assert result["status"] == "up_to_date"
+
+
+def test_livecheck_status_fetcher_error_is_error() -> None:
+    from pybrew.cask import Cask
+
+    cask = Cask(
+        token="failing",
+        version="1.0",
+        url="https://example.com/tool",
+        livecheck={"regex": r"v(\d+)"},
+    )
+
+    def fetcher(_url: str) -> str:
+        raise RuntimeError("offline")
+
+    result = cask.livecheck_status(fetcher=fetcher)
+
+    assert result["status"] == "error"
+    assert "offline" in (result["error"] or "")

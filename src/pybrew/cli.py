@@ -283,6 +283,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor_cmd = subparsers.add_parser("doctor", parents=[common], help="check the prefix for problems")
     doctor_cmd.add_argument("--json", action="store_true")
+
+    linkage_cmd = subparsers.add_parser(
+        "linkage", parents=[common], help="check an installed keg's dynamic linkage"
+    )
+    linkage_cmd.add_argument("formula")
+    linkage_cmd.add_argument("--json", action="store_true")
     config = subparsers.add_parser("config", parents=[common], help="show pybrew configuration")
     config.add_argument("--json", action="store_true")
 
@@ -318,6 +324,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     caveats_cmd.add_argument("formula")
     caveats_cmd.add_argument("--cask", action="store_true", help="show cask caveats")
+
+    livecheck_cmd = subparsers.add_parser(
+        "livecheck", parents=[common], help="check a cask's livecheck status"
+    )
+    livecheck_cmd.add_argument("cask")
+    livecheck_cmd.add_argument("--page", type=Path, help="use a local page instead of the network")
+    livecheck_cmd.add_argument("--online", action="store_true", help="fetch the livecheck page over HTTP")
+    livecheck_cmd.add_argument("--json", action="store_true")
     return parser
 
 
@@ -1315,6 +1329,60 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     return 1
 
 
+def cmd_linkage(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    loader = _loader(config)
+    formula = _load_formula(args.formula, loader, use_api=getattr(args, "api", False))
+    installer = Installer(config, loader)
+    try:
+        report = installer.linkage_diagnostic(formula.name)
+    except PybrewError as error:
+        print(f"Error: {error}", file=sys.stderr)
+        return 1
+    ok = report == "linkage OK"
+    if getattr(args, "json", False):
+        print(json.dumps({"formula": formula.name, "ok": ok, "report": report}, indent=2))
+    else:
+        print(report)
+    return 0 if ok else 1
+
+
+def cmd_livecheck(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    cask = _cask_loader(config, allow_api=getattr(args, "api", False)).load(args.cask)
+    page = None
+    if getattr(args, "page", None) is not None:
+        page = Path(args.page).read_text(encoding="utf-8", errors="replace")
+
+    fetcher = None
+    if getattr(args, "online", False):
+        import urllib.request
+
+        def fetcher(url: str) -> str:
+            request = urllib.request.Request(
+                url, headers={"User-Agent": "pybrew-livecheck/0.1"}
+            )
+            with urllib.request.urlopen(request, timeout=30) as response:
+                return response.read().decode("utf-8", errors="replace")
+
+    status = cask.livecheck_status(page=page, fetcher=fetcher)
+    if getattr(args, "json", False):
+        print(json.dumps(status, indent=2, sort_keys=True))
+    else:
+        print(f"{status.get('token')}: {status.get('status')}")
+        if status.get("current_version"):
+            print(f"  current: {status['current_version']}")
+        if status.get("latest_version"):
+            print(f"  latest:  {status['latest_version']}")
+        if status.get("reason"):
+            print(f"  reason:  {status['reason']}")
+    if status.get("status") == "outdated":
+        return 1
+    if status.get("status") == "error":
+        return 1
+    return 0
+
+
 def cmd_config(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     data = {
@@ -1502,11 +1570,13 @@ _COMMANDS = {
     "reinstall": cmd_reinstall,
     "services": cmd_services,
     "doctor": cmd_doctor,
+    "linkage": cmd_linkage,
     "config": cmd_config,
     "analytics": cmd_analytics,
     "parse": cmd_parse,
     "test": cmd_test,
     "caveats": cmd_caveats,
+    "livecheck": cmd_livecheck,
 }
 
 

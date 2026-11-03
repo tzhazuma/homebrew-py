@@ -292,6 +292,155 @@ class Cask:
         result = self.livecheck.get("strategy_result")
         return result if isinstance(result, dict) else None
 
+    @property
+    def version_csv(self) -> list[str]:
+        """Return the cask version split on commas (Homebrew ``Version#csv``)."""
+
+        if not self.version:
+            return []
+        return [
+            part.strip()
+            for part in str(self.version).split(",")
+            if part.strip()
+        ]
+
+    def livecheck_status(
+        self,
+        *,
+        fetcher: Optional[Callable[[str], Any]] = None,
+        page: Optional[str | bytes] = None,
+        timeout: Optional[float] = None,
+    ) -> dict[str, Any]:
+        """Run a bounded livecheck and compare it with the current version.
+
+        Returns a structured, JSON-friendly dict with ``status`` one of
+        ``up_to_date``/``outdated``/``unknown``/``error`` plus the normalized
+        candidates.  No network is performed unless the caller injects a
+        ``fetcher``; a strategy block additionally requires the usual
+        ``PYBREW_ALLOW_CASK_RUBY=1`` opt-in.  When no strategy block exists but
+        a livecheck ``regex`` is configured, the regex is applied to the page.
+        """
+
+        livecheck = self.livecheck if isinstance(self.livecheck, dict) else {}
+        status: dict[str, Any] = {
+            "token": self.token,
+            "status": "unknown",
+            "current_version": self.version,
+            "current_versions": self.version_csv,
+            "latest_version": None,
+            "candidates": [],
+            "reason": None,
+            "error": None,
+            "source": None,
+            "result": None,
+        }
+
+        page_text: Optional[str] = None
+        if page is not None:
+            if isinstance(page, bytes):
+                page_text = page.decode("utf-8", errors="replace")
+            else:
+                page_text = str(page)
+        elif fetcher is not None:
+            url = self._livecheck_url()
+            if not url:
+                status.update(
+                    status="unknown",
+                    reason="cask has no URL to fetch for livecheck",
+                )
+                return status
+            try:
+                fetched = fetcher(url)
+            except Exception as error:  # caller-supplied transport
+                status.update(
+                    status="error",
+                    error=f"{type(error).__name__}: {error}",
+                    reason="livecheck page fetch failed",
+                )
+                return status
+            if isinstance(fetched, bytes):
+                fetched = fetched.decode("utf-8", errors="replace")
+            page_text = None if fetched is None else str(fetched)
+
+        strategy_source = livecheck.get("strategy_source")
+        regex_source = livecheck.get("regex")
+        if strategy_source:
+            status["source"] = "strategy"
+            result = self.check_livecheck(page=page_text, timeout=timeout)
+            status["result"] = result
+            if result.get("error"):
+                status.update(
+                    status="error",
+                    error=result["error"],
+                    reason="livecheck strategy failed",
+                )
+                return status
+            if not result.get("executed"):
+                status.update(
+                    status="unknown",
+                    reason=result.get("reason") or "livecheck strategy did not run",
+                )
+                return status
+            candidates = _normalize_livecheck_candidates(result.get("result"))
+        elif regex_source:
+            status["source"] = "regex"
+            if page_text is None:
+                status.update(
+                    status="unknown",
+                    reason="no page content or fetcher supplied; no network is performed",
+                )
+                return status
+            try:
+                candidates = _livecheck_regex_candidates(
+                    str(regex_source), page_text
+                )
+            except re.error as error:
+                status.update(
+                    status="error",
+                    error=f"invalid livecheck regex: {error}",
+                    reason="livecheck regex is invalid",
+                )
+                return status
+        else:
+            status.update(
+                status="unknown",
+                reason="cask has no livecheck strategy or regex",
+            )
+            return status
+
+        status["candidates"] = candidates
+        if not candidates:
+            status.update(
+                status="unknown",
+                reason="livecheck produced no version candidates",
+            )
+            return status
+        if self.version is None or str(self.version) in ("latest", ":latest"):
+            status.update(
+                status="unknown",
+                reason="cask has no comparable current version",
+            )
+            return status
+
+        current_versions = self.version_csv or [str(self.version)]
+        for candidate in candidates:
+            for current in current_versions:
+                if compare_versions(candidate, current) == 0:
+                    status.update(status="up_to_date", latest_version=candidate)
+                    return status
+        status.update(
+            status="outdated",
+            latest_version=_latest_livecheck_candidate(candidates),
+        )
+        return status
+
+    def _livecheck_url(self) -> Optional[str]:
+        if isinstance(self.livecheck, dict):
+            value = self.livecheck.get("url")
+            if isinstance(value, str) and value:
+                return value
+        return self.url
+
     def _app_candidates(self) -> list[Path]:
         prefix = Path(os.environ.get("HOMEBREW_PREFIX", "/usr/local"))
         appdir = Path(os.environ.get("PYBREW_APPDIR", str(prefix / "Applications")))
@@ -707,6 +856,53 @@ class Cask:
             "zap": self.zap,
             "caveats": self.caveats,
         }
+
+
+def _normalize_livecheck_candidates(value: Any) -> list[str]:
+    """Normalize a strategy result (or scalar) into version candidate strings."""
+
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        raw = list(value)
+    else:
+        raw = [value]
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if item is None:
+            continue
+        text = str(item).strip()
+        if text and text not in seen:
+            seen.add(text)
+            candidates.append(text)
+    return candidates
+
+
+def _livecheck_regex_candidates(pattern: str, page: str) -> list[str]:
+    """Extract unique version candidates from ``page`` with ``pattern``."""
+
+    compiled = re.compile(pattern)
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for match in compiled.findall(page):
+        if isinstance(match, tuple):
+            text = next((group for group in match if group), "")
+        else:
+            text = match
+        text = str(text).strip()
+        if text and text not in seen:
+            seen.add(text)
+            candidates.append(text)
+    return candidates
+
+
+def _latest_livecheck_candidate(candidates: list[str]) -> Optional[str]:
+    latest: Optional[str] = None
+    for candidate in candidates:
+        if latest is None or compare_versions(candidate, latest) > 0:
+            latest = candidate
+    return latest
 
 
 # Artifact stanzas that name a file or bundle to install.  ``stage_only`` is

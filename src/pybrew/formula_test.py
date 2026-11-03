@@ -191,8 +191,17 @@ class FormulaTestContext
   end
 
   # Lightweight, String-compatible formula version (Homebrew's ``Version``).
+  # Mirrors the Python ``pybrew.version.Version`` token comparison, including
+  # the intentional deviation that an extra numeric segment is significant
+  # (``1.2.3 < 1.2.3.0``; Homebrew treats it as equal).
   class Version < String
     include Comparable
+
+    # Approximate Homebrew pre-release ranking (lower sorts earlier).
+    PRE_RELEASE_RANKS = {
+      "alpha" => 0, "beta" => 1, "pre" => 2, "preview" => 2,
+      "rc" => 3, "p" => 4, "post" => 5,
+    }.freeze
 
     def initialize(value)
       super(value.to_s)
@@ -203,6 +212,10 @@ class FormulaTestContext
       @segments ||= to_s.scan(/\d+|[A-Za-z]+/).map do |part|
         part =~ /\A\d+\z/ ? part.to_i : part.downcase
       end
+    end
+
+    def tokens
+      segments
     end
 
     def major
@@ -225,13 +238,42 @@ class FormulaTestContext
       self.class.new(segments.first(3).join("."))
     end
 
+    def pre_release_tokens
+      segments.select do |segment|
+        segment.is_a?(String) && PRE_RELEASE_RANKS.key?(segment)
+      end
+    end
+
+    def pre_release?
+      !pre_release_tokens.empty?
+    end
+
+    def revision
+      0
+    end
+
     def <=>(other)
       other = self.class.new(other.to_s) unless other.is_a?(Version)
+      if other.is_a?(PkgVersion) && !is_a?(PkgVersion)
+        comparison = self <=> other.version
+        return comparison unless comparison.zero?
+
+        return other.revision.zero? ? 0 : -1
+      end
       left = segments
       right = other.segments
       length = [left.length, right.length].max
       length.times do |index|
-        comparison = compare_segment(left[index] || 0, right[index] || 0)
+        left_segment = left[index]
+        right_segment = right[index]
+        if left_segment.nil? && right_segment.nil?
+          next
+        elsif left_segment.nil?
+          return right_segment.is_a?(String) ? 1 : -1
+        elsif right_segment.nil?
+          return left_segment.is_a?(Integer) ? 1 : -1
+        end
+        comparison = compare_segment(left_segment, right_segment)
         return comparison unless comparison.zero?
       end
       0
@@ -240,7 +282,8 @@ class FormulaTestContext
     private
 
     def segment_at(index)
-      segments[index] || 0
+      segment = segments[index]
+      segment.is_a?(Integer) ? segment : 0
     end
 
     def compare_segment(left, right)
@@ -251,7 +294,13 @@ class FormulaTestContext
       elsif right.is_a?(Integer)
         -1
       else
-        left.to_s.downcase <=> right.to_s.downcase
+        left_text = left.to_s.downcase
+        right_text = right.to_s.downcase
+        left_rank = PRE_RELEASE_RANKS[left_text]
+        right_rank = PRE_RELEASE_RANKS[right_text]
+        return left_rank <=> right_rank if left_rank && right_rank
+
+        left_text <=> right_text
       end
     end
   end
@@ -445,6 +494,15 @@ class FormulaTestContext
 
       previous_context = FormulaTestContext.current
       previous_dir = Dir.pwd
+      # Snapshot the process-global Homebrew constants so a dependency test
+      # that rebinds them cannot leak into the parent test.  The mutation is
+      # still process-wide while the dependency runs (single-threaded here);
+      # only these two constants are restored.
+      constant_names = %w[HOMEBREW_PREFIX HOMEBREW_CELLAR]
+      previous_constants = {}
+      constant_names.each do |name|
+        previous_constants[name] = Object.const_get(name) if Object.const_defined?(name)
+      end
       saved_env = {}
       hidden_env = {}
       dependency_testpath = nil
@@ -473,6 +531,14 @@ class FormulaTestContext
           Dir.chdir(previous_dir)
         rescue StandardError
           # The original directory should still exist; keep going if it does not.
+        end
+        begin
+          constant_names.each do |name|
+            Object.send(:remove_const, name) if Object.const_defined?(name, false)
+            Object.const_set(name, previous_constants[name]) if previous_constants.key?(name)
+          end
+        rescue StandardError
+          # Best-effort: a dependency may have frozen or removed the constant.
         end
         hidden_env.each do |key, value|
           ENV[key] = value

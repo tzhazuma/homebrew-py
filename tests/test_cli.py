@@ -151,3 +151,33 @@ def test_cat_home_edit_and_cask(run_cli, sample) -> None:
 
     edit = run_cli("edit", "hello", extra_env={"EDITOR": "true"})
     assert edit.returncode == 0, edit.stderr
+
+
+def test_linkage_command_after_install(run_cli, sample) -> None:
+    assert run_cli("install", "hello", bottle_tag=sample.tag).returncode == 0
+    proc = run_cli("linkage", "hello")
+    assert proc.returncode == 0, proc.stderr
+    assert "linkage OK" in proc.stdout
+
+    proc = run_cli("linkage", "hello", "--json")
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["formula"] == "hello"
+    assert payload["ok"] is True
+
+
+def test_livecheck_command_offline_page(run_cli, tmp_path: Path) -> None:
+    page = tmp_path / "page.html"
+    page.write_text("Livecheck 1.0", encoding="utf-8")
+    proc = run_cli("livecheck", "livecheck", "--page", str(page), "--json", "--ruby-cask")
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "up_to_date"
+    assert payload["current_version"] == "1.0"
+
+    page.write_text("Livecheck 2.0", encoding="utf-8")
+    proc = run_cli("livecheck", "livecheck", "--page", str(page), "--json", "--ruby-cask")
+    assert proc.returncode == 1, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["status"] == "outdated"
+    assert payload["latest_version"] == "2.0"

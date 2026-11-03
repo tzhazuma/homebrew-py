@@ -228,6 +228,23 @@ def sample(tmp_path: Path, bottle_tag: str) -> SimpleNamespace:
 end
 '''
     )
+    (tap / "Casks" / "l").mkdir(parents=True)
+    (tap / "Casks" / "l" / "livecheck.rb").write_text(
+        f'''cask "livecheck" do
+  version "1.0"
+  sha256 "{sha256_file(cask_zip)}"
+  url "{cask_zip.as_uri()}"
+  name "Livecheck"
+  desc "livecheck fixture"
+  homepage "https://example.com/livecheck"
+  app "Test.app"
+  livecheck do
+    url "https://example.com/livecheck"
+    regex(/Livecheck ([0-9.]+)/i)
+  end
+end
+'''
+    )
     (tap / "Formula" / "svc.rb").write_text(
         f'''class Svc < Formula
   desc "service fixture"

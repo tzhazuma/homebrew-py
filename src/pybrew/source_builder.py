@@ -30,6 +30,7 @@ from __future__ import annotations
 import glob
 import os
 import platform
+import posixpath
 import re
 import shutil
 import shlex
@@ -1086,6 +1087,229 @@ _COMPILER_DRIVERS: dict[str, tuple[str, str]] = {
 _INCLUDE_FLAG = "-I{prefix}/include"
 _LIBRARY_FLAG = "-L{prefix}/lib"
 
+# Bounded Superenv-style unsafe paths.  This is intentionally a small allow/deny
+# list, not a reimplementation of Homebrew's full Superenv.
+_SYSTEM_INCLUDE_ROOTS = ("/usr/include", "/usr/local/include")
+_SYSTEM_LIBRARY_ROOTS = (
+    "/usr/lib",
+    "/usr/lib64",
+    "/usr/local/lib",
+    "/lib",
+    "/lib64",
+)
+_RPATH_PREFIXES = ("-Wl,-rpath,", "-Wl,-rpath=", "-Wl,-R,", "-Wl,-R=")
+
+
+def _path_under(path: str, roots: Iterable[str]) -> bool:
+    normalised = posixpath.normpath(path)
+    if not normalised.startswith("/"):
+        return False
+    for root in roots:
+        root = posixpath.normpath(root)
+        if normalised == root or normalised.startswith(root.rstrip("/") + "/"):
+            return True
+    return False
+
+
+def _flag_value(
+    arguments: list[str], index: int
+) -> Optional[tuple[str, str, int]]:
+    """Classify a path-bearing compiler flag as ``(kind, path, consumed)``."""
+
+    token = arguments[index]
+    if token in ("-I", "-isystem"):
+        if index + 1 < len(arguments):
+            return "include", arguments[index + 1], 2
+        return None
+    if token.startswith("-I") and len(token) > 2:
+        return "include", token[2:], 1
+    if token.startswith("-isystem") and len(token) > len("-isystem"):
+        return "include", token[len("-isystem") :], 1
+    if token == "-L":
+        if index + 1 < len(arguments):
+            return "library", arguments[index + 1], 2
+        return None
+    if token.startswith("-L") and len(token) > 2:
+        return "library", token[2:], 1
+    for prefix in _RPATH_PREFIXES:
+        if token.startswith(prefix):
+            return "rpath", token[len(prefix) :], 1
+    if token == "-Wl,-rpath" and index + 1 < len(arguments):
+        following = arguments[index + 1]
+        if following.startswith("-Wl,"):
+            return "rpath", following[len("-Wl,") :], 2
+    return None
+
+
+def sanitize_flag_list(
+    arguments: Iterable[str],
+    prefix: Path,
+    *,
+    drop_prefix_flags: bool = False,
+) -> list[str]:
+    """Return bounded-safe compiler flags.
+
+    Removes system include/library roots, system rpaths and duplicate prefix
+    include/library flags while preserving optimisation/debug/define flags.
+    ``drop_prefix_flags`` is used by the generated shims because they add the
+    keg include/lib paths themselves.
+    """
+
+    args = list(arguments)
+    prefix_root = os.path.normpath(str(Path(prefix)))
+    prefix_include = os.path.normpath(str(Path(prefix) / "include"))
+    prefix_library = os.path.normpath(str(Path(prefix) / "lib"))
+    result: list[str] = []
+    seen_prefix: set[tuple[str, str]] = set()
+    index = 0
+    while index < len(args):
+        parsed = _flag_value(args, index)
+        if parsed is None:
+            result.append(args[index])
+            index += 1
+            continue
+        kind, path, consumed = parsed
+        normalised = os.path.normpath(path)
+        if kind == "include":
+            unsafe = _path_under(normalised, _SYSTEM_INCLUDE_ROOTS)
+            is_prefix = normalised == prefix_include
+        elif kind == "library":
+            unsafe = _path_under(normalised, _SYSTEM_LIBRARY_ROOTS)
+            is_prefix = normalised == prefix_library
+        else:
+            unsafe = _path_under(normalised, _SYSTEM_LIBRARY_ROOTS) or (
+                normalised.startswith("/")
+                and not _path_under(normalised, (prefix_root,))
+            )
+            is_prefix = False
+        if unsafe or (drop_prefix_flags and is_prefix):
+            index += consumed
+            continue
+        if is_prefix:
+            key = (kind, normalised)
+            if key in seen_prefix:
+                index += consumed
+                continue
+            seen_prefix.add(key)
+        result.extend(args[index : index + consumed])
+        index += consumed
+    return result
+
+
+def sanitize_build_flags(
+    flags: str,
+    prefix: Path,
+    *,
+    drop_prefix_flags: bool = False,
+) -> str:
+    """Sanitize a whitespace-separated flag string for a build environment."""
+
+    text = (flags or "").strip()
+    if not text:
+        return ""
+    try:
+        arguments = shlex.split(text)
+    except ValueError:
+        arguments = text.split()
+    return shlex.join(
+        sanitize_flag_list(
+            arguments, prefix, drop_prefix_flags=drop_prefix_flags
+        )
+    )
+
+
+# Standalone helper written next to the shims.  It intentionally duplicates the
+# bounded sanitizer above so the generated scripts work without importing
+# pybrew (the build environment may be a clean shell).
+_SUPERENV_HELPER_SOURCE = '''#!/usr/bin/env python3
+"""Bounded Superenv shim helper generated by pybrew."""
+import os
+import sys
+
+prefix, include, library, driver = sys.argv[1:5]
+arguments = sys.argv[5:]
+SYSTEM_INCLUDE_ROOTS = ("/usr/include", "/usr/local/include")
+SYSTEM_LIBRARY_ROOTS = (
+    "/usr/lib",
+    "/usr/lib64",
+    "/usr/local/lib",
+    "/lib",
+    "/lib64",
+)
+RPATH_PREFIXES = ("-Wl,-rpath,", "-Wl,-rpath=", "-Wl,-R,", "-Wl,-R=")
+PREFIX_ROOT = os.path.normpath(prefix)
+PREFIX_INCLUDE = os.path.normpath(include)
+PREFIX_LIBRARY = os.path.normpath(library)
+
+
+def path_under(path, roots):
+    normalised = os.path.normpath(path)
+    if not normalised.startswith("/"):
+        return False
+    for root in roots:
+        root = os.path.normpath(root)
+        if normalised == root or normalised.startswith(root.rstrip("/") + "/"):
+            return True
+    return False
+
+
+def flag_value(args, index):
+    token = args[index]
+    if token in ("-I", "-isystem"):
+        if index + 1 < len(args):
+            return "include", args[index + 1], 2
+        return None
+    if token.startswith("-I") and len(token) > 2:
+        return "include", token[2:], 1
+    if token.startswith("-isystem") and len(token) > len("-isystem"):
+        return "include", token[len("-isystem"):], 1
+    if token == "-L":
+        if index + 1 < len(args):
+            return "library", args[index + 1], 2
+        return None
+    if token.startswith("-L") and len(token) > 2:
+        return "library", token[2:], 1
+    for flag_prefix in RPATH_PREFIXES:
+        if token.startswith(flag_prefix):
+            return "rpath", token[len(flag_prefix):], 1
+    if token == "-Wl,-rpath" and index + 1 < len(args):
+        following = args[index + 1]
+        if following.startswith("-Wl,"):
+            return "rpath", following[len("-Wl,"):], 2
+    return None
+
+
+filtered = []
+index = 0
+while index < len(arguments):
+    parsed = flag_value(arguments, index)
+    if parsed is None:
+        filtered.append(arguments[index])
+        index += 1
+        continue
+    kind, path, consumed = parsed
+    normalised = os.path.normpath(path)
+    if kind == "include":
+        unsafe = path_under(normalised, SYSTEM_INCLUDE_ROOTS)
+        duplicate_prefix = normalised == PREFIX_INCLUDE
+    elif kind == "library":
+        unsafe = path_under(normalised, SYSTEM_LIBRARY_ROOTS)
+        duplicate_prefix = normalised == PREFIX_LIBRARY
+    else:
+        unsafe = path_under(normalised, SYSTEM_LIBRARY_ROOTS) or (
+            normalised.startswith("/")
+            and not path_under(normalised, (PREFIX_ROOT,))
+        )
+        duplicate_prefix = False
+    if unsafe or duplicate_prefix:
+        index += consumed
+        continue
+    filtered.extend(arguments[index:index + consumed])
+    index += consumed
+
+os.execvp(driver, [driver, "-isystem", include, "-L", library, *filtered])
+'''
+
 
 @dataclass(frozen=True)
 class CompilerSelection:
@@ -1109,6 +1333,7 @@ class SuperenvShims:
     root: Path
     cc: Path
     cxx: Path
+    helper: Path
 
 
 @dataclass(frozen=True)
@@ -1228,9 +1453,9 @@ def install_superenv_shims(
 
     This is deliberately opt-in via ``PYBREW_SUPERENV=1``.  The shims are thin
     wrappers around the selected real compilers that add the keg include/lib
-    paths; they do not claim to implement Homebrew's full flag-sanitizing
-    Superenv.  The generated scripts are stable on disk so parallel builds can
-    reuse them.
+    paths and sanitize system include/library flags at invocation time.  This
+    is a bounded compatibility layer, not Homebrew's full Superenv.  The
+    generated scripts are stable on disk so parallel builds can reuse them.
     """
 
     env = dict(environment)
@@ -1239,6 +1464,10 @@ def install_superenv_shims(
     lib = str(prefix / "lib")
     root = prefix / "var" / "pybrew" / "superenv" / "shims"
     root.mkdir(parents=True, exist_ok=True)
+
+    for name in ("CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS"):
+        if name in env:
+            env[name] = sanitize_build_flags(env[name], prefix)
 
     def real_driver(names: Iterable[str], fallback: str) -> str:
         for name in names:
@@ -1255,11 +1484,16 @@ def install_superenv_shims(
         ("clang++", "g++", "c++"), "c++"
     )
 
+    helper = root / "sanitize_compiler.py"
+    helper.write_text(_SUPERENV_HELPER_SOURCE, encoding="utf-8")
+    helper.chmod(0o755)
+
     def write_shim(path: Path, driver: str) -> None:
         script = (
             "#!/bin/sh\n"
-            f"exec {shlex.quote(driver)} -isystem {shlex.quote(include)} "
-            f"-L {shlex.quote(lib)} \"$@\"\n"
+            f"exec {shlex.quote(sys.executable)} {shlex.quote(str(helper))} "
+            f"{shlex.quote(str(prefix))} {shlex.quote(include)} "
+            f"{shlex.quote(lib)} {shlex.quote(driver)} \"$@\"\n"
         )
         path.write_text(script, encoding="utf-8")
         path.chmod(0o755)
@@ -1274,7 +1508,9 @@ def install_superenv_shims(
     env["HOMEBREW_CC"] = cc
     env["HOMEBREW_CXX"] = cxx
     env["SUPERENV"] = "1"
-    return env, SuperenvShims(root=root, cc=cc_path, cxx=cxx_path)
+    return env, SuperenvShims(
+        root=root, cc=cc_path, cxx=cxx_path, helper=helper
+    )
 
 
 def build_environment(

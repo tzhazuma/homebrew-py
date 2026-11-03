@@ -1568,13 +1568,20 @@ class CaskInstaller:
                 source = self._find(source_root, artifact.source)
                 if source is None:
                     raise CaskError(f"{cask.token}: suite {artifact.source!r} not found")
-                for app_source in source.rglob("*.app"):
-                    destination = appdir / app_source.name
-                    if destination.exists() and force:
-                        self._remove_path(destination)
-                    if not destination.exists():
-                        shutil.copytree(app_source, destination, symlinks=True)
-                        installed.append(str(destination))
+                # Homebrew's Suite artifact is a "moved" directory: copy the
+                # suite itself into the appdir, honoring an explicit target.
+                relative = _safe_artifact_target(
+                    artifact.target, source.name, cask.token
+                )
+                destination = appdir / relative
+                if destination.exists() or destination.is_symlink():
+                    if not force:
+                        raise CaskError(
+                            f"{cask.token}: {destination} already exists"
+                        )
+                    self._remove_path(destination)
+                shutil.copytree(source, destination, symlinks=True)
+                installed.append(str(destination))
             elif artifact.kind == "manpage":
                 self._install_manpage_artifact(
                     cask, artifact, source_root, force, installed
@@ -1590,6 +1597,12 @@ class CaskInstaller:
             elif artifact.kind == "stage_only":
                 # A stage_only artifact entry installs nothing.
                 continue
+            elif artifact.kind == "artifact":
+                raise CaskError(
+                    f"{cask.token}: generic `artifact` stanza is not supported "
+                    "by pybrew; use a specific artifact kind "
+                    "(app, binary, suite, pkg, ...)"
+                )
             else:
                 raise CaskError(f"{cask.token}: unsupported artifact {artifact.kind}")
         return installed
@@ -2215,7 +2228,10 @@ class CaskInstaller:
             try:
                 data = __import__("json").loads(receipt.read_text())
                 for path_str in data.get("installed", []):
-                    self._remove_path(Path(path_str))
+                    path = Path(str(path_str))
+                    if not self._is_safe_removal_path(path):
+                        continue
+                    self._remove_path(path)
             except Exception:
                 pass
         self._remove_path(room)
@@ -2381,6 +2397,8 @@ class CaskInstaller:
                 )
             else:
                 for path in self._installed_paths(old_room):
+                    if not self._is_safe_removal_path(path):
+                        continue
                     if self._path_shared_with_receipt(path, new_paths):
                         continue
                     if self._path_shared_with_pkg_files(path, new_pkg_files):
@@ -2485,6 +2503,48 @@ class CaskInstaller:
             "rollback removed newly installed system package(s): "
             + ", ".join(removed)
         )
+
+    def _removal_roots(self) -> list[Path]:
+        return [
+            self.config.prefix,
+            self.config.caskroom,
+            self.appdir,
+            self.library_root,
+            self.pkg_root,
+        ]
+
+    def _is_safe_removal_path(self, path: Path) -> bool:
+        """Return true when a receipt path may be removed by pybrew.
+
+        Receipts are user-writable data: a tampered/malicious receipt must not
+        make uninstall/upgrade delete arbitrary files.  Symlinks are safe to
+        unlink (only the link itself is removed); regular files/directories
+        must resolve inside one of the install roots.
+        """
+
+        try:
+            if path.is_symlink():
+                # Only the link is removed; check the link's location instead
+                # of following it outside the install roots.
+                locations = [path.parent.resolve()]
+            else:
+                locations = [path.resolve()]
+        except OSError:
+            return False
+        roots: list[Path] = []
+        for root in self._removal_roots():
+            try:
+                roots.append(Path(root).resolve())
+            except OSError:
+                continue
+        for location in locations:
+            if location == Path("/"):
+                continue
+            if any(
+                location == root or root in location.parents for root in roots
+            ):
+                return True
+        return False
 
     @staticmethod
     def _installed_paths(room: Path) -> list[Path]:
@@ -2707,6 +2767,8 @@ class CaskInstaller:
             if isinstance(installed, list):
                 for path_str in installed:
                     path = Path(str(path_str))
+                    if not self._is_safe_removal_path(path):
+                        continue
                     if path.exists() or path.is_symlink():
                         self._remove_path(path)
             self._remove_path(room)

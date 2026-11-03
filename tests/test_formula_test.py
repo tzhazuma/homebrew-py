@@ -1598,7 +1598,8 @@ def test_formula_version_object_semantics(tmp_path: Path) -> None:
   assert version < "1.10"
   assert version > 1
   assert_equal 0, version <=> "1.2.3"
-  assert_equal 0, version <=> "1.2.3.0"
+  assert_equal -1, version <=> "1.2.3.0"
+  assert version < "1.2.3.0"
   assert_equal 0, version <=> Version.new("1.2.3")
 end
 """,
@@ -2095,6 +2096,12 @@ def test_dependency_test_isolates_home_path_and_globals(tmp_path: Path) -> None:
     assert_equal "13.5", ENV["PYBREW_MACOS_VERSION"]
     assert_equal "13", MacOS.version.to_s
     assert_equal "fixture-data", test_fixtures("sample.txt").read
+    ENV["HOMEBREW_PREFIX"] = "/mutated/dep-env-prefix"
+    ENV["HOMEBREW_CELLAR"] = "/mutated/dep-env-cellar"
+    Object.send(:remove_const, :HOMEBREW_PREFIX)
+    Object.const_set(:HOMEBREW_PREFIX, "/mutated/dep-const-prefix")
+    Object.send(:remove_const, :HOMEBREW_CELLAR)
+    Object.const_set(:HOMEBREW_CELLAR, "/mutated/dep-const-cellar")
   end''',
     )
     formula, config = _installed_formula(
@@ -2470,5 +2477,108 @@ def test_assert_output_regex_counter_matches_minitest(tmp_path: Path) -> None:
 end
 """
     formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+# ---------------------------------------------------------------------------
+# T16: Python/Ruby version token alignment and Minitest edge counters
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_dsl_version_matches_python_token_semantics(tmp_path: Path) -> None:
+    source = """do
+  alpha = Version.new("1.0-alpha")
+  beta = Version.new("1.0-beta")
+  pre = Version.new("1.0-pre")
+  rc = Version.new("1.0-rc1")
+  patch = Version.new("1.0-p1")
+  assert alpha.pre_release?
+  assert_equal ["alpha"], alpha.pre_release_tokens
+  refute Version.new("1.0").pre_release?
+  assert_equal [1, 0, "alpha"], alpha.segments
+  assert_equal [1, 0, "alpha"], alpha.tokens
+  assert_equal 1, alpha.major
+  assert_equal 0, alpha.minor
+  assert_equal 0, alpha.patch
+  assert alpha < beta
+  assert beta < pre
+  assert pre < rc
+  assert rc < patch
+  assert patch < Version.new("1.0")
+  assert Version.new("1.0.0") > Version.new("1.0")
+  assert_equal 0, alpha.revision
+  assert_equal 2, PkgVersion.parse("1.0-alpha_2").revision
+  assert PkgVersion.parse("1.0-alpha_2").pre_release?
+  assert Version.new("1.0-beta2") < Version.new("1.0-beta10")
+  assert Version.new("1.0-post1") > Version.new("1.0-p1")
+  assert_equal 0, Version.new("1.0") <=> PkgVersion.parse("1.0_0")
+  refute_equal Version.new("1.0"), PkgVersion.parse("1.0_2")
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_minitest_compound_counter_edge_cases(tmp_path: Path) -> None:
+    source = """do
+  start = assertions
+  assert_output(nil, nil) { puts "ignored" }
+  assert_equal start, assertions
+  before = assertions
+  begin
+    assert_includes nil, 1
+  rescue FormulaTestFailure
+  end
+  assert_equal before + 1, assertions
+  assert_pattern { 1 }
+  refute_pattern { raise NoMatchingPatternError, "no match" }
+  assert_equal before + 4, assertions
+  begin
+    assert_pattern { raise NoMatchingPatternError, "no match" }
+  rescue FormulaTestFailure
+  end
+  assert_equal before + 6, assertions
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_dependency_constant_mutation_restored_after_failure(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(
+        tap,
+        "dep-lib",
+        '''  test do
+    ENV["HOMEBREW_PREFIX"] = "/mutated/failure-env"
+    Object.send(:remove_const, :HOMEBREW_PREFIX)
+    Object.const_set(:HOMEBREW_PREFIX, "/mutated/failure-const")
+    raise "dependency failed after mutating globals"
+  end''',
+    )
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  global_prefix = HOMEBREW_PREFIX.to_s
+  original_env = ENV["HOMEBREW_PREFIX"]
+  begin
+    Formula["dep-lib"].test
+  rescue StandardError
+  end
+  assert_equal global_prefix, HOMEBREW_PREFIX.to_s
+  assert_equal original_env, ENV["HOMEBREW_PREFIX"]
+  assert_equal "hello-test", name
+end
+""",
+        taps=[tap],
+    )
+    formula.dependencies = [Dependency(name="dep-lib")]
+    _install_keg(config, "dep-lib", output="dep-ok")
     result = run_formula_test(formula, config, ruby=_REAL_RUBY)
     assert result.success is True
