@@ -250,6 +250,237 @@ class FormulaTestContext
       end
     end
 
+    # Bounded Homebrew-like token hierarchy.  Pre-release classes sort before
+    # the release (alpha < beta < pre < rc), p/post/unknown letters after it,
+    # and NumericToken sorts above letters.
+    class Token
+      include Comparable
+
+      attr_reader :value, :revision
+
+      def initialize(value, revision = 0)
+        @value = value
+        @revision = revision.to_i
+      end
+
+      def class_name
+        "token"
+      end
+      alias kind class_name
+
+      def group
+        3
+      end
+
+      def rank
+        0
+      end
+
+      def to_s
+        return "" if value.nil?
+
+        revision.positive? ? "#{value}#{revision}" : value.to_s
+      end
+
+      def inspect
+        "#<#{self.class.name} #{to_s.inspect}>"
+      end
+
+      def <=>(other)
+        return nil unless other.is_a?(Token)
+
+        compare(other)
+      end
+
+      def compare(other)
+        return nil unless other.is_a?(Token)
+
+        if is_a?(NullToken) || other.is_a?(NullToken)
+          compare_null(other)
+        elsif group != other.group
+          group < other.group ? -1 : 1
+        elsif rank != other.rank
+          rank < other.rank ? -1 : 1
+        else
+          compare_value(other)
+        end
+      end
+
+      def compare_null(other)
+        if is_a?(NullToken) && other.is_a?(NullToken)
+          0
+        elsif is_a?(NullToken)
+          -other.compare_null(self)
+        elsif is_a?(NumericToken)
+          value.zero? ? 0 : 1
+        elsif group.zero?
+          -1
+        else
+          1
+        end
+      end
+
+      def compare_value(other)
+        if value.is_a?(Integer) && other.value.is_a?(Integer)
+          value <=> other.value
+        else
+          comparison = value.to_s <=> other.value.to_s
+          return comparison unless comparison.zero?
+
+          revision <=> other.revision
+        end
+      end
+
+      def ==(other)
+        if other.is_a?(Token)
+          compare(other).zero?
+        elsif other.is_a?(Integer) || other.is_a?(String)
+          revision.zero? && value == other
+        else
+          false
+        end
+      end
+      alias eql? ==
+
+      def hash
+        if is_a?(NullToken)
+          ["numeric", 0, 0].hash
+        elsif is_a?(NumericToken)
+          ["numeric", value, 0].hash
+        else
+          [class_name, value, revision].hash
+        end
+      end
+    end
+
+    class NumericToken < Token
+      def class_name
+        "numeric"
+      end
+
+      def group
+        3
+      end
+    end
+
+    class PreReleaseToken < Token
+      def group
+        0
+      end
+    end
+
+    class AlphaToken < PreReleaseToken
+      def class_name
+        "alpha"
+      end
+
+      def rank
+        0
+      end
+    end
+
+    class BetaToken < PreReleaseToken
+      def class_name
+        "beta"
+      end
+
+      def rank
+        1
+      end
+    end
+
+    class PreToken < PreReleaseToken
+      def class_name
+        "pre"
+      end
+
+      def rank
+        2
+      end
+    end
+
+    class RcToken < PreReleaseToken
+      def class_name
+        "rc"
+      end
+
+      def rank
+        3
+      end
+    end
+
+    class PToken < Token
+      def class_name
+        "p"
+      end
+
+      def group
+        2
+      end
+
+      def rank
+        4
+      end
+    end
+
+    class PostToken < Token
+      def class_name
+        "post"
+      end
+
+      def group
+        2
+      end
+
+      def rank
+        5
+      end
+    end
+
+    class LetterToken < Token
+      def class_name
+        "letter"
+      end
+
+      def group
+        2
+      end
+
+      def rank
+        50
+      end
+    end
+
+    class NullToken < Token
+      def initialize
+        super(nil, 0)
+      end
+
+      def class_name
+        "null"
+      end
+
+      def group
+        1
+      end
+    end
+
+    # Upstream-compatible aliases.
+    RCToken = RcToken
+    PatchToken = PToken
+    StringToken = LetterToken
+    MissingToken = NullToken
+
+    # Pre-release word -> token class.
+    PRE_TOKEN_CLASSES = {
+      "alpha" => AlphaToken,
+      "beta" => BetaToken,
+      "pre" => PreToken,
+      "rc" => RcToken,
+      "p" => PToken,
+      "post" => PostToken,
+    }.freeze
+
     def initialize(value)
       super(value.to_s)
     end
@@ -262,14 +493,12 @@ class FormulaTestContext
     end
 
     def tokens
-      segments
+      @tokens ||= version_tokens
     end
 
     # Classified tokens: "numeric", a pre-release word, or "letter".
     def token_classes
-      version_tokens.map do |token|
-        token[:kind] == :pre ? token[:value] : token[:kind].to_s
-      end
+      tokens.map(&:class_name)
     end
 
     def major
@@ -318,11 +547,13 @@ class FormulaTestContext
 
         return other.revision.zero? ? 0 : -1
       end
-      left = version_tokens
-      right = other.send(:version_tokens)
+      left = tokens
+      right = other.tokens
       length = [left.length, right.length].max
       length.times do |index|
-        comparison = homebrew_token_compare(left[index], right[index])
+        left_token = left[index] || NullToken.new
+        right_token = right[index] || NullToken.new
+        comparison = left_token.compare(right_token)
         return comparison unless comparison.zero?
       end
       0
@@ -373,68 +604,24 @@ class FormulaTestContext
     private
 
     def homebrew_hash_key
-      key = version_tokens.map do |token|
-        [token[:kind], token[:value], token[:revision]]
+      key = tokens.map do |token|
+        [token.class_name, token.value, token.revision]
       end
-      key.pop while !key.empty? && key.last[0] == :numeric && key.last[1].zero?
+      key.pop while !key.empty? && key.last[0] == "numeric" && key.last[1].zero?
       key
     end
 
     def version_tokens
       to_s.scan(TOKEN_PATTERN).map do |numeric, pre, revision, letter|
         if numeric
-          { kind: :numeric, value: numeric.to_i, rank: nil, revision: 0 }
+          NumericToken.new(numeric.to_i)
         elsif pre
           word = pre.downcase
           word = "pre" if word == "preview"
-          {
-            kind: :pre,
-            value: word,
-            rank: PRE_RELEASE_RANKS[word],
-            revision: revision.to_i,
-          }
+          PRE_TOKEN_CLASSES[word].new(word, revision.to_i)
         else
-          { kind: :letter, value: letter.downcase, rank: nil, revision: 0 }
+          LetterToken.new(letter.downcase)
         end
-      end
-    end
-
-    def homebrew_token_compare(left, right)
-      return 0 if left.nil? && right.nil?
-
-      if left.nil?
-        if right[:kind] == :numeric
-          return right[:value].zero? ? 0 : -1
-        elsif right[:kind] == :pre
-          return right[:rank] <= 3 ? 1 : -1
-        end
-        return -1
-      end
-      if right.nil?
-        if left[:kind] == :numeric
-          return left[:value].zero? ? 0 : 1
-        elsif left[:kind] == :pre
-          return left[:rank] <= 3 ? -1 : 1
-        end
-        return 1
-      end
-
-      if left[:kind] == :numeric && right[:kind] == :numeric
-        left[:value] <=> right[:value]
-      elsif left[:kind] == :numeric
-        1
-      elsif right[:kind] == :numeric
-        -1
-      elsif left[:kind] == :pre && right[:kind] == :pre
-        comparison = left[:rank] <=> right[:rank]
-        return comparison unless comparison.zero?
-
-        comparison = left[:value] <=> right[:value]
-        return comparison unless comparison.zero?
-
-        left[:revision] <=> right[:revision]
-      else
-        left[:value].to_s <=> right[:value].to_s
       end
     end
 
@@ -481,6 +668,10 @@ class FormulaTestContext
 
     def segments
       @version.segments
+    end
+
+    def tokens
+      @version.tokens
     end
 
     def hash

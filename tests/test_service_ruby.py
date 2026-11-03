@@ -1115,6 +1115,77 @@ def test_parse_service_block_passes_injectable_user_config_home(
     assert spec.effective_environment_variables()["FOO"] == "custom"
 
 
+@requires_ruby
+def test_ruby_render_time_user_env_replaces_stale_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    allow_ruby: None,
+    non_root: None,
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    user_home = tmp_path / "user-config"
+    env_path = _write_user_env(user_home, "svc", "FOO=one\n")
+    monkeypatch.setenv(USER_CONFIG_HOME_ENV, str(user_home))
+    formula = _formula_with_service(
+        'run [opt_bin/"svc"]\nenvironment_variables FOO: "formula"'
+    )
+
+    spec = parse_service_block(formula, config)
+    assert spec.environment_variables == {"FOO": "formula"}
+    assert spec.user_environment_variables == {"FOO": "one"}
+    assert spec.user_config_home == str(user_home)
+
+    env_path.write_text("FOO=two\nBAR=added\n", encoding="utf-8")
+    env_path.chmod(0o600)
+
+    manager = ServiceManager(config)
+    payload = manager.plist_payload(formula, spec)
+    assert payload["EnvironmentVariables"]["FOO"] == "two"
+    assert payload["EnvironmentVariables"]["BAR"] == "added"
+    assert 'Environment="FOO=two"' in manager.unit_text(formula, spec)
+    # The evaluator's parse-time snapshot and declared env remain untouched.
+    assert spec.user_environment_variables == {"FOO": "one"}
+    assert spec.environment_variables == {"FOO": "formula"}
+
+
+@requires_ruby
+def test_ruby_render_time_user_env_uses_injectable_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    allow_ruby: None,
+    non_root: None,
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    user_home = tmp_path / "explicit-config"
+    env_path = _write_user_env(user_home, "svc", "FOO=one\n")
+    assert os.environ.get(USER_CONFIG_HOME_ENV) is None
+    formula = _formula_with_service(
+        'run [opt_bin/"svc"]\nenvironment_variables FOO: "formula"'
+    )
+
+    spec = evaluate_service_block(formula, config, user_config_home=user_home)
+    assert spec.user_config_home == str(user_home)
+    env_path.write_text("FOO=two\n", encoding="utf-8")
+    env_path.chmod(0o600)
+
+    manager = ServiceManager(config)
+    assert (
+        manager.plist_payload(formula, spec)["EnvironmentVariables"]["FOO"]
+        == "two"
+    )
+
+    # A manager-provided context also refreshes render-time resolution.
+    manager_with_context = ServiceManager(config, user_config_home=user_home)
+    env_path.write_text("FOO=three\n", encoding="utf-8")
+    env_path.chmod(0o600)
+    assert (
+        manager_with_context.plist_payload(formula, spec)[
+            "EnvironmentVariables"
+        ]["FOO"]
+        == "three"
+    )
+
+
 def test_user_service_env_bounded_parse_and_security(
     tmp_path: Path,
     non_root: None,

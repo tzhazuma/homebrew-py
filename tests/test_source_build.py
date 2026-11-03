@@ -1380,10 +1380,16 @@ def test_sanitize_flag_list_handles_sdk_sysroots_and_dedupes(
             "/SDK",
             "-isysroot",
             "/SDK",
+            "-isysroot",
+            "/SDK",
+            "-isysroot=/SDK",
             "-Wl,-syslibroot,/SDK",
+            "-Wl,-syslibroot",
+            "/SDK",
             "--sysroot=/SDK",
             "-Wl,-syslibroot,/OTHER",
             "-Wl,-syslibroot=/OTHER2",
+            "-isysroot=/OTHER3",
             "-arch",
             "arm64",
             "-m64",
@@ -1395,6 +1401,8 @@ def test_sanitize_flag_list_handles_sdk_sysroots_and_dedupes(
     assert tokens.count("-isysroot") == 1
     assert "-Wl,-syslibroot,/OTHER" in tokens
     assert "-Wl,-syslibroot=/OTHER2" in tokens
+    assert "-isysroot=/OTHER3" in tokens
+    assert "-Wl,-syslibroot" not in tokens
     assert "-O2" in tokens
     assert tokens[tokens.index("-arch") + 1] == "arm64"
     assert "-m64" in tokens
@@ -1584,6 +1592,72 @@ def test_build_environment_preserves_explicit_objc_and_standards(
     assert "-O3" in objcxxflags and "-std=c++17" in objcxxflags
     assert f"-I{prefix / 'include'}" in objcxxflags
 
+    edge = source_builder.build_environment(
+        config,
+        {
+            "PATH": "/usr/bin:/bin",
+            "PYBREW_OBJC_STANDARD": "c++17",
+            "PYBREW_OBJCXX_STANDARD": "c11",
+        },
+    ).env
+    assert not any(
+        token.startswith("-std=")
+        for token in shlex.split(edge["OBJCFLAGS"])
+    )
+    assert not any(
+        token.startswith("-std=")
+        for token in shlex.split(edge["OBJCXXFLAGS"])
+    )
+
+    aliases = source_builder.build_environment(
+        config,
+        {
+            "PATH": "/usr/bin:/bin",
+            "PYBREW_OBJC_STANDARD": "c9x",
+            "PYBREW_OBJCXX_STANDARD": "c++1z",
+        },
+    ).env
+    assert "-std=c99" in shlex.split(aliases["OBJCFLAGS"])
+    assert "-std=c++17" in shlex.split(aliases["OBJCXXFLAGS"])
+
+    explicit_xx = source_builder.build_environment(
+        config,
+        {
+            "PATH": "/usr/bin:/bin",
+            "OBJCXXFLAGS": "-O2 -std=gnu++17",
+            "PYBREW_OBJCXX_STANDARD": "c++1z",
+        },
+    ).env
+    explicit_xx_flags = shlex.split(explicit_xx["OBJCXXFLAGS"])
+    assert "-std=gnu++17" in explicit_xx_flags
+    assert "-std=c++17" not in explicit_xx_flags
+
+    fallback = source_builder.build_environment(
+        config,
+        {
+            "PATH": "/usr/bin:/bin",
+            "OBJC": "user-objc",
+            "OBJCXX": "user-objcxx",
+            "PYBREW_C_STANDARD": "c11",
+            "PYBREW_CXX_STANDARD": "c++17",
+        },
+    ).env
+    assert "-std=c11" in shlex.split(fallback["OBJCFLAGS"])
+    assert "-std=c++17" in shlex.split(fallback["OBJCXXFLAGS"])
+
+    objc_specific = source_builder.build_environment(
+        config,
+        {
+            "PATH": "/usr/bin:/bin",
+            "OBJC": "user-objc",
+            "PYBREW_C_STANDARD": "c11",
+            "PYBREW_OBJC_STANDARD": "c99",
+        },
+    ).env
+    objc_specific_flags = shlex.split(objc_specific["OBJCFLAGS"])
+    assert "-std=c99" in objc_specific_flags
+    assert "-std=c11" not in objc_specific_flags
+
     precedence = source_builder.build_environment(
         config,
         {
@@ -1624,3 +1698,140 @@ def test_explicit_linker_sysroot_is_preserved(tmp_path: Path) -> None:
     assert f"-Wl,-syslibroot,{detected_sdk}" not in ldflags
     assert "-isysroot" not in ldflags
     assert str(detected_sdk) in shlex.split(env["CFLAGS"])
+
+
+def test_source_language_detection_is_bounded() -> None:
+    import pybrew.source_builder as source_builder
+
+    assert source_builder.source_language("unit.c") == "c"
+    assert source_builder.source_language("unit.cc") == "c++"
+    assert source_builder.source_language("unit.cpp") == "c++"
+    assert source_builder.source_language("unit.cxx") == "c++"
+    assert source_builder.source_language("unit.m") == "objc"
+    assert source_builder.source_language("unit.mm") == "objc++"
+    assert source_builder.source_language("unit.h") is None
+    assert source_builder.source_language("README") is None
+
+
+def test_architecture_environment_exports_arch_and_archflags(
+    tmp_path: Path,
+) -> None:
+    import platform
+    import pybrew.source_builder as source_builder
+
+    assert source_builder.architecture_environment(
+        {"PYBREW_ARCH": "arm64"}, system="Darwin"
+    ) == {"ARCHFLAGS": "-arch arm64", "ARCH": "arm64"}
+    assert source_builder.architecture_environment(
+        {"PYBREW_ARCH": "x86_64"}, system="Linux", machine="x86_64"
+    ) == {"ARCHFLAGS": "-m64", "ARCH": "x86_64"}
+    assert source_builder.architecture_environment(
+        {"PYBREW_ARCH": "arm64"}, system="Linux", machine="arm64"
+    ) == {}
+    assert source_builder.architecture_environment(
+        {"PYBREW_ARCH": "arm64", "ARCHFLAGS": "-arch x86_64"},
+        system="Darwin",
+    ) == {"ARCH": "arm64"}
+
+    host = platform.system()
+    arch = "arm64" if host == "Darwin" else "x86_64"
+    expected = source_builder.architecture_environment({"PYBREW_ARCH": arch})
+    if not expected:
+        pytest.skip("no bounded architecture environment for this host")
+    config = _source_config(tmp_path)
+    prepared = source_builder.build_environment(
+        config, {"PATH": "/usr/bin:/bin", "PYBREW_ARCH": arch}
+    )
+    for name, value in expected.items():
+        assert prepared.env[name] == value
+
+    explicit = source_builder.build_environment(
+        config,
+        {
+            "PATH": "/usr/bin:/bin",
+            "PYBREW_ARCH": arch,
+            "ARCHFLAGS": "-arch explicit",
+            "ARCH": "explicit",
+        },
+    ).env
+    assert explicit["ARCHFLAGS"] == "-arch explicit"
+    assert explicit["ARCH"] == "explicit"
+
+
+def test_superenv_shims_dispatch_by_source_extension(tmp_path: Path) -> None:
+    import subprocess
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    fake_bin = tmp_path / "fake-bin"
+    cc = _fake_compiler(fake_bin, "clang", "cc-report.txt")
+    cxx = _fake_compiler(fake_bin, "clang++", "cxx-report.txt")
+    objc = _fake_compiler(fake_bin, "clang-objc", "objc-report.txt")
+    objcxx = _fake_compiler(fake_bin, "clang-objcxx", "objcxx-report.txt")
+    prepared = source_builder.build_environment(
+        config,
+        {
+            "PATH": str(fake_bin),
+            "PYBREW_SUPERENV": "1",
+            "PYBREW_CC": str(cc),
+            "PYBREW_CXX": str(cxx),
+            "PYBREW_OBJC": str(objc),
+            "PYBREW_OBJCXX": str(objcxx),
+        },
+    )
+    env = prepared.env
+
+    subprocess.run(
+        [env["CC"], "-c", "unit.m"],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+    )
+    objc_argv = shlex.split(_compiler_report(tmp_path / "objc-report.txt")["argv"])
+    assert "-x" in objc_argv and "objective-c" in objc_argv
+    assert not (tmp_path / "cc-report.txt").exists()
+
+    subprocess.run(
+        [env["CXX"], "-c", "unit.mm"],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+    )
+    objcxx_argv = shlex.split(
+        _compiler_report(tmp_path / "objcxx-report.txt")["argv"]
+    )
+    assert "-x" in objcxx_argv and "objective-c++" in objcxx_argv
+    assert not (tmp_path / "cxx-report.txt").exists()
+
+    subprocess.run(
+        [env["CC"], "-c", "unit.cpp"],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+    )
+    cxx_argv = shlex.split(_compiler_report(tmp_path / "cxx-report.txt")["argv"])
+    assert "unit.cpp" in cxx_argv
+
+    subprocess.run(
+        [env["CXX"], "-c", "unit.c"],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+    )
+    cc_argv = shlex.split(_compiler_report(tmp_path / "cc-report.txt")["argv"])
+    assert "unit.c" in cc_argv
+
+    objc_report = tmp_path / "objc-report.txt"
+    objc_report.unlink()
+    subprocess.run(
+        [env["CC"], "-x", "c", "-c", "unit.m"],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+    )
+    explicit_argv = shlex.split(
+        _compiler_report(tmp_path / "cc-report.txt")["argv"]
+    )
+    assert "-x" in explicit_argv and "c" in explicit_argv
+    assert "objective-c" not in explicit_argv
+    assert not objc_report.exists()

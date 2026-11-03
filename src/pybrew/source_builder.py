@@ -1129,6 +1129,8 @@ def _flag_value(
         if index + 1 < len(arguments):
             return "sysroot", arguments[index + 1], 2
         return None
+    if token.startswith("-isysroot=") and len(token) > len("-isysroot="):
+        return "sysroot", token[len("-isysroot=") :], 1
     if token.startswith("-isysroot") and len(token) > len("-isysroot"):
         return "sysroot", token[len("-isysroot") :], 1
     if token == "--sysroot":
@@ -1257,8 +1259,8 @@ import os
 import shlex
 import sys
 
-prefix, include, library, driver_spec = sys.argv[1:5]
-arguments = sys.argv[5:]
+prefix, include, library, default_language, driver_cc, driver_cxx, driver_objc, driver_objcxx = sys.argv[1:9]
+arguments = sys.argv[9:]
 SYSTEM_INCLUDE_ROOTS = ("/usr/include", "/usr/local/include")
 SYSTEM_LIBRARY_ROOTS = (
     "/usr/lib",
@@ -1298,6 +1300,8 @@ def flag_value(args, index):
         if index + 1 < len(args):
             return "sysroot", args[index + 1], 2
         return None
+    if token.startswith("-isysroot=") and len(token) > len("-isysroot="):
+        return "sysroot", token[len("-isysroot="):], 1
     if token.startswith("-isysroot") and len(token) > len("-isysroot"):
         return "sysroot", token[len("-isysroot"):], 1
     if token == "--sysroot":
@@ -1328,6 +1332,107 @@ def flag_value(args, index):
             return "rpath", following[len("-Wl,"):], 2
     return None
 
+
+SOURCE_LANGUAGES = {
+    ".c": "c",
+    ".cc": "c++",
+    ".cpp": "c++",
+    ".cxx": "c++",
+    ".m": "objc",
+    ".mm": "objc++",
+}
+EXPLICIT_LANGUAGES = {
+    "c": "c",
+    "c-header": "c",
+    "cpp-output": "c",
+    "c++": "c++",
+    "c++-header": "c++",
+    "c++-cpp-output": "c++",
+    "objective-c": "objc",
+    "objective-c-header": "objc",
+    "objective-c-cpp-output": "objc",
+    "objective-c++": "objc++",
+    "objective-c++-header": "objc++",
+    "objective-c++-cpp-output": "objc++",
+}
+OPTIONS_WITH_VALUES = frozenset(
+    {
+        "-o",
+        "-I",
+        "-L",
+        "-isystem",
+        "-isysroot",
+        "-include",
+        "-imacros",
+        "-MF",
+        "-MT",
+        "-MQ",
+        "-arch",
+        "-target",
+        "--sysroot",
+        "-Xclang",
+        "-Xlinker",
+        "-u",
+        "-T",
+    }
+)
+
+
+def detect_language(args, default):
+    """Return (language, explicit_x_seen) using bounded extension detection."""
+
+    explicit_seen = False
+    explicit_language = None
+    extension_language = None
+    index = 0
+    while index < len(args):
+        token = args[index]
+        if token == "-x":
+            explicit_seen = True
+            if index + 1 < len(args):
+                explicit_language = EXPLICIT_LANGUAGES.get(
+                    args[index + 1].strip().lower()
+                )
+            index += 2
+            continue
+        if token.startswith("-x") and len(token) > 2:
+            explicit_seen = True
+            explicit_language = EXPLICIT_LANGUAGES.get(
+                token[2:].strip().lower()
+            )
+            index += 1
+            continue
+        if token in OPTIONS_WITH_VALUES:
+            index += 2
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        if extension_language is None:
+            extension_language = SOURCE_LANGUAGES.get(
+                os.path.splitext(token)[1].lower()
+            )
+        index += 1
+    if explicit_seen:
+        return explicit_language or default, True
+    if extension_language is not None:
+        return extension_language, False
+    return default, False
+
+
+language, explicit_language = detect_language(arguments, default_language)
+language_flags = []
+if not explicit_language:
+    if language == "objc":
+        language_flags = ["-x", "objective-c"]
+    elif language == "objc++":
+        language_flags = ["-x", "objective-c++"]
+driver_spec = {
+    "c": driver_cc,
+    "c++": driver_cxx,
+    "objc": driver_objc,
+    "objc++": driver_objcxx,
+}.get(language, driver_cc)
 
 filtered = []
 seen_sysroot = set()
@@ -1374,7 +1479,15 @@ if not driver_argv:
     sys.exit("empty compiler command")
 os.execvp(
     driver_argv[0],
-    [*driver_argv, "-isystem", include, "-L", library, *filtered],
+    [
+        *driver_argv,
+        "-isystem",
+        include,
+        "-L",
+        library,
+        *language_flags,
+        *filtered,
+    ],
 )
 '''
 
@@ -1685,6 +1798,64 @@ def architecture_flag(
     return None
 
 
+_SOURCE_LANGUAGE_EXTENSIONS = {
+    ".c": "c",
+    ".cc": "c++",
+    ".cpp": "c++",
+    ".cxx": "c++",
+    ".m": "objc",
+    ".mm": "objc++",
+}
+
+
+def source_language(path: str) -> Optional[str]:
+    """Return the bounded language for a source filename extension."""
+
+    return _SOURCE_LANGUAGE_EXTENSIONS.get(os.path.splitext(path)[1].lower())
+
+
+def architecture_environment(
+    environment: Optional[Mapping[str, str]] = None,
+    *,
+    system: Optional[str] = None,
+    machine: Optional[str] = None,
+) -> dict[str, str]:
+    """Return bounded ARCH/ARCHFLAGS values from ``PYBREW_ARCH``.
+
+    Explicit user ``ARCH``/``ARCHFLAGS`` values always win.  The arch flag is
+    only exported when :func:`architecture_flag` considers it safe.
+    """
+
+    env = os.environ if environment is None else environment
+    flag = architecture_flag(env, system=system, machine=machine)
+    if flag is None:
+        return {}
+    raw = env.get("PYBREW_ARCH")
+    if raw is None or not raw.strip():
+        return {}
+    value = raw.strip().lower()
+    host = platform.system() if system is None else system
+    if host == "Darwin":
+        arch = _MACOS_ARCH_ALIASES.get(value)
+    elif host == "Linux":
+        if value in ("x86_64", "amd64"):
+            arch = "x86_64"
+        elif value in ("i386", "i686", "x86"):
+            arch = "i386"
+        else:
+            arch = None
+    else:
+        arch = None
+    if arch is None:
+        return {}
+    result: dict[str, str] = {}
+    if not env.get("ARCHFLAGS"):
+        result["ARCHFLAGS"] = flag
+    if not env.get("ARCH"):
+        result["ARCH"] = arch
+    return result
+
+
 def _ensure_architecture_flag(flags: str, flag: str) -> str:
     if flag.startswith("-arch"):
         if _has_flag(flags, ("-arch",), prefixes=("-arch=",)):
@@ -1821,9 +1992,11 @@ def install_superenv_shims(
 
     This is deliberately opt-in via ``PYBREW_SUPERENV=1``.  The shims are thin
     wrappers around the selected real compilers that add the keg include/lib
-    paths and sanitize system include/library flags at invocation time.  This
-    is a bounded compatibility layer, not Homebrew's full Superenv.  The
-    generated scripts are stable on disk so parallel builds can reuse them.
+    paths and sanitize system include/library flags at invocation time.  The
+    helper also detects .c/.cc/.cpp/.m/.mm inputs and dispatches to the
+    corresponding C/C++/ObjC/ObjC++ driver, adding only bounded language flags
+    when no explicit ``-x`` was supplied.  This is a bounded compatibility
+    layer, not Homebrew's full Superenv.
     """
 
     env = dict(environment)
@@ -1839,6 +2012,7 @@ def install_superenv_shims(
         "CXXFLAGS",
         "OBJCFLAGS",
         "OBJCXXFLAGS",
+        "ARCHFLAGS",
         "LDFLAGS",
     ):
         if name in env:
@@ -1858,34 +2032,35 @@ def install_superenv_shims(
     cxx = _first_environment_value(env, ("CXX", "PYBREW_CXX")) or real_driver(
         ("clang++", "g++", "c++"), "c++"
     )
-
-    helper = root / "sanitize_compiler.py"
-    helper.write_text(_SUPERENV_HELPER_SOURCE, encoding="utf-8")
-    helper.chmod(0o755)
-
-    def write_shim(path: Path, driver: str) -> None:
-        script = (
-            "#!/bin/sh\n"
-            f"exec {shlex.quote(sys.executable)} {shlex.quote(str(helper))} "
-            f"{shlex.quote(str(prefix))} {shlex.quote(include)} "
-            f"{shlex.quote(lib)} {shlex.quote(driver)} \"$@\"\n"
-        )
-        path.write_text(script, encoding="utf-8")
-        path.chmod(0o755)
-
     objc = _first_environment_value(env, ("OBJC", "PYBREW_OBJC")) or cc
     objcxx = _first_environment_value(
         env, ("OBJCXX", "PYBREW_OBJCXX")
     ) or cxx
 
+    helper = root / "sanitize_compiler.py"
+    helper.write_text(_SUPERENV_HELPER_SOURCE, encoding="utf-8")
+    helper.chmod(0o755)
+
+    def write_shim(path: Path, default_language: str) -> None:
+        script = (
+            "#!/bin/sh\n"
+            f"exec {shlex.quote(sys.executable)} {shlex.quote(str(helper))} "
+            f"{shlex.quote(str(prefix))} {shlex.quote(include)} "
+            f"{shlex.quote(lib)} {shlex.quote(default_language)} "
+            f"{shlex.quote(cc)} {shlex.quote(cxx)} "
+            f"{shlex.quote(objc)} {shlex.quote(objcxx)} \"$@\"\n"
+        )
+        path.write_text(script, encoding="utf-8")
+        path.chmod(0o755)
+
     cc_path = root / "cc"
     cxx_path = root / "c++"
     objc_path = root / "objc"
     objcxx_path = root / "objc++"
-    write_shim(cc_path, cc)
-    write_shim(cxx_path, cxx)
-    write_shim(objc_path, objc)
-    write_shim(objcxx_path, objcxx)
+    write_shim(cc_path, "c")
+    write_shim(cxx_path, "c++")
+    write_shim(objc_path, "objc")
+    write_shim(objcxx_path, "objc++")
     env["PATH"] = os.pathsep.join([str(root), env.get("PATH", os.defpath)])
     env["CC"] = str(cc_path)
     env["CXX"] = str(cxx_path)
@@ -1989,13 +2164,21 @@ def build_environment(
             env["CXXFLAGS"], cxx_standard
         )
     objc_standard, objcxx_standard = objective_language_standard_flags(env)
-    if objc_standard is not None and "OBJCFLAGS" in env:
+    # Objective-C is a C dialect and Objective-C++ a C++ dialect: fall back to
+    # the corresponding C/C++ standard when no language-specific knob is set.
+    effective_objc_standard = (
+        objc_standard if objc_standard is not None else c_standard
+    )
+    effective_objcxx_standard = (
+        objcxx_standard if objcxx_standard is not None else cxx_standard
+    )
+    if effective_objc_standard is not None and "OBJCFLAGS" in env:
         env["OBJCFLAGS"] = _ensure_language_standard(
-            env["OBJCFLAGS"], objc_standard
+            env["OBJCFLAGS"], effective_objc_standard
         )
-    if objcxx_standard is not None and "OBJCXXFLAGS" in env:
+    if effective_objcxx_standard is not None and "OBJCXXFLAGS" in env:
         env["OBJCXXFLAGS"] = _ensure_language_standard(
-            env["OBJCXXFLAGS"], objcxx_standard
+            env["OBJCXXFLAGS"], effective_objcxx_standard
         )
 
     arch = architecture_flag(env)
@@ -2005,6 +2188,8 @@ def build_environment(
         for name in ("OBJCFLAGS", "OBJCXXFLAGS"):
             if name in env:
                 env[name] = _ensure_architecture_flag(env[name], arch)
+        for name, value in architecture_environment(env).items():
+            env.setdefault(name, value)
 
     # SDK detection is best-effort and never required.  Generic inherited
     # SDKROOT is exported, but -isysroot flags are only added for explicit

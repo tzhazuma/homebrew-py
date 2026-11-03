@@ -2,7 +2,22 @@ from __future__ import annotations
 
 import pytest
 
-from pybrew.version import PkgVersion, Version, compare_versions, detect_version
+from pybrew.version import (
+    AlphaToken,
+    BetaToken,
+    LetterToken,
+    NullToken,
+    NumericToken,
+    PkgVersion,
+    PostToken,
+    PToken,
+    PreToken,
+    RcToken,
+    Token,
+    Version,
+    compare_versions,
+    detect_version,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -211,3 +226,34 @@ def test_homebrew_mode_env_false_overrides_class_flag(
     Version.homebrew = True
     monkeypatch.setenv("PYBREW_VERSION_HOMEBREW", "0")
     assert Version("1.0") != Version("1.0.0")
+
+
+def test_version_token_hierarchy_and_precedence() -> None:
+    tokens = Version("1.0-alpha2").tokens
+
+    assert [type(token) for token in tokens] == [NumericToken, NumericToken, AlphaToken]
+    assert tokens[2].value == "alpha"
+    assert tokens[2].revision == 2
+    assert tokens[2].class_name == "alpha"
+    assert Version("1.0-p1").tokens[2].class_name == "p"
+    assert Version("1.0-post1").tokens[2].class_name == "post"
+    assert Version("1.0-foo").tokens[2].class_name == "letter"
+    assert isinstance(NullToken(), Token)
+    assert PkgVersion.parse("1.0-alpha_2").revision == 2
+    assert PkgVersion("1.0-alpha2", 2).tokens[2].revision == 2
+
+    assert NumericToken(1) > AlphaToken("alpha")
+    assert AlphaToken("alpha") < BetaToken("beta")
+    assert BetaToken("beta") < PreToken("pre")
+    assert PreToken("pre") < RcToken("rc1")
+    assert RcToken("rc1") < PToken("p1")
+    assert PToken("p1") < PostToken("post1")
+    assert PostToken("post1") < LetterToken("foo")
+    assert NullToken() == NumericToken(0)
+    assert NullToken() < NumericToken(1)
+    assert NullToken() > AlphaToken("alpha")
+    assert NullToken() < PToken("p1")
+    assert NullToken() < LetterToken("foo")
+    assert hash(NullToken()) == hash(NumericToken(0))
+    assert hash(AlphaToken("alpha", 1)) != hash(AlphaToken("alpha", 2))
+    assert hash(PkgVersion("1.0", 2)) != hash(PkgVersion("1.0", 0))

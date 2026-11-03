@@ -7524,3 +7524,192 @@ def test_formulary_api_jws_verification(
         "PybrewFormulaUnavailableError|true",
         "PybrewFormulaUnavailableError|true",
     ]
+
+
+def test_sandbox_strict_profile_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    fake_sandbox_exec = tmp_path / "sandbox-exec"
+    fake_sandbox_exec.write_text("#!/bin/sh\nexit 0\n")
+    fake_sandbox_exec.chmod(0o755)
+    formula = _formula(
+        "ruby-sandbox-strict",
+        "1.0",
+        (
+            '  ENV["PYBREW_SANDBOX"] = "1"\n'
+            '  ENV["PYBREW_SANDBOX_PATH"] = "' + str(fake_sandbox_exec) + '"\n'
+            '  default_profile = Sandbox.sandbox_profile\n'
+            '  default_strict = Sandbox.strict?.to_s\n'
+            '  ENV["PYBREW_SANDBOX_STRICT"] = "1"\n'
+            '  Sandbox.allow_write("/tmp/out")\n'
+            '  strict_profile = Sandbox.sandbox_profile\n'
+            '  strict_flag = Sandbox.strict?.to_s\n'
+            '  applied = Sandbox.apply!\n'
+            '  stored = Sandbox.applied_policy["profile"].to_s\n'
+            '  (prefix/"sandbox-strict.txt").write [\n'
+            '    default_strict,\n'
+            '    default_profile.include?("(allow default)").to_s,\n'
+            '    default_profile.include?("(deny default)").to_s,\n'
+            '    strict_flag,\n'
+            '    strict_profile.include?("(deny default)").to_s,\n'
+            '    strict_profile.include?("(allow default)").to_s,\n'
+            '    strict_profile.include?("(allow process-exec)").to_s,\n'
+            '    strict_profile.include?("(subpath \\"/System\\")").to_s,\n'
+            '    strict_profile.include?("(subpath \\"/usr\\")").to_s,\n'
+            '    strict_profile.include?("(allow file-write* (subpath \\"/tmp/out\\"))").to_s,\n'
+            '    applied.to_s, stored.include?("(deny default)").to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "sandbox-strict.txt").read_text().splitlines() == [
+        "false",
+        "true",
+        "false",
+        "true",
+        "true",
+        "false",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+    ]
+
+
+@pytest.mark.skipif(not _has_platform_sandbox(), reason="no platform sandbox backend")
+def test_sandbox_strict_profile_real_echo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-sandbox-strict-echo",
+        "1.0",
+        (
+            '  ENV["PYBREW_SANDBOX"] = "1"\n'
+            '  ENV["PYBREW_SANDBOX_STRICT"] = "1"\n'
+            '  ENV.delete("PYBREW_SANDBOX_BINARY")\n'
+            '  ENV.delete("PYBREW_SANDBOX_PATH")\n'
+            '  available = Sandbox.available?\n'
+            '  output = available ? Sandbox.run("echo", "strict-hello") : nil\n'
+            '  (prefix/"sandbox-strict-echo.txt").write [\n'
+            '    available.to_s, Sandbox.backend.to_s, output.to_s.strip\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    lines = (keg / "sandbox-strict-echo.txt").read_text().splitlines()
+    assert lines[0] == "true"
+    assert lines[1] in ("sandbox_exec", "bwrap")
+    assert lines[2] == "strict-hello"
+
+
+def test_formulary_multi_channel_api_json(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    api_path = tmp_path / "channels.json"
+    api_path.write_text(
+        json.dumps(
+            {
+                "stable": {
+                    "formulae": [
+                        {
+                            "name": "multi-one",
+                            "desc": "stable desc",
+                            "version": "1.0",
+                            "homepage": "https://example.test/stable",
+                        }
+                    ]
+                },
+                "head": {
+                    "formulae": [
+                        {
+                            "name": "multi-one",
+                            "desc": "head desc",
+                            "version": "2.0",
+                            "homepage": "https://example.test/head",
+                        },
+                        {
+                            "name": "head-only",
+                            "desc": "head only",
+                            "version": "5.0",
+                            "homepage": "https://example.test/head-only",
+                        },
+                    ]
+                },
+            }
+        )
+    )
+    monkeypatch.setenv("PYBREW_FORMULA_API_JSON", str(api_path))
+    monkeypatch.setenv("PYBREW_FORMULA_API_CHANNELS", "stable,head")
+    formula = _formula(
+        "ruby-multi-channel",
+        "1.0",
+        (
+            '  channels = Formulary.api_json_channels.join(",")\n'
+            '  Formulary.ensure_api_json_loaded\n'
+            '  multi = Formulary.formula_class_get_from_api("multi-one")\n'
+            '  factory = Formulary.factory("multi-one", from: :api)\n'
+            '  head_only = Formulary.formula_class_get_from_api("head-only")\n'
+            '  loaded_all = Formulary.load_formula_from_api_channels!\n'
+            '  (prefix/"multi-channel.txt").write [\n'
+            '    channels, multi.loaded_desc, multi.loaded_version,\n'
+            '    factory.equal?(multi).to_s, head_only.loaded_desc,\n'
+            '    loaded_all.is_a?(Array).to_s, loaded_all.length.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "multi-channel.txt").read_text().splitlines() == [
+        "stable,head",
+        "head desc",
+        "2.0",
+        "true",
+        "head only",
+        "true",
+        "2",
+    ]
+
+
+def test_formulary_tap_source_alias_declarations(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    tap_root = tmp_path / "taps" / "homebrew" / "sourcetap"
+    (tap_root / "Formula").mkdir(parents=True)
+    (tap_root / "Formula" / "source-canonical.rb").write_text(
+        'class SourceCanonical < Formula\n'
+        '  desc "source alias target"\n'
+        '  version "1.0"\n'
+        '  formula_alias "source-alias"\n'
+        'end\n'
+    )
+    monkeypatch.setenv("PYBREW_TAPS", str(tap_root))
+    formula = _formula(
+        "ruby-source-alias",
+        "1.0",
+        (
+            '  target = Formulary.tap_alias_target("source-alias")\n'
+            '  klass = Formulary.resolve_tap_alias!("source-alias")\n'
+            '  factory = Formulary.factory("source-alias")\n'
+            '  aliases = Formulary.tap_aliases\n'
+            '  (prefix/"source-alias.txt").write [\n'
+            '    target[0], target[1].basename.to_s,\n'
+            '    klass.loaded_name, klass.loaded_desc,\n'
+            '    (factory.loaded_name == klass.loaded_name).to_s,\n'
+            '    aliases.include?("source-alias").to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "source-alias.txt").read_text().splitlines() == [
+        "source-canonical",
+        "source-canonical.rb",
+        "source-canonical",
+        "source alias target",
+        "true",
+        "true",
+    ]

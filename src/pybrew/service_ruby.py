@@ -58,10 +58,11 @@ User environment overrides are read from
 ``user_config_home`` argument) with bounded Homebrew semantics: files for root
 services and world- or group-writable files are skipped, comments/blank/invalid
 lines are ignored, and the remaining ``KEY=value`` pairs override the
-formula-declared environment.  The overrides are stored separately from the
-declared ``environment_variables`` (which stays intact) and are applied by
-``ServiceSpec.effective_environment_variables`` and the plist/unit renderers;
-no service manager is invoked.
+formula-declared environment.  The overrides and the resolved config directory
+are stored separately from the declared ``environment_variables`` (which stays
+intact); renderers with formula context re-read the file at render time so later
+edits/removals are honoured, while the stored values remain the standalone
+snapshot.  No service manager is invoked.
 
 Host platform checks can be simulated with ``PYBREW_TARGET_OS`` and
 ``PYBREW_TARGET_ARCH`` (the same overrides used by the opt-in cask evaluator).
@@ -175,12 +176,13 @@ def evaluate_service_source(
     if not isinstance(raw, str):
         raise ServiceError("service source must be a string")
     source = _normalise_source(raw)
-    user_environment = _read_user_service_env(formula, user_config_home)
+    context = resolve_user_config_home(user_config_home)
+    user_environment = _read_user_service_env(formula, context)
     mode = service_path_mode("homebrew")
     paths = service_paths(formula, config, mode)
     std_env = std_service_path_env_value(config, mode)
     data = _evaluate(source, formula, paths, user_environment, std_env)
-    return _spec_from_result(data, formula, user_environment)
+    return _spec_from_result(data, formula, user_environment, context)
 
 
 def evaluate_service_block(
@@ -454,6 +456,7 @@ def _spec_from_result(
     data: dict[str, Any],
     formula: Formula,
     user_environment: Optional[dict[str, str]] = None,
+    user_config_home: Optional[Path] = None,
 ) -> ServiceSpec:
     """Convert the shim's JSON payload into a validated :class:`ServiceSpec`.
 
@@ -462,7 +465,9 @@ def _spec_from_result(
     Homebrew user env overrides are stored separately from the declared
     ``environment_variables`` and only applied by
     :meth:`ServiceSpec.effective_environment_variables` / the renderers, so the
-    declared environment is never destructively merged.
+    declared environment is never destructively merged.  The context directory
+    is captured too so renderers can re-read the file instead of using this
+    snapshot.
     """
 
     spec = ServiceSpec()
@@ -480,6 +485,8 @@ def _spec_from_result(
         spec.user_environment_variables = {
             str(key): str(value) for key, value in user_environment.items()
         }
+    if user_config_home is not None:
+        spec.user_config_home = str(user_config_home)
     warnings = data.get("warnings")
     if isinstance(warnings, list):
         spec.warnings = [str(warning) for warning in warnings]

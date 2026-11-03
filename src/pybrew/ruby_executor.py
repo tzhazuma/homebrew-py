@@ -3826,8 +3826,38 @@ module Sandbox
       @applied_policy
     end
 
+    def strict?
+      ENV["PYBREW_SANDBOX_STRICT"].to_s == "1"
+    end
+
+    def sandbox_read_roots
+      roots = ["/System", "/usr", "/bin", "/sbin", "/Library", "/private/etc",
+               "/private/tmp", "/private/var", "/dev"]
+      roots << HOMEBREW_PREFIX.to_s
+      roots << HOMEBREW_CELLAR.to_s
+      roots << HOMEBREW_REPOSITORY.to_s if defined?(HOMEBREW_REPOSITORY)
+      roots.map(&:to_s).reject(&:empty?).uniq
+    end
+
     def sandbox_profile
-      lines = ["(version 1)", "(allow default)"]
+      lines = ["(version 1)"]
+      if strict?
+        lines << "(deny default)"
+        lines << "(allow process-exec)"
+        lines << "(allow process-fork)"
+        lines << "(allow signal)"
+        lines << "(allow sysctl-read)"
+        sandbox_read_roots.each do |root|
+          lines << "(allow file-read* (subpath \"#{sandbox_escape(root)}\"))"
+        end
+        lines << "(allow file-write* (subpath \"/private/tmp\"))"
+        lines << "(allow file-write* (subpath \"/private/var/folders\"))"
+        lines << "(allow file-write* (subpath \"/dev/null\"))"
+        lines << "(allow file-write* (subpath \"#{sandbox_escape(HOMEBREW_CELLAR.to_s)}\"))"
+        lines << "(allow file-write* (subpath \"#{sandbox_escape(HOMEBREW_PREFIX.to_s)}\"))"
+      else
+        lines << "(allow default)"
+      end
       rules.each do |rule|
         kind = rule[:kind]
         paths = rule_paths(rule[:payload])
@@ -8153,6 +8183,18 @@ class PybrewLoadedFormula
       @loaded_classes ||= []
     end
 
+    def formula_alias(alias_name)
+      (@declared_aliases ||= []) << alias_name.to_s
+    end
+
+    def alias_name(alias_name)
+      formula_alias(alias_name)
+    end
+
+    def declared_aliases
+      @declared_aliases ||= []
+    end
+
     def inherited(subclass)
       PybrewLoadedFormula.loaded_classes << subclass
       super
@@ -8621,6 +8663,7 @@ module Formulary
   API_CURL_ENV = "PYBREW_FORMULA_API_CURL"
   API_TOKEN_ENV = "PYBREW_FORMULA_API_TOKEN"
   API_SIDECAR_ENV = "PYBREW_FORMULA_API_SIDECAR"
+  API_CHANNELS_ENV = "PYBREW_FORMULA_API_CHANNELS"
   API_JWS_KEY_ENV = "PYBREW_FORMULA_API_JWS_KEY"
   TAPS_ENV = "PYBREW_TAPS"
 
@@ -8636,6 +8679,117 @@ module Formulary
 
   def api_json_configured?
     !ENV[API_JSON_ENV].to_s.strip.empty? || !api_json_path.nil? || !api_json_url.nil?
+  end
+
+  def api_json_channels
+    raw = ENV[API_CHANNELS_ENV].to_s.strip
+    channels = raw.split(",").map(&:strip).reject(&:empty?)
+    channels.empty? ? ["stable"] : channels.uniq
+  end
+
+  def api_channel_suffix(channel)
+    channel.to_s.upcase.gsub(/[^A-Z0-9]/, "_")
+  end
+
+  def api_channels_configured?
+    channels = api_json_channels
+    return true if channels.length > 1
+
+    channels.any? do |channel|
+      suffix = api_channel_suffix(channel)
+      !ENV["#{API_JSON_ENV}_#{suffix}"].to_s.strip.empty? ||
+        !ENV["#{API_URL_ENV}_#{suffix}"].to_s.strip.empty?
+    end
+  end
+
+  def api_json_path_for_channel(channel)
+    suffix = api_channel_suffix(channel)
+    raw = ENV["#{API_JSON_ENV}_#{suffix}"].to_s.strip
+    return Pathname.new(raw) unless raw.empty?
+
+    api_json_path
+  end
+
+  def api_json_url_for_channel(channel)
+    suffix = api_channel_suffix(channel)
+    raw = ENV["#{API_URL_ENV}_#{suffix}"].to_s.strip
+    return nil if raw.empty?
+    unless raw.start_with?("http://", "https://")
+      raise PybrewFormulaUnavailableError,
+            "invalid #{API_URL_ENV}_#{suffix} #{raw.inspect}: only http/https URLs are supported"
+    end
+
+    raw
+  end
+
+  def api_channel_data(data, channel)
+    return data unless data.is_a?(Hash)
+
+    [channel.to_s, channel.to_sym].each do |key|
+      value = data[key]
+      return value if value.is_a?(Array) || value.is_a?(Hash)
+    end
+    data
+  end
+
+  def api_channels_signature
+    api_json_channels.map do |channel|
+      suffix = api_channel_suffix(channel)
+      path_text = ENV["#{API_JSON_ENV}_#{suffix}"].to_s.strip
+      if path_text.empty?
+        default_path = api_json_path
+        path_text = default_path.nil? ? "" : default_path.to_s
+      end
+      url_text = ENV["#{API_URL_ENV}_#{suffix}"].to_s.strip
+      url_text = api_json_url.to_s if url_text.empty? && !api_json_url.nil?
+      if !path_text.empty? && File.file?(path_text)
+        "#{channel}:file:#{path_text}:#{File.mtime(path_text).to_f}"
+      else
+        "#{channel}:url:#{url_text}"
+      end
+    end.join("|")
+  end
+
+  def load_formula_from_api_channels!
+    loaded = []
+    api_json_channels.each do |channel|
+      suffix = api_channel_suffix(channel)
+      channel_path = ENV["#{API_JSON_ENV}_#{suffix}"].to_s.strip
+      channel_url = ENV["#{API_URL_ENV}_#{suffix}"].to_s.strip
+      if !channel_path.empty?
+        file = Pathname.new(channel_path)
+        unless file.file?
+          raise PybrewFormulaUnavailableError,
+                "API JSON file for channel #{channel.inspect} not found: #{file}"
+        end
+        data = api_json_text_data(file.open("r") { |io| ensure_utf8_encoding(io).read }, file)
+        entries = api_json_entries(api_channel_data(data, channel), "channel #{channel}")
+      elsif !channel_url.empty?
+        unless channel_url.start_with?("http://", "https://")
+          raise PybrewFormulaUnavailableError,
+                "invalid API URL for channel #{channel.inspect}: only http/https are supported"
+        end
+        entries = remote_api_json_entries(channel_url)
+      else
+        file = api_json_path
+        url = api_json_url
+        if !file.nil? && file.file?
+          data = api_json_text_data(file.open("r") { |io| ensure_utf8_encoding(io).read }, file)
+          entries = api_json_entries(api_channel_data(data, channel), "channel #{channel}")
+        elsif !url.nil?
+          entries = remote_api_json_entries
+        else
+          raise PybrewFormulaUnavailableError,
+                "no API JSON source configured for channel #{channel.inspect}"
+        end
+      end
+      mapped = load_api_entries!(entries)
+      loaded.concat(mapped.is_a?(Array) ? mapped : [mapped])
+    end
+    by_name = {}
+    loaded.each { |klass| by_name[klass.loaded_name.to_s] = klass }
+    values = by_name.values
+    values.length == 1 ? values.first : values
   end
 
   def api_json_url
@@ -8784,9 +8938,14 @@ module Formulary
     nil
   end
 
-  def remote_api_json_entries
-    url = api_json_url
+  def remote_api_json_entries(url_override = nil)
+    override = url_override.nil? ? "" : url_override.to_s.strip
+    url = override.empty? ? api_json_url : override
     return nil if url.nil?
+    unless url.start_with?("http://", "https://")
+      raise PybrewFormulaUnavailableError,
+            "invalid API URL #{url.inspect}: only http/https URLs are supported"
+    end
 
     memory = (@remote_api_json_cache ||= {})
     cached = if memory[:url] == url
@@ -8965,6 +9124,16 @@ module Formulary
   end
 
   def ensure_api_json_loaded
+    if api_channels_configured?
+      signature = api_channels_signature
+      loaded = @api_json_loaded
+      return nil if loaded && loaded[:channels_signature] == signature
+
+      load_formula_from_api_channels!
+      @api_json_loaded = { channels_signature: signature }
+      return nil
+    end
+
     file = api_json_path
     if !file.nil? && file.file?
       mtime = File.mtime(file.to_s).to_f
@@ -9008,7 +9177,36 @@ module Formulary
   end
 
   def tap_aliases
-    tap_alias_paths.map { |path| path.basename(".rb").to_s }
+    (tap_alias_paths.map { |path| path.basename(".rb").to_s } + tap_source_alias_map.keys).uniq.sort
+  end
+
+  def tap_source_alias_map
+    @tap_source_alias_map ||= begin
+      map = {}
+      tap_roots.each do |root|
+        formula_dir = root/"Formula"
+        next unless formula_dir.directory?
+
+        files = formula_dir.children.select { |child| child.file? && child.extname == ".rb" }
+        files.sort_by { |child| child.basename.to_s }.first(500).each do |path|
+          source = begin
+            path.open("r") { |io| ensure_utf8_encoding(io).read }
+          rescue ScriptError, StandardError
+            nil
+          end
+          next if source.nil?
+
+          source.scan(/^\s*(?:formula_alias|alias_name)\s+["']([^"']+)["']/) do |match|
+            map[match[0]] ||= [path.basename(".rb").to_s, path]
+          end
+        end
+      end
+      map
+    end
+  end
+
+  def tap_source_alias(alias_name)
+    tap_source_alias_map[alias_name.to_s.split("/").last]
   end
 
   def tap_alias_path(alias_name)
@@ -9020,7 +9218,12 @@ module Formulary
 
   def tap_alias_target(alias_name)
     alias_path = tap_alias_path(alias_name)
-    return nil if alias_path.nil?
+    if alias_path.nil?
+      source_alias = tap_source_alias(alias_name)
+      return source_alias unless source_alias.nil?
+
+      return nil
+    end
 
     target = alias_path.symlink? ? alias_path.realpath : alias_path
     return nil unless target.file?
@@ -9439,6 +9642,7 @@ module Formulary
     @api_json_cache = {}
     @api_json_loaded = nil
     @remote_api_json_cache = nil
+    @tap_source_alias_map = nil
     remote_sidecar_clear!
     nil
   end

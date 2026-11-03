@@ -23,6 +23,7 @@ from pybrew.services import (
     SystemctlRunner,
     parse_service_block,
     read_user_service_env,
+    resolve_render_user_environment,
 )
 
 SERVICE_FORMULA = '''
@@ -440,6 +441,187 @@ def test_effective_path_is_homebrew_style_while_plist_keeps_default(
         manager.plist_payload(formula, user)["EnvironmentVariables"]["PATH"]
         == "/user/bin"
     )
+
+
+# ---------------------------------------------------------------------------
+# render-time user env resolution (avoid stale snapshots)
+# ---------------------------------------------------------------------------
+
+
+def test_render_time_user_env_replaces_stale_parse_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    non_root: None,
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    user_home = tmp_path / "user-config"
+    env_path = _write_user_env(user_home, "svc", "FOO=one\n")
+    monkeypatch.setenv(USER_CONFIG_HOME_ENV, str(user_home))
+    formula = _formula_with_service(
+        'run [opt_bin/"svc"]\nenvironment_variables FOO: "formula"'
+    )
+
+    spec = parse_service_block(formula, config)
+    assert spec.user_environment_variables == {"FOO": "one"}
+    assert spec.user_config_home == str(user_home)
+    assert spec.environment_variables == {"FOO": "formula"}
+
+    # Change the file after parsing: renderers must use the fresh values.
+    env_path.write_text("FOO=two\nBAR=added\n", encoding="utf-8")
+    env_path.chmod(0o600)
+
+    manager = ServiceManager(config)
+    payload = manager.plist_payload(formula, spec)
+    assert payload["EnvironmentVariables"]["FOO"] == "two"
+    assert payload["EnvironmentVariables"]["BAR"] == "added"
+    assert payload["EnvironmentVariables"]["PATH"] == str(config.prefix / "bin")
+
+    unit = manager.unit_text(formula, spec)
+    assert 'Environment="FOO=two"' in unit
+    assert 'Environment="BAR=added"' in unit
+    assert 'Environment="FOO=one"' not in unit
+
+    # Render-time resolution does not mutate the spec or its declared env.
+    assert spec.user_environment_variables == {"FOO": "one"}
+    assert spec.environment_variables == {"FOO": "formula"}
+    assert spec.effective_environment_variables() == {"FOO": "one"}
+
+
+def test_render_time_user_env_removal_ignores_stale_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    non_root: None,
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    user_home = tmp_path / "user-config"
+    env_path = _write_user_env(user_home, "svc", "FOO=one\n")
+    monkeypatch.setenv(USER_CONFIG_HOME_ENV, str(user_home))
+    formula = _formula_with_service(
+        'run [opt_bin/"svc"]\nenvironment_variables FOO: "formula"'
+    )
+
+    spec = parse_service_block(formula, config)
+    assert spec.user_environment_variables == {"FOO": "one"}
+    env_path.unlink()
+
+    manager = ServiceManager(config)
+    payload = manager.plist_payload(formula, spec)
+    # The current (empty) file supersedes the stale snapshot.
+    assert payload["EnvironmentVariables"] == {
+        "FOO": "formula",
+        "PATH": str(config.prefix / "bin"),
+    }
+    assert 'Environment="FOO=formula"' in manager.unit_text(formula, spec)
+    # The standalone spec snapshot is untouched.
+    assert spec.user_environment_variables == {"FOO": "one"}
+
+
+def test_render_time_user_env_uses_parse_time_context_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    non_root: None,
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    user_home = tmp_path / "user-config"
+    env_path = _write_user_env(user_home, "svc", "FOO=one\n")
+    assert os.environ.get(USER_CONFIG_HOME_ENV) is None
+    formula = _formula_with_service(
+        'run [opt_bin/"svc"]\nenvironment_variables FOO: "formula"'
+    )
+
+    spec = parse_service_block(formula, config, user_config_home=user_home)
+    assert spec.user_config_home == str(user_home)
+    env_path.write_text("FOO=two\n", encoding="utf-8")
+    env_path.chmod(0o600)
+
+    manager = ServiceManager(config)
+    assert (
+        manager.plist_payload(formula, spec)["EnvironmentVariables"]["FOO"]
+        == "two"
+    )
+
+    # A manager configured with a context refreshes both parse and render.
+    manager_with_context = ServiceManager(config, user_config_home=user_home)
+    context_spec = manager_with_context.spec_for(formula)
+    env_path.write_text("FOO=three\n", encoding="utf-8")
+    env_path.chmod(0o600)
+    assert (
+        manager_with_context.plist_payload(formula, context_spec)[
+            "EnvironmentVariables"
+        ]["FOO"]
+        == "three"
+    )
+
+
+def test_render_environment_variables_explicit_user_environment() -> None:
+    spec = ServiceSpec(
+        environment_variables={"FOO": "declared", "PATH": "/declared/bin"},
+        user_environment_variables={"FOO": "snapshot"},
+    )
+
+    assert spec.effective_environment_variables() == {
+        "FOO": "snapshot",
+        "PATH": "/declared/bin",
+    }
+    assert spec.effective_environment_variables(
+        user_environment={"FOO": "fresh", "BAR": "x"}
+    ) == {
+        "FOO": "fresh",
+        "PATH": "/declared/bin",
+        "BAR": "x",
+    }
+    # An explicit empty mapping means "no current overrides", not "snapshot".
+    assert spec.effective_environment_variables(user_environment={}) == {
+        "FOO": "declared",
+        "PATH": "/declared/bin",
+    }
+    assert spec.render_environment_variables(
+        user_environment={"FOO": "fresh"}
+    ) == {"FOO": "fresh", "PATH": "/declared/bin"}
+
+    no_path = ServiceSpec(
+        environment_variables={"FOO": "declared"},
+        user_environment_variables={"FOO": "snapshot"},
+    )
+    assert no_path.render_environment_variables(
+        default_path="/default/bin", user_environment={}
+    ) == {"FOO": "declared", "PATH": "/default/bin"}
+    assert no_path.render_environment_variables(
+        default_path="/default/bin", user_environment={"PATH": "/user/bin"}
+    ) == {"FOO": "declared", "PATH": "/user/bin"}
+    # Neither method mutates the snapshot.
+    assert spec.user_environment_variables == {"FOO": "snapshot"}
+    assert no_path.user_environment_variables == {"FOO": "snapshot"}
+
+
+def test_resolve_render_user_environment_context_precedence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, non_root: None
+) -> None:
+    formula = _formula()
+    home_a = tmp_path / "home-a"
+    home_b = tmp_path / "home-b"
+    home_c = tmp_path / "home-c"
+    _write_user_env(home_a, "svc", "SOURCE=a\n")
+    _write_user_env(home_b, "svc", "SOURCE=b\n")
+    _write_user_env(home_c, "svc", "SOURCE=c\n")
+    monkeypatch.delenv(USER_CONFIG_HOME_ENV, raising=False)
+    spec = ServiceSpec(
+        user_config_home=str(home_b),
+        user_environment_variables={"SOURCE": "snapshot"},
+    )
+
+    # Explicit argument wins over env and the spec context.
+    assert resolve_render_user_environment(
+        formula, spec, user_config_home=home_c
+    ) == {"SOURCE": "c"}
+    # Current env wins over the parse-time spec context.
+    monkeypatch.setenv(USER_CONFIG_HOME_ENV, str(home_a))
+    assert resolve_render_user_environment(formula, spec) == {"SOURCE": "a"}
+    # Spec context is used when no env/argument context is configured.
+    monkeypatch.delenv(USER_CONFIG_HOME_ENV, raising=False)
+    assert resolve_render_user_environment(formula, spec) == {"SOURCE": "b"}
+    # No context at all: renderers keep using the standalone spec snapshot.
+    assert resolve_render_user_environment(formula, ServiceSpec()) is None
 
 
 def test_plist_generation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

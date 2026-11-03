@@ -3537,3 +3537,129 @@ def test_livecheck_transport_passes_redirect_policy(
     handler = captured["handler"]
     assert handler.strip_headers == {"x-test"}
     assert handler.preserve_headers == {"cookie"}
+
+
+# ---------------------------------------------------------------------------
+# Wave 8: global bucket edge, combined circuit, redirect defaults
+# ---------------------------------------------------------------------------
+
+
+def test_livecheck_rate_limiter_reset() -> None:
+    from pybrew.cask import LivecheckRateLimiter
+
+    clock = _FakeClock()
+    limiter = LivecheckRateLimiter(capacity=1, refill_rate=1, clock=clock)
+    assert limiter.acquire("example.com") == 0.0
+    assert limiter.acquire("example.com") > 0
+
+    limiter.reset()
+    assert limiter.acquire("example.com") == 0.0
+
+
+def test_livecheck_default_global_bucket_is_shared_and_bounded() -> None:
+    import pybrew.cask as cask_module
+
+    limiter = cask_module._DEFAULT_LIVECHECK_RATE_LIMITER
+    limiter.reset()
+    try:
+        waits = [limiter.acquire("global.example") for _ in range(3)]
+        assert waits[0] == 0.0
+        assert waits[1] == 0.0
+        assert waits[2] == 0.0
+        assert cask_module.LIVECHECK_RATE_LIMIT_CAPACITY >= 3
+    finally:
+        limiter.reset()
+
+
+def test_livecheck_combined_rate_wait_and_retry_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import livecheck_http_fetcher
+
+    class MixedLimiter:
+        def __init__(self) -> None:
+            self.waits = [0.0, 2.0]
+
+        def acquire(self, _host: str) -> float:
+            return self.waits.pop(0) if self.waits else 0.0
+
+    slept: list[float] = []
+    monkeypatch.setattr("pybrew.cask.time.sleep", slept.append)
+    opener = _patch_livecheck_opener(
+        monkeypatch,
+        [_http_error(503, None), _FakeHttpResponse(b"should not reach")],
+    )
+
+    with pytest.raises(CaskError, match="rate limit wait exceeds"):
+        livecheck_http_fetcher(
+            "https://example.com/page",
+            retries=1,
+            retry_delay=0.5,
+            jitter=0,
+            max_total_retry_seconds=1,
+            rate_limiter=MixedLimiter(),
+        )
+    assert len(opener.requests) == 1
+    assert slept == [0.5]
+
+
+def test_livecheck_rate_limiter_can_be_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import livecheck_http_fetcher
+
+    opener = _patch_livecheck_opener(monkeypatch, b"ok")
+
+    assert (
+        livecheck_http_fetcher(
+            "https://example.com/page",
+            rate_limiter=None,
+        )
+        == "ok"
+    )
+    assert len(opener.requests) == 1
+
+
+def test_livecheck_redirect_defaults_are_stable() -> None:
+    from pybrew.cask import (
+        LIVECHECK_SENSITIVE_HEADERS,
+        _BoundedRedirectHandler,
+    )
+
+    handler = _BoundedRedirectHandler()
+    assert handler.strip_headers == LIVECHECK_SENSITIVE_HEADERS
+    assert handler.preserve_headers == frozenset()
+    assert handler.max_redirections == 5
+
+
+def test_livecheck_transport_uses_default_redirect_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import (
+        LIVECHECK_SENSITIVE_HEADERS,
+        livecheck_http_fetcher,
+    )
+
+    captured: dict[str, object] = {}
+
+    class FakeOpener:
+        def open(self, request, timeout=None):
+            return _FakeHttpResponse(b"ok")
+
+    def fake_build_opener(handler):
+        captured["handler"] = handler
+        return FakeOpener()
+
+    monkeypatch.setattr(
+        "pybrew.cask.urllib.request.build_opener", fake_build_opener
+    )
+
+    assert (
+        livecheck_http_fetcher(
+            "https://example.com/page", rate_limiter=None
+        )
+        == "ok"
+    )
+    handler = captured["handler"]
+    assert handler.strip_headers == LIVECHECK_SENSITIVE_HEADERS
+    assert handler.preserve_headers == frozenset()

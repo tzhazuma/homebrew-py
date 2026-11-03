@@ -941,6 +941,12 @@ class LivecheckRateLimiter:
         self._buckets: dict[str, tuple[float, float]] = {}
         self._lock = threading.Lock()
 
+    def reset(self) -> None:
+        """Forget all buckets (mainly useful for tests/CLI lifecycle)."""
+
+        with self._lock:
+            self._buckets.clear()
+
     def acquire(self, host: str) -> float:
         with self._lock:
             now = self.clock()

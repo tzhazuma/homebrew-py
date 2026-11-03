@@ -17,6 +17,12 @@ environment: :meth:`ServiceSpec.effective_environment_variables` follows
 Homebrew and never synthesises ``PATH``, while the launchd renderer historically
 adds pybrew's ``<prefix>/bin`` default when no PATH is declared or overridden.
 The systemd renderer writes effective values only.
+
+Renderers with formula context re-read the user env file at render time (see
+:func:`resolve_render_user_environment`) so edits or removals after parsing are
+honoured instead of a stale snapshot.  A standalone :class:`ServiceSpec` with no
+context keeps using its parse-time snapshot, and explicit
+``user_environment`` arguments let callers supply their own values.
 """
 
 from __future__ import annotations
@@ -321,6 +327,35 @@ def read_user_service_env(
     return overrides
 
 
+def resolve_render_user_environment(
+    formula: Formula,
+    spec: Optional["ServiceSpec"] = None,
+    user_config_home: Optional[Path] = None,
+) -> Optional[dict[str, str]]:
+    """Resolve user env overrides at render time when a context exists.
+
+    Precedence: an explicit ``user_config_home`` argument, then the current
+    ``HOMEBREW_USER_CONFIG_HOME`` environment, then the home captured on the
+    spec at parse time.  ``None`` means no user context is configured, so a
+    renderer should fall back to the spec's parse-time snapshot; an empty dict
+    means a context exists but the file currently provides no overrides, which
+    intentionally supersedes the stale snapshot.
+    """
+
+    context: Optional[Path] = None
+    if user_config_home is not None:
+        context = resolve_user_config_home(user_config_home)
+    if context is None:
+        context = resolve_user_config_home(None)
+    if context is None and spec is not None:
+        stored = getattr(spec, "user_config_home", None)
+        if stored:
+            context = resolve_user_config_home(Path(str(stored)))
+    if context is None:
+        return None
+    return read_user_service_env(formula, context)
+
+
 @dataclass
 class ServiceSpec:
     run: list[str] = field(default_factory=list)
@@ -351,6 +386,12 @@ class ServiceSpec:
     #: :meth:`effective_environment_variables` and the renderers.  Appended at
     #: the end so existing positional constructions keep their field order.
     user_environment_variables: dict[str, str] = field(default_factory=dict)
+    #: User config home (``HOMEBREW_USER_CONFIG_HOME`` style directory) captured
+    #: at parse time when one was available.  Renderers use it to re-read the
+    #: env file instead of trusting the snapshot in
+    #: :attr:`user_environment_variables`; it stays optional so ServiceSpec
+    #: objects remain standalone.
+    user_config_home: Optional[str] = None
 
     @classmethod
     def from_hash(cls, data: dict[str, Any]) -> "ServiceSpec":
@@ -430,7 +471,9 @@ class ServiceSpec:
         }
 
     def effective_environment_variables(
-        self, prefix: Optional[Path] = None
+        self,
+        prefix: Optional[Path] = None,
+        user_environment: Optional[dict[str, str]] = None,
     ) -> dict[str, str]:
         """Return declared environment merged with Homebrew user overrides.
 
@@ -438,15 +481,27 @@ class ServiceSpec:
         ``Service#effective_environment_variables``.  ``prefix`` is accepted for
         backwards compatibility but no longer synthesises ``PATH``; renderers
         keep pybrew's default search path separately.
+
+        ``user_environment`` explicitly supplies fresh user overrides (for
+        example re-read at render time); ``None`` uses the parse-time snapshot
+        stored in :attr:`user_environment_variables`, while an empty dict means
+        "no current overrides" and ignores that snapshot.
         """
 
         environment = self.declared_environment_variables()
-        for key, value in self.user_environment_variables.items():
+        overrides = (
+            self.user_environment_variables
+            if user_environment is None
+            else user_environment
+        )
+        for key, value in overrides.items():
             environment[str(key)] = str(value)
         return environment
 
     def render_environment_variables(
-        self, default_path: Optional[str] = None
+        self,
+        default_path: Optional[str] = None,
+        user_environment: Optional[dict[str, str]] = None,
     ) -> dict[str, str]:
         """Return the environment a renderer should write.
 
@@ -455,9 +510,15 @@ class ServiceSpec:
         declared nor the user environment provides one.  Passing
         ``default_path`` reproduces that renderer default, while systemd (and
         callers that need Homebrew semantics) pass nothing.
+
+        ``user_environment`` lets a renderer with a formula/config context pass
+        freshly resolved overrides instead of the spec's stale parse-time
+        snapshot (see :func:`resolve_render_user_environment`).
         """
 
-        environment = self.effective_environment_variables()
+        environment = self.effective_environment_variables(
+            user_environment=user_environment
+        )
         if default_path is not None:
             environment.setdefault("PATH", default_path)
         return environment
@@ -725,10 +786,14 @@ def parse_service_block(
     # Homebrew user env overrides apply to the literal parser as well.  They are
     # stored separately so the declared environment stays intact; effective
     # values are produced by ServiceSpec.effective_environment_variables and the
-    # renderers.
-    overrides = read_user_service_env(formula, user_config_home)
+    # renderers.  Capture the context directory too so renderers can re-read the
+    # file instead of trusting this snapshot.
+    context = resolve_user_config_home(user_config_home)
+    overrides = read_user_service_env(formula, context)
     if overrides:
         spec.user_environment_variables = overrides
+    if context is not None:
+        spec.user_config_home = str(context)
     return spec
 
 
@@ -1142,8 +1207,14 @@ def _launchd_sockets(spec: ServiceSpec) -> dict[str, dict[str, str]]:
 
 
 class ServiceManager:
-    def __init__(self, config: Config, runner: Any = None):
+    def __init__(
+        self,
+        config: Config,
+        runner: Any = None,
+        user_config_home: Optional[Path] = None,
+    ):
         self.config = config
+        self.user_config_home = user_config_home
         self.backend = os.environ.get("PYBREW_SERVICE_BACKEND")
         if self.backend is None:
             self.backend = "systemd" if sys.platform.startswith("linux") else "launchd"
@@ -1155,6 +1226,15 @@ class ServiceManager:
             self.runner = LaunchctlRunner()
         self.directory = config.service_dir
 
+    def _render_user_config_home(
+        self, user_config_home: Optional[Path] = None
+    ) -> Optional[Path]:
+        """Return the user config home to use for render-time env resolution."""
+
+        if user_config_home is not None:
+            return user_config_home
+        return self.user_config_home
+
     # -- plist / unit generation ----------------------------------------
     def label(self, formula: Formula, spec: Optional[ServiceSpec] = None) -> str:
         if spec is not None:
@@ -1165,16 +1245,30 @@ class ServiceManager:
         return f"homebrew.mxcl.{formula.name}"
 
     def to_plist(
-        self, formula: Formula, spec: Optional[ServiceSpec] = None
+        self,
+        formula: Formula,
+        spec: Optional[ServiceSpec] = None,
+        user_config_home: Optional[Path] = None,
     ) -> dict[str, Any]:
         """Return the launchd plist payload for *formula* (Homebrew Service API)."""
-        return self.plist_payload(formula, spec or self.spec_for(formula))
+        return self.plist_payload(
+            formula,
+            spec or self.spec_for(formula),
+            user_config_home=user_config_home,
+        )
 
     def to_systemd_unit(
-        self, formula: Formula, spec: Optional[ServiceSpec] = None
+        self,
+        formula: Formula,
+        spec: Optional[ServiceSpec] = None,
+        user_config_home: Optional[Path] = None,
     ) -> str:
         """Return the systemd unit text for *formula*."""
-        return self.unit_text(formula, spec or self.spec_for(formula))
+        return self.unit_text(
+            formula,
+            spec or self.spec_for(formula),
+            user_config_home=user_config_home,
+        )
 
     def plist_path(
         self, formula: Formula, spec: Optional[ServiceSpec] = None
@@ -1186,7 +1280,12 @@ class ServiceManager:
     ) -> Path:
         return self.directory / f"{self.label(formula, spec)}.service"
 
-    def unit_text(self, formula: Formula, spec: ServiceSpec) -> str:
+    def unit_text(
+        self,
+        formula: Formula,
+        spec: ServiceSpec,
+        user_config_home: Optional[Path] = None,
+    ) -> str:
         log_dir = self.config.prefix / "var" / "log"
         log_dir.mkdir(parents=True, exist_ok=True)
         stdout_path = _expand_service_path(spec.log_path) or str(
@@ -1198,6 +1297,13 @@ class ServiceManager:
         working_dir = _expand_service_path(spec.working_dir)
         root_dir = _expand_service_path(spec.root_dir)
         input_path = _expand_service_path(spec.input_path)
+        # Re-read user overrides at render time when a context is available so
+        # edits/removals since parse time are honoured (no stale snapshots).
+        user_environment = resolve_render_user_environment(
+            formula,
+            spec,
+            self._render_user_config_home(user_config_home),
+        )
         lines = [
             "[Unit]",
             f"Description={formula.name} (pybrew)",
@@ -1225,7 +1331,9 @@ class ServiceManager:
             lines.append(f"WorkingDirectory={working_dir or root_dir}")
         if spec.nice is not None:
             lines.append(f"Nice={spec.nice}")
-        for key, value in spec.render_environment_variables().items():
+        for key, value in spec.render_environment_variables(
+            user_environment=user_environment
+        ).items():
             escaped = str(value).replace('"', '\\"')
             lines.append(f'Environment="{key}={escaped}"')
         lines += ["", "[Install]", "WantedBy=default.target", ""]
@@ -1283,15 +1391,27 @@ class ServiceManager:
         path.write_text(self.timer_text(formula, spec))
         return path
 
-    def write_unit(self, formula: Formula, spec: ServiceSpec) -> Path:
+    def write_unit(
+        self,
+        formula: Formula,
+        spec: ServiceSpec,
+        user_config_home: Optional[Path] = None,
+    ) -> Path:
         if not spec.run:
             raise ServiceError(f"{formula.name} service has no run command")
         self.directory.mkdir(parents=True, exist_ok=True)
         path = self.unit_path(formula, spec)
-        path.write_text(self.unit_text(formula, spec))
+        path.write_text(
+            self.unit_text(formula, spec, user_config_home=user_config_home)
+        )
         return path
 
-    def plist_payload(self, formula: Formula, spec: ServiceSpec) -> dict[str, Any]:
+    def plist_payload(
+        self,
+        formula: Formula,
+        spec: ServiceSpec,
+        user_config_home: Optional[Path] = None,
+    ) -> dict[str, Any]:
         label = self.label(formula, spec)
         log_dir = self.config.prefix / "var" / "log"
         log_dir.mkdir(parents=True, exist_ok=True)
@@ -1304,6 +1424,13 @@ class ServiceManager:
         working_dir = _expand_service_path(spec.working_dir)
         root_dir = _expand_service_path(spec.root_dir)
         input_path = _expand_service_path(spec.input_path)
+        # Re-read user overrides at render time when a context is available so
+        # edits/removals since parse time are honoured (no stale snapshots).
+        user_environment = resolve_render_user_environment(
+            formula,
+            spec,
+            self._render_user_config_home(user_config_home),
+        )
         payload: dict[str, Any] = {
             "Label": label,
             "ProgramArguments": spec.run,
@@ -1345,18 +1472,30 @@ class ServiceManager:
         # unless the declared or user environment already provides PATH.
         # ``effective_environment_variables`` itself stays Homebrew-style.
         environment = spec.render_environment_variables(
-            default_path=str(self.config.prefix / "bin")
+            default_path=str(self.config.prefix / "bin"),
+            user_environment=user_environment,
         )
         if environment:
             payload["EnvironmentVariables"] = environment
         return payload
 
-    def write_plist(self, formula: Formula, spec: ServiceSpec) -> Path:
+    def write_plist(
+        self,
+        formula: Formula,
+        spec: ServiceSpec,
+        user_config_home: Optional[Path] = None,
+    ) -> Path:
         if not spec.run:
             raise ServiceError(f"{formula.name} service has no run command")
         self.directory.mkdir(parents=True, exist_ok=True)
         path = self.plist_path(formula, spec)
-        path.write_bytes(plistlib.dumps(self.plist_payload(formula, spec)))
+        path.write_bytes(
+            plistlib.dumps(
+                self.plist_payload(
+                    formula, spec, user_config_home=user_config_home
+                )
+            )
+        )
         return path
 
     # -- operations ------------------------------------------------------
@@ -1370,7 +1509,7 @@ class ServiceManager:
             formula,
             self.config,
             raw=raw,
-            user_config_home=user_config_home,
+            user_config_home=self._render_user_config_home(user_config_home),
         )
 
     def _spec_for_paths(self, formula: Formula) -> Optional[ServiceSpec]:

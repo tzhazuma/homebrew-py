@@ -5,8 +5,10 @@ one explicitly.  This module implements the common detection patterns used by
 homebrew-core, plus a small natural-order comparison used by ``deps``/``list``.
 
 Token semantics are a bounded approximation of Homebrew's ``Version`` parser:
-numeric and letter tokens, ranked pre-release words (alpha < beta < pre < rc <
-p < post), and the ``PkgVersion`` revision suffix are supported.  Homebrew
+Numeric, Alpha/Beta/Pre/Rc, P/Post, Letter, and Null token classes are
+exposed; pre-release classes sort before the Null/release token, while
+p/post/letter sort after it and Numeric sorts above letters.  The
+``PkgVersion`` revision suffix is supported too.  Homebrew
 null-token comparison is the default (``1.0 == 1.0.0``; missing numeric
 segments are zero).  The historical extra-numeric behavior is an explicit
 opt-out via ``PYBREW_VERSION_LEGACY=1`` or ``Version.legacy = True``.
@@ -21,7 +23,6 @@ from __future__ import annotations
 import os
 import re
 from contextlib import contextmanager
-from dataclasses import dataclass
 from functools import total_ordering
 from typing import Optional
 
@@ -143,15 +144,156 @@ def _compare_text_tokens(left: str, right: str) -> int:
     return -1 if left < right else 1
 
 
-@dataclass(frozen=True)
-class _VersionToken:
-    """One classified version token (numeric, pre-release word, or letter)."""
+@total_ordering
+class Token:
+    """Bounded Homebrew-like version token.
 
-    kind: str  # "numeric", "pre", or "letter"
-    value: object  # int for numeric tokens, lower-case str otherwise
-    rank: int | None = None  # pre-release rank for kind == "pre"
-    revision: int = 0  # alpha2 / beta10 / p1 revision number
+    Subclasses follow Homebrew's token hierarchy: pre-release words
+    (Alpha < Beta < Pre < Rc), patch/post tokens, unknown letters, numbers,
+    and a null token used for missing segments.
+    """
 
+    class_name = "token"
+    group = 3  # pre-release=0, null=1, letter/p/post=2, numeric=3
+    rank = 0
+
+    def __init__(self, value: object, revision: int = 0):
+        self.value = value
+        self.revision = int(revision)
+
+    @property
+    def kind(self) -> str:
+        """Compatibility alias for :attr:`class_name`."""
+
+        return self.class_name
+
+    def to_s(self) -> str:
+        if self.value is None:
+            return ""
+        suffix = str(self.revision) if self.revision else ""
+        return f"{self.value}{suffix}"
+
+    def __str__(self) -> str:
+        return self.to_s()
+
+    def __repr__(self) -> str:
+        return f"<{type(self).__name__} {self.to_s()!r}>"
+
+    def compare(self, other: "Token") -> int:
+        if not isinstance(other, Token):
+            return NotImplemented
+        if type(self) is NullToken or type(other) is NullToken:
+            return self._compare_null(other)
+        if self.group != other.group:
+            return -1 if self.group < other.group else 1
+        if self.rank != other.rank:
+            return -1 if self.rank < other.rank else 1
+        return _compare_token_values(self, other)
+
+    def _compare_null(self, other: "Token") -> int:
+        if type(self) is NullToken and type(other) is NullToken:
+            return 0
+        if type(self) is NullToken:
+            return -other._compare_null(self)
+        # The caller asked: this non-null token vs a null token.
+        if type(self) is NumericToken:
+            return 0 if self.value == 0 else 1
+        if self.group == 0:  # alpha/beta/pre/rc sort before the release
+            return -1
+        return 1  # p/post/letter sort after the release
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, Token):
+            return self.compare(other) == 0
+        if isinstance(other, (int, str)):
+            return self.revision == 0 and self.value == other
+        return NotImplemented
+
+    def __lt__(self, other: object) -> bool:
+        if not isinstance(other, Token):
+            return NotImplemented
+        return self.compare(other) < 0
+
+    def __hash__(self) -> int:
+        if type(self) is NullToken:
+            return hash(("numeric", 0, 0))
+        if type(self) is NumericToken:
+            return hash(("numeric", self.value, 0))
+        return hash((self.class_name, self.value, self.revision))
+
+
+def _compare_token_values(left: Token, right: Token) -> int:
+    left_value = left.value
+    right_value = right.value
+    if isinstance(left_value, int) and isinstance(right_value, int):
+        return (left_value > right_value) - (left_value < right_value)
+    left_text = str(left_value)
+    right_text = str(right_value)
+    if left_text != right_text:
+        return -1 if left_text < right_text else 1
+    return (left.revision > right.revision) - (left.revision < right.revision)
+
+
+class NumericToken(Token):
+    class_name = "numeric"
+    group = 3
+
+
+class PreReleaseToken(Token):
+    group = 0
+
+
+class AlphaToken(PreReleaseToken):
+    class_name = "alpha"
+    rank = 0
+
+
+class BetaToken(PreReleaseToken):
+    class_name = "beta"
+    rank = 1
+
+
+class PreToken(PreReleaseToken):
+    class_name = "pre"
+    rank = 2
+
+
+class RcToken(PreReleaseToken):
+    class_name = "rc"
+    rank = 3
+
+
+class PToken(Token):
+    class_name = "p"
+    group = 2
+    rank = 4
+
+
+class PostToken(Token):
+    class_name = "post"
+    group = 2
+    rank = 5
+
+
+class LetterToken(Token):
+    class_name = "letter"
+    group = 2
+    rank = 50
+
+
+class NullToken(Token):
+    class_name = "null"
+    group = 1
+
+    def __init__(self) -> None:
+        super().__init__(None, 0)
+
+
+# Homebrew-compatible aliases for callers that use the upstream names.
+RCToken = RcToken
+PatchToken = PToken
+StringToken = LetterToken
+MissingToken = NullToken
 
 _TOKEN_PATTERN = re.compile(
     r"(?P<numeric>\d+)"
@@ -160,78 +302,40 @@ _TOKEN_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_PRE_TOKEN_CLASSES = {
+    "alpha": AlphaToken,
+    "beta": BetaToken,
+    "pre": PreToken,
+    "rc": RcToken,
+    "p": PToken,
+    "post": PostToken,
+}
 
-def _version_tokens(version: str) -> list[_VersionToken]:
-    tokens: list[_VersionToken] = []
+
+def _version_tokens(version: str) -> list[Token]:
+    tokens: list[Token] = []
     for match in _TOKEN_PATTERN.finditer(version):
         if match.group("numeric") is not None:
-            tokens.append(_VersionToken("numeric", int(match.group("numeric"))))
+            tokens.append(NumericToken(int(match.group("numeric"))))
         elif match.group("pre") is not None:
             word = match.group("pre").lower()
             if word == "preview":
                 word = "pre"
-            tokens.append(
-                _VersionToken(
-                    "pre",
-                    word,
-                    _PRE_RELEASE_RANK[word],
-                    int(match.group("revision") or 0),
-                )
-            )
+            token_class = _PRE_TOKEN_CLASSES[word]
+            tokens.append(token_class(word, int(match.group("revision") or 0)))
         else:
-            tokens.append(_VersionToken("letter", match.group("letter").lower()))
+            tokens.append(LetterToken(match.group("letter").lower()))
     return tokens
 
 
-def _homebrew_token_compare(left: _VersionToken, right: _VersionToken) -> int:
-    """Compare two Homebrew-style tokens; missing tokens are handled by caller."""
-
-    if left.kind == "numeric" and right.kind == "numeric":
-        return (left.value > right.value) - (left.value < right.value)
-    if left.kind == "numeric":
-        return 1  # numeric tokens sort after letters/pre-release words
-    if right.kind == "numeric":
-        return -1
-    if left.kind == "pre" and right.kind == "pre":
-        left_rank = left.rank if left.rank is not None else 99
-        right_rank = right.rank if right.rank is not None else 99
-        if left_rank != right_rank:
-            return -1 if left_rank < right_rank else 1
-        if left.value != right.value:
-            return -1 if str(left.value) < str(right.value) else 1
-        return (left.revision > right.revision) - (left.revision < right.revision)
-    return _compare_text_tokens(str(left.value), str(right.value))
-
-
-def _homebrew_compare_token_lists(left: list[_VersionToken], right: list[_VersionToken]) -> int:
-    """Homebrew-style comparison where a missing token is a null token.
-
-    A null token compares equal to numeric zero, below non-zero numerics,
-    below pre-release words (alpha/beta/pre/rc), and below patch/post/unknown
-    letters.  This is opt-in so callers relying on pybrew's historical
-    extra-numeric behavior keep it.
-    """
+def _homebrew_compare_token_lists(left: list[Token], right: list[Token]) -> int:
+    """Homebrew-style comparison with a NullToken for missing segments."""
 
     length = max(len(left), len(right))
     for index in range(length):
-        left_token = left[index] if index < len(left) else None
-        right_token = right[index] if index < len(right) else None
-        if left_token is None and right_token is None:
-            continue
-        if left_token is None:
-            assert right_token is not None
-            if right_token.kind == "numeric":
-                return 0 if right_token.value == 0 else -1
-            if right_token.kind == "pre":
-                return 1 if right_token.rank is not None and right_token.rank <= 3 else -1
-            return -1
-        if right_token is None:
-            if left_token.kind == "numeric":
-                return 0 if left_token.value == 0 else 1
-            if left_token.kind == "pre":
-                return -1 if left_token.rank is not None and left_token.rank <= 3 else 1
-            return 1
-        comparison = _homebrew_token_compare(left_token, right_token)
+        left_token = left[index] if index < len(left) else NullToken()
+        right_token = right[index] if index < len(right) else NullToken()
+        comparison = left_token.compare(right_token)
         if comparison:
             return comparison
     return 0
@@ -332,10 +436,16 @@ class Version:
     ``Version.legacy = True`` or ``PYBREW_VERSION_LEGACY=1`` (also
     ``Version.homebrew = False`` / ``PYBREW_VERSION_HOMEBREW=0``).
 
+    Bounded Homebrew-like token classes are exposed via :attr:`tokens`
+    (NumericToken, AlphaToken, BetaToken, PreToken, RcToken, PToken,
+    PostToken, LetterToken, NullToken); :attr:`token_classes` returns their
+    names and :attr:`segments` keeps the raw int/str values.
+
     Intentional deviations from Homebrew's parser:
 
-    * no composite token classes (``alpha5`` is the tokens ``"alpha", 5``);
-    * pre-release words are ranked approximately rather than by token class;
+    * pre-release words normalize ``preview`` to ``pre`` and carry a numeric
+      revision on the token (``alpha5`` is one AlphaToken with revision 5);
+    * unknown words map to a single LetterToken;
     * ``revision`` is always 0 on ``Version`` and meaningful only on
       :class:`PkgVersion`.
 
@@ -399,10 +509,10 @@ class Version:
         return _tokens(self.value)
 
     @property
-    def tokens(self) -> list[object]:
-        """Alias for :attr:`segments` (Homebrew's token list)."""
+    def tokens(self) -> list[Token]:
+        """Homebrew-style token objects (``segments`` keeps raw values)."""
 
-        return self.segments
+        return _version_tokens(self.value)
 
     @property
     def token_classes(self) -> list[str]:
@@ -413,10 +523,7 @@ class Version:
         the numeric revision separately for String compatibility.
         """
 
-        return [
-            str(token.value) if token.kind == "pre" else token.kind
-            for token in _version_tokens(self.value)
-        ]
+        return [token.class_name for token in self.tokens]
 
     @property
     def pre_release_tokens(self) -> list[str]:
@@ -558,6 +665,10 @@ class PkgVersion(Version):
     @property
     def pre_release(self) -> bool:
         return self._version.pre_release
+
+    @property
+    def tokens(self) -> list[Token]:
+        return self._version.tokens
 
     @property
     def token_classes(self) -> list[str]:

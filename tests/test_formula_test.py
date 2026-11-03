@@ -2498,7 +2498,22 @@ def test_dsl_version_matches_python_token_semantics(tmp_path: Path) -> None:
   assert_equal ["alpha"], alpha.pre_release_tokens
   refute Version.new("1.0").pre_release?
   assert_equal [1, 0, "alpha"], alpha.segments
-  assert_equal [1, 0, "alpha"], alpha.tokens
+  assert_equal [1, 0, "alpha"], alpha.segments
+  assert alpha.tokens[2].is_a?(Version::AlphaToken)
+  assert_equal "alpha", alpha.tokens[2].value
+  assert_equal 0, alpha.tokens[2].revision
+  assert Version::NumericToken.new(1) > Version::AlphaToken.new("alpha")
+  assert Version::AlphaToken.new("alpha") < Version::BetaToken.new("beta")
+  assert Version::BetaToken.new("beta") < Version::PreToken.new("pre")
+  assert Version::PreToken.new("pre") < Version::RcToken.new("rc1")
+  assert Version::RcToken.new("rc1") < Version::PToken.new("p1")
+  assert Version::PToken.new("p1") < Version::PostToken.new("post1")
+  assert Version::PostToken.new("post1") < Version::LetterToken.new("foo")
+  assert Version::NullToken.new == Version::NumericToken.new(0)
+  assert Version::NullToken.new < Version::NumericToken.new(1)
+  assert Version::NullToken.new > Version::AlphaToken.new("alpha")
+  assert Version::NullToken.new < Version::LetterToken.new("foo")
+  refute_equal PkgVersion.parse("1.0_2").hash, PkgVersion.parse("1.0_0").hash
   assert_equal 1, alpha.major
   assert_equal 0, alpha.minor
   assert_equal 0, alpha.patch

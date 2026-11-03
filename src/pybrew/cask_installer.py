@@ -1864,11 +1864,15 @@ class CaskInstaller:
         """Validate one declarative generic-artifact step.
 
         Supported grammar: ``["mkdir", target]``,
-        ``["copy", staged_source, target]`` and
-        ``["symlink", relative_link_target, target]``.  Targets are relative to
-        the artifact's dirmethod base (absolute targets must stay inside it);
-        symlink targets must be relative and stay inside the base.  All steps
-        are validated before anything is installed.
+        ``["copy", staged_source, target]``,
+        ``["move", staged_source, target]``,
+        ``["hardlink", staged_source, target]``,
+        ``["symlink", relative_link_target, target]`` (``link`` is an alias),
+        and ``["chmod", octal_mode, target]``.  Targets are relative to the
+        artifact's dirmethod base (absolute targets must stay inside it);
+        symlink targets must be relative and stay inside the base.  All
+        structural/source/target validation happens before anything is
+        installed; chmod existence is checked when that step executes.
         """
 
         if not isinstance(step, (list, tuple)) or len(step) < 2:
@@ -1889,17 +1893,22 @@ class CaskInstaller:
                     cask, base_dir, step[1]
                 ),
             }
-        if op == "copy":
+        if op in ("copy", "move", "hardlink"):
             if len(step) != 3:
                 raise CaskError(
-                    f"{cask.token}: generic artifact 'copy' step takes "
+                    f"{cask.token}: generic artifact {op!r} step takes "
                     "source and target"
                 )
             source = self._find(source_root, str(step[1]))
             if source is None:
                 raise CaskError(
-                    f"{cask.token}: generic artifact copy source "
+                    f"{cask.token}: generic artifact {op} source "
                     f"{step[1]!r} not found"
+                )
+            if op == "hardlink" and source.is_dir():
+                raise CaskError(
+                    f"{cask.token}: generic artifact hardlink source "
+                    f"{step[1]!r} must be a file"
                 )
             return {
                 "op": op,
@@ -1908,10 +1917,10 @@ class CaskInstaller:
                     cask, base_dir, step[2]
                 ),
             }
-        if op == "symlink":
+        if op in ("symlink", "link"):
             if len(step) != 3:
                 raise CaskError(
-                    f"{cask.token}: generic artifact 'symlink' step takes "
+                    f"{cask.token}: generic artifact {op!r} step takes "
                     "link target and destination"
                 )
             link_target = str(step[1]).strip()
@@ -1944,15 +1953,58 @@ class CaskInstaller:
                     f"{link_target!r} escapes the destination base"
                 )
             return {
-                "op": op,
+                "op": "symlink",
                 "link": link_target,
+                "destination": self._generic_step_destination(
+                    cask, base_dir, step[2]
+                ),
+            }
+        if op == "chmod":
+            if len(step) != 3:
+                raise CaskError(
+                    f"{cask.token}: generic artifact 'chmod' step takes "
+                    "mode and target"
+                )
+            raw_mode = step[1]
+            if isinstance(raw_mode, bool):
+                raise CaskError(
+                    f"{cask.token}: generic artifact chmod mode must be an "
+                    "integer or an octal string"
+                )
+            if isinstance(raw_mode, int):
+                mode = int(raw_mode)
+            elif isinstance(raw_mode, str):
+                text = raw_mode.strip().lower()
+                if text.startswith("0o"):
+                    text = text[2:]
+                try:
+                    mode = int(text, 8)
+                except ValueError:
+                    raise CaskError(
+                        f"{cask.token}: generic artifact chmod mode "
+                        f"{raw_mode!r} is not an octal value"
+                    )
+            else:
+                raise CaskError(
+                    f"{cask.token}: generic artifact chmod mode must be an "
+                    "integer or an octal string"
+                )
+            if not 0 <= mode <= 0o7777:
+                raise CaskError(
+                    f"{cask.token}: generic artifact chmod mode "
+                    f"{raw_mode!r} is out of range"
+                )
+            return {
+                "op": op,
+                "mode": mode,
                 "destination": self._generic_step_destination(
                     cask, base_dir, step[2]
                 ),
             }
         raise CaskError(
             f"{cask.token}: unsupported generic artifact step {op!r}; "
-            "supported steps: mkdir, copy, symlink"
+            "supported steps: mkdir, copy, move, hardlink, symlink/link, "
+            "chmod"
         )
 
     def _install_generic_artifact_steps(
@@ -1995,14 +2047,23 @@ class CaskInstaller:
         created: list[Path] = []
         try:
             for item in planned:
+                op = str(item["op"])
                 destination = Path(item["destination"])
+                if op == "chmod":
+                    if not destination.exists() or destination.is_symlink():
+                        raise CaskError(
+                            f"{cask.token}: generic artifact chmod target "
+                            f"{destination} must be an existing "
+                            "non-symlink path"
+                        )
+                    os.chmod(destination, int(item["mode"]))
+                    continue
                 if destination.exists() or destination.is_symlink():
                     if not force:
                         raise CaskError(
                             f"{cask.token}: {destination} already exists"
                         )
                     self._remove_path(destination)
-                op = str(item["op"])
                 if op == "mkdir":
                     destination.mkdir(parents=True, exist_ok=False)
                 elif op == "copy":
@@ -2014,6 +2075,12 @@ class CaskInstaller:
                             parents=True, exist_ok=True
                         )
                         shutil.copy2(source, destination)
+                elif op == "move":
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(item["source"]), str(destination))
+                elif op == "hardlink":
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    os.link(Path(item["source"]), destination)
                 else:  # symlink
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     link_target = str(item["link"])

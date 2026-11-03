@@ -1516,3 +1516,153 @@ def test_zap_broken_symlink_inside_roots_is_removed(
 
     assert removed == [link]
     assert not link.is_symlink()
+
+
+# ---------------------------------------------------------------------------
+# generic artifact steps: move / chmod / link / hardlink
+# ---------------------------------------------------------------------------
+
+
+def test_generic_artifact_steps_move_chmod_link_hardlink(
+    cask_env: SimpleNamespace,
+) -> None:
+    import os
+    import stat as stat_module
+
+    _write_steps_cask(
+        cask_env,
+        (
+            '  artifact "ignored", steps: ['
+            '["mkdir", "out"], '
+            '["move", "files/app.txt", "out/moved.txt"], '
+            '["chmod", "755", "out/moved.txt"], '
+            '["hardlink", "files/dir/keep.txt", "out/hard.txt"], '
+            '["link", "out/moved.txt", "out/link.txt"]]'
+        ),
+        entries={
+            "files/app.txt": b"move payload\n",
+            "files/dir/keep.txt": b"hardlink payload\n",
+        },
+    )
+
+    result = cask_env.installer.install(cask_env.loader.load("steps"))
+
+    out = cask_env.config.applications / "out"
+    moved = out / "moved.txt"
+    hard = out / "hard.txt"
+    link = out / "link.txt"
+    assert moved.read_text() == "move payload\n"
+    assert stat_module.S_IMODE(os.stat(moved).st_mode) == 0o755
+    assert hard.read_text() == "hardlink payload\n"
+    assert link.is_symlink()
+    assert link.read_text() == "move payload\n"
+    # mkdir + move + hardlink + symlink are receipt-tracked; chmod is not.
+    assert len(result.artifacts) == 4
+
+    cask_env.installer.uninstall("steps")
+    assert not out.exists()
+
+
+def test_generic_artifact_steps_chmod_integer_mode(
+    cask_env: SimpleNamespace,
+) -> None:
+    import os
+    import stat as stat_module
+
+    _write_steps_cask(
+        cask_env,
+        (
+            '  artifact "ignored", steps: ['
+            '["copy", "files/app.txt", "mode.txt"], '
+            f'["chmod", {0o600}, "mode.txt"]]'
+        ),
+    )
+
+    cask_env.installer.install(cask_env.loader.load("steps"))
+
+    target = cask_env.config.applications / "mode.txt"
+    assert stat_module.S_IMODE(os.stat(target).st_mode) == 0o600
+
+
+def test_generic_artifact_steps_chmod_rejects_symlink(
+    cask_env: SimpleNamespace,
+) -> None:
+    _write_steps_cask(
+        cask_env,
+        (
+            '  artifact "ignored", steps: ['
+            '["copy", "files/app.txt", "real.txt"], '
+            '["symlink", "real.txt", "alias.txt"], '
+            '["chmod", "644", "alias.txt"]]'
+        ),
+    )
+
+    with pytest.raises(
+        CaskError, match="must be an existing non-symlink path"
+    ):
+        cask_env.installer.install(cask_env.loader.load("steps"))
+    # The earlier symlink step is rolled back.
+    assert not (cask_env.config.applications / "alias.txt").is_symlink()
+
+
+def test_generic_artifact_steps_move_missing_source(
+    cask_env: SimpleNamespace,
+) -> None:
+    _write_steps_cask(
+        cask_env, '  artifact "ignored", steps: [["move", "missing.txt", "out.txt"]]'
+    )
+
+    with pytest.raises(CaskError, match="move source"):
+        cask_env.installer.install(cask_env.loader.load("steps"))
+
+
+def test_generic_artifact_steps_hardlink_directory_rejected(
+    cask_env: SimpleNamespace,
+) -> None:
+    _write_steps_cask(
+        cask_env,
+        '  artifact "ignored", steps: [["hardlink", "files", "out-dir"]]',
+    )
+
+    with pytest.raises(CaskError, match="hardlink source.*must be a file"):
+        cask_env.installer.install(cask_env.loader.load("steps"))
+
+
+def test_generic_artifact_steps_invalid_chmod_mode(
+    cask_env: SimpleNamespace,
+) -> None:
+    _write_steps_cask(
+        cask_env,
+        (
+            '  artifact "ignored", steps: ['
+            '["copy", "files/app.txt", "mode.txt"], '
+            '["chmod", "not-octal", "mode.txt"]]'
+        ),
+    )
+
+    with pytest.raises(CaskError, match="not an octal value"):
+        cask_env.installer.install(cask_env.loader.load("steps"))
+
+
+# ---------------------------------------------------------------------------
+# zap root-path refusal edges
+# ---------------------------------------------------------------------------
+
+
+def test_zap_refuses_install_root_itself(cask_env: SimpleNamespace) -> None:
+    cask = parse_cask_source('cask "zappy" do\n  version "1.0"\nend\n')
+    cask.zap = [str(cask_env.config.prefix)]
+
+    with pytest.raises(CaskError, match="refusing to zap unsafe path"):
+        cask_env.installer.zap(cask)
+    assert cask_env.config.prefix.is_dir()
+
+
+def test_zap_refuses_home_directory(cask_env: SimpleNamespace) -> None:
+    cask = parse_cask_source('cask "zappy" do\n  version "1.0"\nend\n')
+    home = str(Path.home())
+    cask.zap = [home]
+
+    with pytest.raises(CaskError, match="refusing to zap unsafe path"):
+        cask_env.installer.zap(cask)
+    assert Path(home).exists()
