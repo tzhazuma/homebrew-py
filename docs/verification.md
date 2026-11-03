@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-903 passed, 5 skipped (local full suite, 2026-11-04 wave 2)
+937 passed, 5 skipped (local full suite, 2026-11-04 wave 3)
 ```
 
 Breakdown of the feature slices:
@@ -1509,6 +1509,27 @@ The maintainer's close is a final scope decision; no further reopen attempts
 were made. The submitting human owns any future upstream communication and
 must not use AI to answer review comments.
 
+## Wave 3 completion batch (2026-11-04)
+
+- Full local suite: **937 passed, 5 skipped** in ~107s.
+- Targeted slices:
+  - Ruby shim: 173 passed (`tests/test_ruby_api.py`)
+  - Installer: 36 passed, 1 skipped (`tests/test_installer.py tests/test_real_bottle.py`)
+  - Cask: 240 passed (`tests/test_cask*.py`)
+  - Test DSL/version: 119 passed (`tests/test_formula_test.py tests/test_version.py`)
+  - Source build/Superenv: 29 passed (`tests/test_source_build.py`)
+  - CLI/ruby/cask smoke: 280 passed
+- Real install verification: `scripts/verify_real_install.py` still passes and
+  asserts build metadata + keg SBOM + install/uninstall.
+- Wave 3 changes:
+  - Formulary local API JSON loading/cache and local tap `Aliases/` resolution.
+  - Superenv shim-side bounded flag/rpath sanitization (opt-in).
+  - Cask `livecheck_status` + `pybrew livecheck --page/--online`; suite target
+    semantics, generic artifact explicit limitation, receipt/zap safety.
+  - Test DSL ranked pre-release/PkgVersion tokens and dependency HOMEBREW_*
+    constant/env restoration.
+  - CLI `pybrew linkage` diagnostic wired to installer linkage checks.
+
 ## Wave 2 completion batch (2026-11-04)
 
 - Full local suite: **903 passed, 5 skipped** in ~99s.
@@ -1578,9 +1599,9 @@ edge cases), not missing method names in the audited core files.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `0dbc7e4` (Wave 2 P0/P1/P2 gaps)
-- CI run for `0dbc7e4`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41696951385>
+- Latest feature commit: `3b630af` (Wave 3 P0/P1/P2 semantics)
+- CI run for `3b630af`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41700298691>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success

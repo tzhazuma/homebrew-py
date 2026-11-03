@@ -46,13 +46,14 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
   (dynamic resource iteration stages all).
 - Homebrew internals: `FormulaInstaller` loaded-source flow exists; the Python
   installer validates bottle manifests before extraction, records source/build
-  metadata + a keg SBOM, exposes formula-level linkage diagnostics and cleans
-  stale links. Full Homebrew Tab semantics and non-heuristic linkage remain
-  bounded. `Superenv` now has opt-in generated compiler shims but no full
-  flag-sanitizing build engine; `Sandbox` has an opt-in explicit-command wrapper
-  and explicit failures instead of a policy engine. `Utils::GitHub` read/write
-  names are complete with injectable REST reads/write guards, but no full
-  GraphQL/PR/team semantics.
+  metadata + a keg SBOM, exposes formula-level linkage diagnostics (`pybrew
+  linkage`) and cleans stale links. Full Homebrew Tab semantics and
+  non-heuristic linkage remain bounded. `Superenv` has opt-in generated shims
+  with bounded flag/rpath sanitization but no full SDK/language/wrapper engine;
+  `Sandbox` has an opt-in explicit-command wrapper and explicit failures for
+  policy APIs instead of a policy engine. `Utils::GitHub` read/write names are
+  complete with injectable REST reads/write guards, but no full GraphQL/PR/team
+  semantics.
 - Full `MacOS`/SDK/Xcode/CLT detection, `DevelopmentTools`, `SystemConfig`
   host details.
 - Services: Ruby evaluator mirrors pybrew's literal path helpers rather than
@@ -71,8 +72,9 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
 - Formulary source loading has namespace/cache/error support but does not
   implement API-struct loading, `factory` tap-source loading, or full
   Homebrew loader machinery.
-- Formula test DSL: `Version`/`PkgVersion` support segments/major/minor/patch
-  and revision-aware comparison (still not full Homebrew token semantics);
+- Formula test DSL: `Version`/`PkgVersion` support segments/major/minor/patch,
+  ranked pre-release tokens and revision-aware comparison (still not full
+  Homebrew token-class semantics);
   dependency tests isolate HOME/PATH/TMPDIR/PYBREW_PREFIX and hide inherited
   `PYBREW_*` markers, though Ruby constants and arbitrary non-PYBREW env remain
   process-global; lookup covers 10000 local-tap names, Alias/ symlinks and a lazy
