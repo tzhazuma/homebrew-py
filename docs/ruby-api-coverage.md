@@ -47,17 +47,20 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
 - Homebrew internals: `FormulaInstaller` loaded-source flow exists; the Python
   installer validates bottle manifests before extraction, records source/build
   metadata + a keg SBOM, exposes formula-level linkage diagnostics (`pybrew
-  linkage`) and cleans stale links. Full Homebrew Tab semantics and
+  linkage`) and cleans stale links. Full Homebrew Tab/SBOM semantics and
   non-heuristic linkage remain bounded. `Superenv` has opt-in generated shims
-  with bounded flag/rpath sanitization but no full SDK/language/wrapper engine;
-  `Sandbox` has an opt-in explicit-command wrapper and explicit failures for
-  policy APIs instead of a policy engine. `Utils::GitHub` read/write names are
-  complete with injectable REST reads/write guards, but no full GraphQL/PR/team
-  semantics.
+  with bounded flag/rpath sanitization, macOS SDKROOT/xcrun detection, bounded
+  `-std` flags and compiler wrappers, but no full Homebrew Superenv engine;
+  `Sandbox` auto-detects `sandbox-exec`/`bwrap` for explicit commands and fails
+  clearly when unavailable, but has no granular rule-generated profile.
+  `Utils::GitHub` read/write names are complete with injectable REST reads/write
+  guards, but no full GraphQL/PR/team semantics.
 - Full `MacOS`/SDK/Xcode/CLT detection, `DevelopmentTools`, `SystemConfig`
   host details.
-- Services: Ruby evaluator mirrors pybrew's literal path helpers rather than
-  Homebrew's global-prefix helpers; unknown directives are ignored.
+- Services: Ruby evaluator now follows Homebrew opt/keg/global path semantics,
+  `std_service_path_env`, manual-command quoting and working/log/input paths;
+  the literal parser intentionally keeps pybrew paths. User service env
+  override files remain unsupported.
 - Cask: livecheck strategy blocks can be executed through `Cask#check_livecheck`
   (no default network/CLI transport); date-deferred deprecate/disable semantics
   are implemented; `url_options` headers/user-agent/referer/cookie are forwarded

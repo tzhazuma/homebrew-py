@@ -6,7 +6,7 @@ claiming full parity with every file under `Library/Homebrew`.
 
 ## Current baseline
 
-- Full test suite: 937 passed, 5 skipped (2026-11-04 full local suite, wave 3)
+- Full test suite: 967 passed, 5 skipped (2026-11-04 full local suite, wave 4)
 - CI: Ubuntu 3.9 / 3.12 + macOS 3.12
 - Optional Ruby bridge remains opt-in; default parser behavior is unchanged.
 
@@ -17,14 +17,14 @@ claiming full parity with every file under `Library/Homebrew`.
 | Formulary source loader | Partial | `load_formula_from_path` evaluates a metadata-only `PybrewLoadedFormula`; path+mtime class cache, stale reload, API-struct validation/cache, local API JSON loading (`PYBREW_FORMULA_API_JSON`), local tap `Aliases/` resolution and metadata alias/oldname fallback exist. Remote/JWS API JSON and in-source alias indexing remain bounded |
 | Formulary class cache / reload semantics | Completed | Path+mtime class cache with flags/namespace keys, stale reload and `clear_cache` invalidation; covered by tests |
 | FormulaInstaller fetch/build/deps/link/cleanup | Partial | Loaded-source flow runs fetch/build/deps/link/clean/finish; Python installer has bottle manifest pre-validation/summary, source/build metadata + keg SBOM receipt, formula-level linkage diagnostics, stale-link cleanup, hardlink handling and deterministic topological ordering. Full Tab semantics and non-heuristic linkage remain bounded |
-| Compiler selection / Superenv build env | Partial | PATH-based compiler probing/fake-binary tests, `CompilerFailure` selection, and opt-in generated Superenv shims with bounded flag/rpath sanitization (`PYBREW_SUPERENV=1`). No full Homebrew SDK/language/wrapper Superenv engine |
-| Sandbox execution | Partial | Default stays safe no-sandbox; opt-in external wrapper runs explicit commands; all remaining policy/rule names exist but raise explicit `NotImplementedError`. Real policy/backend sandbox engine remains missing |
+| Compiler selection / Superenv build env | Partial | PATH-based compiler probing/fake-binary tests, `CompilerFailure` selection, opt-in generated Superenv shims with bounded flag/rpath sanitization, macOS SDKROOT/xcrun detection, bounded C/C++ `-std` flags and shlex compiler wrappers. No full Homebrew Superenv engine |
+| Sandbox execution | Partial | Default stays safe no-sandbox; opt-in backend auto-detects macOS `sandbox-exec` or Linux `bwrap` and runs explicit commands, external fake wrapper still supported, missing backend fails clearly. Granular rule/profile policy remains missing |
 
 ## P1 — Cask and test DSL
 
 | Item | Status | Notes |
 | --- | --- | --- |
-| livecheck strategy execution | Partial | `Cask#check_livecheck`/`livecheck_status` plus `pybrew livecheck --page/--online`; bounded strategy/regex execution with injectable fetcher and structured status. No built-in default network check without `--online` |
+| livecheck strategy execution | Partial | `Cask#check_livecheck`/`livecheck_status` plus `pybrew livecheck --page/--online`; default HTTP transport (`livecheck_http_fetcher`) is opt-in via `online`, bounded to 5 MiB http/https, strategy/regex structured status. No redirect/header/retry/content-encoding pipeline |
 | livecheck `url_options` | Partial | Header/user-agent/etc. captured best-effort |
 | Cask script shim | Partial | `sudo:` explicitly rejected; `arch`/caskroom/language delegators covered; url_options reach the stock Downloader over HTTP(S); MacOS naming remains static |
 | Test DSL arbitrary formula lookup | Partial | Lightweight metadata for up to 10000 local-tap formulae; Alias/ symlinks, local API JSON and a lazy bounded source-alias scan resolve literal/qualified/dependency aliases; dynamic source-only aliases require a prior scan. Unknown aliases fail clearly |
@@ -37,11 +37,11 @@ claiming full parity with every file under `Library/Homebrew`.
 
 | Item | Status | Notes |
 | --- | --- | --- |
-| Keg internal path/link details | Partial | relative-path handling, optlink action semantics, record cleanup/stale-link cleanup covered; remaining relocation edge cases |
+| Keg internal path/link details | Partial | relative-path handling, optlink action semantics, `remove_old_aliases` (opt/linked/versioned), record cleanup/stale-link cleanup covered; relocation edge cases remain |
 | MacOS SDK/Xcode/CLT detection | Partial | env overrides (developer dir/SDK/Xcode/CLT versions) and Xcode detection bug fix; broad host detection remains best-effort |
 | Utils modules | Partial | `Utils::Path`/Git/Curl/Gzip/Tar/Zip/Cp/Popen/Bottles/Svn/Analytics/SPDX exist; GitHub method-name surface is complete with injectable REST reads and explicit write guards, but PR/team/sponsorship semantics remain single-page/bounded. Sandbox policy names exist but raise explicit NotImplementedError |
 | SystemConfig host details | Partial | sections exist; host-specific output is minimal |
-| Service Ruby helpers | Partial | mirrors pybrew paths; unknown directives recorded and surfaced by CLI |
+| Service Ruby helpers | Partial | Ruby evaluator now follows Homebrew opt/keg/global path semantics, std_service_path_env, manual_command quoting and working/log/input paths; literal parser intentionally keeps pybrew paths; user env override file unsupported |
 | Patch/resource edge cases | Partial | exotic patch forms and dynamic resource iteration limited |
 
 ## P3 — Engineering

@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-937 passed, 5 skipped (local full suite, 2026-11-04 wave 3)
+967 passed, 5 skipped (local full suite, 2026-11-04 wave 4)
 ```
 
 Breakdown of the feature slices:
@@ -1509,6 +1509,28 @@ The maintainer's close is a final scope decision; no further reopen attempts
 were made. The submitting human owns any future upstream communication and
 must not use AI to answer review comments.
 
+## Wave 4 completion batch (2026-11-04)
+
+- Full local suite: **967 passed, 5 skipped** in ~100s.
+- Targeted slices:
+  - Ruby shim: 177 passed
+  - Cask: 253 passed (`tests/test_cask*.py`)
+  - Service: 108 passed (`tests/test_services.py tests/test_service_ruby.py`)
+  - Source build/Superenv: 34 passed
+  - CLI: 15 passed
+- Real install verification: `scripts/verify_real_install.py` still passes
+  (build metadata + keg SBOM + install/uninstall).
+- Wave 4 changes:
+  - Real bounded Sandbox backends (`sandbox-exec`/`bwrap` or fake wrapper),
+    clear failure when enabled without a backend.
+  - Tab full field/round-trip semantics; Keg `remove_old_aliases`.
+  - Superenv macOS SDKROOT/xcrun, bounded `-std` flags, shlex compiler wrappers.
+  - Cask generic artifact (bounded appdir/install roots), livecheck default
+    HTTP transport (opt-in online), suite/zap symlink edges.
+  - Service Ruby evaluator aligned to Homebrew opt/keg/global paths and
+    working/log/input semantics while literal parser stays pybrew-compatible.
+  - CLI livecheck now delegates to the Cask online transport.
+
 ## Wave 3 completion batch (2026-11-04)
 
 - Full local suite: **937 passed, 5 skipped** in ~107s.
@@ -1599,9 +1621,9 @@ edge cases), not missing method names in the audited core files.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `3b630af` (Wave 3 P0/P1/P2 semantics)
-- CI run for `3b630af`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41700298691>
+- Latest feature commit: `c0b25f2` (Wave 4 Sandbox/Superenv/Service/Cask)
+- CI run for `c0b25f2`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41703528718>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
