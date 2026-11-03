@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Optional
 
@@ -28,6 +28,9 @@ class LinkResult:
     created: list[Path]
     skipped: list[Path]
     opt: Optional[Path]
+    # Symlinks that pointed at another keg of the same formula and were removed
+    # while relinking (e.g. a version upgrade that dropped a file).
+    removed: list[Path] = field(default_factory=list)
 
 
 class Linker:
@@ -62,12 +65,59 @@ class Linker:
             desired.append((link, source))
         return desired
 
+    def _stale_links(self, formula: Formula, keg: Path) -> list[Path]:
+        """Return prefix links pointing at another keg of the same formula.
+
+        An upgrade may drop files; links to the previous keg would otherwise
+        remain as dangling entries after the old keg is removed.  Only links
+        whose target is inside this formula's rack (and not the current keg)
+        are considered stale, so links owned by other formulae are untouched.
+        """
+
+        rack = self.config.rack_path(formula.name)
+        current = keg.resolve()
+        stale: list[Path] = []
+        for directory in LINK_DIRS:
+            root = self.config.prefix / directory
+            if not root.is_dir():
+                continue
+            for current_root, dirnames, filenames in os.walk(
+                root, followlinks=False
+            ):
+                current_path = Path(current_root)
+                names = list(filenames)
+                names.extend(
+                    dirname
+                    for dirname in dirnames
+                    if (current_path / dirname).is_symlink()
+                )
+                for name in names:
+                    candidate = current_path / name
+                    if not candidate.is_symlink():
+                        continue
+                    try:
+                        target = Path(os.path.realpath(candidate))
+                    except OSError:
+                        continue
+                    if _is_within(target, current):
+                        continue
+                    if _is_within(target, rack):
+                        stale.append(candidate)
+        return stale
+
     # -- link ------------------------------------------------------------
     def link(self, formula: Formula, keg: Path, overwrite: bool = False) -> LinkResult:
         if not keg.is_dir():
             raise PybrewError(f"keg does not exist: {keg}")
         opt_link = self.config.opt_path(formula.name)
         opt_created: Optional[Path] = None
+        removed: list[Path] = []
+        for stale in self._stale_links(formula, keg):
+            try:
+                stale.unlink()
+                removed.append(stale)
+            except OSError:
+                continue
         conflicts: list[tuple[Path, str]] = []
         desired = self._desired_links(keg) if not formula.keg_only else []
 
@@ -116,7 +166,9 @@ class Linker:
             link.symlink_to(os.path.relpath(source, start=link.parent))
             created.append(link)
 
-        return LinkResult(created=created, skipped=skipped, opt=opt_created)
+        return LinkResult(
+            created=created, skipped=skipped, opt=opt_created, removed=removed
+        )
 
     @staticmethod
     def _opt_points_to_rack(opt_link: Path, formula: Formula) -> bool:
@@ -170,7 +222,11 @@ class Linker:
                 target = Path(os.path.realpath(opt_link))
             except OSError:
                 target = Path()
-            if _is_within(target, keg_resolved) or target.parent == keg_resolved:
+            if (
+                _is_within(target, keg_resolved)
+                or target.parent == keg_resolved
+                or not target.exists()
+            ):
                 opt_link.unlink()
                 removed.append(opt_link)
         return removed
@@ -231,9 +287,13 @@ class Cellar:
         return candidate if candidate.is_dir() else None
 
     def remove_keg(self, keg: Path) -> None:
+        if keg.is_symlink():
+            raise PybrewError(f"refusing to remove symlinked keg: {keg}")
         if not _is_within(keg, self.config.cellar):
             raise PybrewError(f"refusing to remove path outside Cellar: {keg}")
         if keg.exists():
+            # The keg contains the receipt and any manifest/SBOM metadata, so
+            # they are removed with it rather than left as stale files.
             shutil.rmtree(keg)
         rack = keg.parent
         try:
@@ -256,13 +316,19 @@ def write_receipt(
     installed_as_dependency: bool = False,
     runtime_dependencies: Optional[list[str]] = None,
     bottle_manifest: Optional[Mapping[str, Any]] = None,
+    sbom: Optional[Mapping[str, Any]] = None,
+    source_metadata: Optional[Mapping[str, Any]] = None,
+    build_metadata: Optional[Mapping[str, Any]] = None,
 ) -> Path:
-    payload = {
+    source_payload: dict[str, Any] = {
+        "path": str(formula.path) if formula.path else None,
+        "tap": formula.tap,
+    }
+    if source_metadata is not None:
+        source_payload.update(dict(source_metadata))
+    payload: dict[str, Any] = {
         "homebrew_version": PYBREW_VERSION,
-        "source": {
-            "path": str(formula.path) if formula.path else None,
-            "tap": formula.tap,
-        },
+        "source": source_payload,
         "version": formula.pkg_version,
         "runtime_dependencies": runtime_dependencies
         if runtime_dependencies is not None
@@ -275,6 +341,10 @@ def write_receipt(
     if bottle_manifest is not None:
         # Additive summary; existing receipt consumers only read known keys.
         payload["bottle_manifest"] = dict(bottle_manifest)
+    if sbom is not None:
+        payload["sbom"] = dict(sbom)
+    if build_metadata is not None:
+        payload["build"] = dict(build_metadata)
     path = receipt_path(keg)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return path

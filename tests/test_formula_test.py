@@ -1713,12 +1713,13 @@ def test_dependency_test_uses_isolated_testpath_and_environment(tmp_path: Path) 
     assert_equal testpath.to_s, ENV["PWD"]
     assert_equal testpath.to_s, ENV["TMPDIR"]
     assert_equal testpath.to_s, Dir.pwd
-    refute_equal ENV["PYBREW_PARENT_TESTPATH"], testpath.to_s
+    assert_nil ENV["PYBREW_PARENT_SECRET"]
+    refute_equal ENV["PARENT_TESTPATH"], testpath.to_s
     (testpath/"dep-only").write "dep"
     File.write("relative-dep", "dep")
     assert_path_exists testpath/"dep-only"
     assert_path_exists testpath/"relative-dep"
-    File.write(File.join(ENV["PYBREW_PARENT_TESTPATH"], "dep-testpath.txt"), testpath.to_s)
+    File.write(File.join(ENV["PARENT_TESTPATH"], "dep-testpath.txt"), testpath.to_s)
   end''',
     )
     formula, config = _installed_formula(
@@ -1728,9 +1729,12 @@ def test_dependency_test_uses_isolated_testpath_and_environment(tmp_path: Path) 
   parent_prefix = ENV["PYBREW_PREFIX"]
   parent_tmpdir = ENV["TMPDIR"]
   (testpath/"parent-marker").write "parent"
-  ENV["PYBREW_PARENT_TESTPATH"] = parent_testpath
+  ENV["PARENT_TESTPATH"] = parent_testpath
+  ENV["PYBREW_PARENT_SECRET"] = "hidden"
   Formula["dep-lib"].test
   assert_path_exists testpath/"parent-marker"
+  assert_equal "hidden", ENV["PYBREW_PARENT_SECRET"]
+  assert_equal parent_testpath, ENV["PARENT_TESTPATH"]
   refute_path_exists testpath/"dep-only"
   refute_path_exists testpath/"relative-dep"
   assert_equal parent_testpath, Dir.pwd
@@ -2026,6 +2030,7 @@ def test_version_letter_segments_and_pkg_ordering(tmp_path: Path) -> None:
   upper = Version.new("1.2.3-BETA")
   release = Version.new("1.2.3")
   assert_equal [1, 2, 3, "beta"], beta.segments
+  assert_equal [1, 2, 3, "beta"], upper.segments
   assert_equal 3, beta.patch
   assert_equal 0, beta <=> upper
   assert beta < release
@@ -2059,6 +2064,9 @@ end
 
 @requires_ruby
 def test_dependency_test_isolates_home_path_and_globals(tmp_path: Path) -> None:
+    fixtures = tmp_path / "fixtures"
+    fixtures.mkdir()
+    (fixtures / "sample.txt").write_text("fixture-data", encoding="utf-8")
     tap = tmp_path / "sample-tap"
     _write_tap_formula(
         tap,
@@ -2072,15 +2080,21 @@ def test_dependency_test_isolates_home_path_and_globals(tmp_path: Path) -> None:
     assert_equal testpath.to_s, ENV["TMP"]
     assert_equal testpath.to_s, Dir.pwd
     assert_equal prefix.to_s, ENV["PYBREW_PREFIX"]
-    refute_equal ENV["PYBREW_PARENT_HOME"], ENV["HOME"]
-    refute_equal ENV["PYBREW_PARENT_TESTPATH"], testpath.to_s
+    refute_equal ENV["PARENT_HOME"], ENV["HOME"]
+    assert_nil ENV["PYBREW_PARENT_HOME"]
+    assert_nil ENV["PYBREW_PARENT_TESTPATH"]
     path_entries = ENV["PATH"].split(File::PATH_SEPARATOR)
     assert_equal (prefix/"bin").to_s, path_entries.first
-    refute_includes path_entries, File.join(ENV["PYBREW_PARENT_PREFIX"], "bin")
+    refute_includes path_entries, File.join(ENV["PARENT_PREFIX"], "bin")
     assert_equal "dep-ok", shell_output("dep-lib").strip
     assert_empty `command -v parent-only-tool 2>/dev/null`.strip
     assert_equal ENV["HOMEBREW_PREFIX"], HOMEBREW_PREFIX.to_s
     assert_equal ENV["HOMEBREW_CELLAR"], HOMEBREW_CELLAR.to_s
+    assert_nil ENV["PYBREW_PARENT_PREFIX"]
+    assert_nil ENV["PYBREW_PARENT_SECRET"]
+    assert_equal "13.5", ENV["PYBREW_MACOS_VERSION"]
+    assert_equal "13", MacOS.version.to_s
+    assert_equal "fixture-data", test_fixtures("sample.txt").read
   end''',
     )
     formula, config = _installed_formula(
@@ -2094,9 +2108,17 @@ def test_dependency_test_isolates_home_path_and_globals(tmp_path: Path) -> None:
   (testpath/"parent-marker").write "parent"
   (bin/"parent-only-tool").write "#!/bin/sh\\necho parent-tool\\n"
   File.chmod(0755, (bin/"parent-only-tool").to_s)
+  global_prefix = HOMEBREW_PREFIX.to_s
+  global_cellar = HOMEBREW_CELLAR.to_s
+  ENV["PARENT_TESTPATH"] = parent_testpath
+  ENV["PARENT_HOME"] = parent_home
+  ENV["PARENT_PREFIX"] = parent_prefix
   ENV["PYBREW_PARENT_TESTPATH"] = parent_testpath
   ENV["PYBREW_PARENT_HOME"] = parent_home
   ENV["PYBREW_PARENT_PREFIX"] = parent_prefix
+  ENV["PYBREW_PARENT_SECRET"] = "hidden"
+  ENV["HOMEBREW_PREFIX"] = "parent-junk-prefix"
+  ENV["HOMEBREW_CELLAR"] = "parent-junk-cellar"
   Formula["dep-lib"].test
   assert_equal parent_testpath, Dir.pwd
   assert_equal parent_home, ENV["HOME"].to_s
@@ -2105,14 +2127,26 @@ def test_dependency_test_isolates_home_path_and_globals(tmp_path: Path) -> None:
   assert_equal parent_prefix, ENV["PYBREW_PREFIX"].to_s
   assert_path_exists testpath/"parent-marker"
   assert_equal "parent-tool", shell_output("#{bin}/parent-only-tool").strip
-  assert_equal ENV["HOMEBREW_PREFIX"], HOMEBREW_PREFIX.to_s
+  assert_equal "parent-junk-prefix", ENV["HOMEBREW_PREFIX"]
+  assert_equal "parent-junk-cellar", ENV["HOMEBREW_CELLAR"]
+  assert_equal "hidden", ENV["PYBREW_PARENT_SECRET"]
+  assert_equal global_prefix, HOMEBREW_PREFIX.to_s
+  assert_equal global_cellar, HOMEBREW_CELLAR.to_s
 end
 """,
         taps=[tap],
     )
     formula.dependencies = [Dependency(name="dep-lib")]
     _install_keg(config, "dep-lib", output="dep-ok")
-    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    result = run_formula_test(
+        formula,
+        config,
+        ruby=_REAL_RUBY,
+        env={
+            "PYBREW_MACOS_VERSION": "13.5",
+            "PYBREW_TEST_FIXTURES": str(fixtures),
+        },
+    )
     assert result.success is True
 
 
@@ -2312,9 +2346,11 @@ end
 @requires_ruby
 def test_skip_inside_assert_raises_propagates(tmp_path: Path) -> None:
     source = """do
+  before = assertions
   begin
     assert_raises(StandardError) { skip "not matched" }
   rescue FormulaTestSkip
+    raise "skip counted as an assertion" unless assertions == before
     raise
   end
 end
@@ -2324,3 +2360,115 @@ end
 
     assert result.success is True
     assert "Formula test skipped: not matched" in result.stdout
+
+
+# ---------------------------------------------------------------------------
+# T9: source-only aliases, compound counters, version token parity
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_source_only_alias_resolves_without_aliases_directory(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(
+        tap,
+        "tool-source",
+        "  test do\n    assert true\n  end",
+        aliases=["source-alias"],
+    )
+    assert not (tap / "Aliases").exists()
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  ref = Formula["source-alias"]
+  assert_equal "tool-source", ref.name
+  assert_equal "1.0", ref.version.to_s
+  assert_equal Formula["tool-source"], ref
+end
+""",
+        taps=[tap],
+    )
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_source_alias_scan_is_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(tap, "a-first", None)
+    _write_tap_formula(tap, "b-last", None, aliases=["late-alias"])
+    monkeypatch.setattr(formula_test_module, "MAX_SOURCE_ALIAS_SCAN", 1)
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  Formula["late-alias"].name\nend', taps=[tap]
+    )
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert "late-alias" in excinfo.value.stderr
+    assert "not available" in excinfo.value.stderr
+
+
+@requires_ruby
+def test_source_alias_scan_respects_budget(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(tap, "a-first", None)
+    _write_tap_formula(tap, "b-last", None, aliases=["late-alias"])
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  Formula["late-alias"].name\nend', taps=[tap]
+    )
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_compound_assertion_counter_matches_minitest(tmp_path: Path) -> None:
+    source = """do
+  assert_equal 0, assertions
+  assert_includes [1], 1
+  assert_equal 3, assertions
+  assert_match(/x/, "x")
+  assert_equal 6, assertions
+  assert_output("out\\n") { print "out\\n" }
+  assert_equal 8, assertions
+  assert_silent { }
+  assert_equal 11, assertions
+  assert_raises(RuntimeError) { raise "boom" }
+  assert_equal 13, assertions
+  begin
+    assert_raises(RuntimeError) { 1 }
+  rescue FormulaTestFailure
+  end
+  assert_equal 15, assertions
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_assert_match_escapes_string_matchers(tmp_path: Path) -> None:
+    source = """do
+  assert_match("1.0", "1.0")
+  refute_match("1.0", "1x0")
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+
+@requires_ruby
+def test_assert_output_regex_counter_matches_minitest(tmp_path: Path) -> None:
+    source = """do
+  assert_equal 0, assertions
+  assert_output(/out/) { print "out" }
+  assert_equal 3, assertions
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True

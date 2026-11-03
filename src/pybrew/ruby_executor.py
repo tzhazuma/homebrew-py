@@ -3641,6 +3641,20 @@ module Sandbox
   SANDBOX_ENV = "PYBREW_SANDBOX"
   SANDBOX_BINARY_ENV = "PYBREW_SANDBOX_BINARY"
 
+  # Isolation/rules APIs from Homebrew's sandbox.rb.  The pybrew shim only
+  # supports the optional external wrapper (Sandbox.run); policy construction,
+  # rule application and capture are explicitly unsupported so callers never
+  # silently believe they are isolated.
+  UNSUPPORTED_POLICY_METHODS = %i[
+    add_rule add_install_hook_rules allow_cvs allow_fossil allow_network
+    allow_process_exec allow_read allow_read_if_exists allow_write
+    allow_write_cellar allow_write_log allow_write_path allow_write_path_if_exists
+    allow_write_system_temp allow_write_temp_and_cache allow_write_xcode apply!
+    capture cleanup_sandbox copy_pty_output deny_all_network deny_read
+    deny_read_home deny_read_path deny_write deny_write_homebrew_repository
+    deny_write_path protect_homebrew_state record_log record_sandbox_log
+  ].freeze
+
   class << self
     # Optional bounded sandbox wrapper.  It is disabled unless the caller
     # explicitly opts in with PYBREW_SANDBOX=1 and points at an executable
@@ -3710,6 +3724,220 @@ module Sandbox
     rescue ScriptError, StandardError => error
       @failure_reason = "#{error.class}: #{error.message}"
       nil
+    end
+
+    def unsupported_isolation!(name)
+      raise NotImplementedError,
+            "Sandbox.#{name} is not implemented in the pybrew Ruby shim: " \
+            "sandbox policy/rules are bounded to the optional external wrapper " \
+            "(Sandbox.available? is #{available?})"
+    end
+
+    def add_rule(*_args, **_kwargs)
+      unsupported_isolation!(:add_rule)
+    end
+
+    def add_install_hook_rules(*_args, **_kwargs)
+      unsupported_isolation!(:add_install_hook_rules)
+    end
+
+    def allow_cvs(*_args, **_kwargs)
+      unsupported_isolation!(:allow_cvs)
+    end
+
+    def allow_fossil(*_args, **_kwargs)
+      unsupported_isolation!(:allow_fossil)
+    end
+
+    def allow_network(*_args, **_kwargs)
+      unsupported_isolation!(:allow_network)
+    end
+
+    def allow_process_exec(*_args, **_kwargs)
+      unsupported_isolation!(:allow_process_exec)
+    end
+
+    def allow_read(*_args, **_kwargs)
+      unsupported_isolation!(:allow_read)
+    end
+
+    def allow_read_if_exists(*_args, **_kwargs)
+      unsupported_isolation!(:allow_read_if_exists)
+    end
+
+    def allow_write(*_args, **_kwargs)
+      unsupported_isolation!(:allow_write)
+    end
+
+    def allow_write_cellar(*_args, **_kwargs)
+      unsupported_isolation!(:allow_write_cellar)
+    end
+
+    def allow_write_log(*_args, **_kwargs)
+      unsupported_isolation!(:allow_write_log)
+    end
+
+    def allow_write_path(*_args, **_kwargs)
+      unsupported_isolation!(:allow_write_path)
+    end
+
+    def allow_write_path_if_exists(*_args, **_kwargs)
+      unsupported_isolation!(:allow_write_path_if_exists)
+    end
+
+    def allow_write_system_temp(*_args, **_kwargs)
+      unsupported_isolation!(:allow_write_system_temp)
+    end
+
+    def allow_write_temp_and_cache(*_args, **_kwargs)
+      unsupported_isolation!(:allow_write_temp_and_cache)
+    end
+
+    def allow_write_xcode(*_args, **_kwargs)
+      unsupported_isolation!(:allow_write_xcode)
+    end
+
+    def apply!(*_args, **_kwargs)
+      unsupported_isolation!(:apply!)
+    end
+
+    def capture(*_args, **_kwargs)
+      unsupported_isolation!(:capture)
+    end
+
+    def cleanup_sandbox(*_args, **_kwargs)
+      unsupported_isolation!(:cleanup_sandbox)
+    end
+
+    def copy_pty_output(*_args, **_kwargs)
+      unsupported_isolation!(:copy_pty_output)
+    end
+
+    def deny_all_network(*_args, **_kwargs)
+      unsupported_isolation!(:deny_all_network)
+    end
+
+    def deny_read(*_args, **_kwargs)
+      unsupported_isolation!(:deny_read)
+    end
+
+    def deny_read_home(*_args, **_kwargs)
+      unsupported_isolation!(:deny_read_home)
+    end
+
+    def deny_read_path(*_args, **_kwargs)
+      unsupported_isolation!(:deny_read_path)
+    end
+
+    def deny_write(*_args, **_kwargs)
+      unsupported_isolation!(:deny_write)
+    end
+
+    def deny_write_homebrew_repository(*_args, **_kwargs)
+      unsupported_isolation!(:deny_write_homebrew_repository)
+    end
+
+    def deny_write_path(*_args, **_kwargs)
+      unsupported_isolation!(:deny_write_path)
+    end
+
+    def protect_homebrew_state(*_args, **_kwargs)
+      unsupported_isolation!(:protect_homebrew_state)
+    end
+
+    def record_log(*_args, **_kwargs)
+      unsupported_isolation!(:record_log)
+    end
+
+    def record_sandbox_log(*_args, **_kwargs)
+      unsupported_isolation!(:record_sandbox_log)
+    end
+
+    def executable!
+      found = executable
+      return found unless found.nil?
+
+      raise NotImplementedError,
+            "Sandbox.executable! is not available: set PYBREW_SANDBOX=1 and an " \
+            "executable PYBREW_SANDBOX_BINARY to enable the bounded wrapper"
+    end
+
+    def ensure_sandbox_available!
+      return true if available?
+
+      raise NotImplementedError,
+            "Sandbox.ensure_sandbox_available! cannot provide isolation in the " \
+            "pybrew Ruby shim; the default remains safe no-sandbox mode"
+    end
+
+    def executable_candidate_paths
+      []
+    end
+
+    def executable_name
+      "sandbox"
+    end
+
+    def executable_usable?
+      !executable.nil?
+    end
+
+    def apply_before_exec?
+      false
+    end
+
+    def sandbox_command(*command)
+      command.flatten.compact.map(&:to_s)
+    end
+
+    def sandbox_environment
+      {}
+    end
+
+    def run_command(*command)
+      run(*command)
+    end
+
+    def ruby_command(*args)
+      ["ruby", *args.flatten.compact.map(&:to_s)]
+    end
+
+    def for_operation(*_args, **_kwargs, &block)
+      block.nil? ? nil : block.call
+    end
+
+    def operation
+      nil
+    end
+
+    def isolate_operation?
+      use_for?
+    end
+
+    def tty_state
+      nil
+    end
+
+    def terminal_ioctl_request
+      nil
+    end
+
+    def ensure_child_tty_available
+      nil
+    end
+
+    def home_write_paths
+      []
+    end
+
+    def path_filter
+      nil
+    end
+
+    def expand_realpath(path)
+      Pathname.new(path.to_s).realpath.to_s
+    rescue Errno::ENOENT, Errno::EACCES, Errno::ENOTDIR
+      Pathname.new(path.to_s).expand_path.to_s
     end
 
     def run_or_fork(*_args, **_kwargs, &block)
@@ -8217,13 +8445,15 @@ module Formulary
     klass = Class.new(PybrewLoadedFormula)
     klass.loaded_name = name.to_s
     %i[desc homepage url sha256 version license].each do |attribute|
-      next unless formula_struct.respond_to?(attribute)
+      next unless formula_struct_responds?(formula_struct, attribute)
 
-      value = formula_struct.public_send(attribute)
+      value = formula_struct_read(formula_struct, attribute)
       klass.public_send("loaded_#{attribute}=", formula_struct_text(value))
     end
-    if formula_struct.respond_to?(:dependencies)
-      klass.loaded_dependencies = formula_struct_dependencies(formula_struct.dependencies)
+    if formula_struct_responds?(formula_struct, :dependencies)
+      klass.loaded_dependencies = formula_struct_dependencies(
+        formula_struct_read(formula_struct, :dependencies)
+      )
     end
 
     cache_api_formula_class!(name, formula_struct, klass)
@@ -8235,14 +8465,32 @@ module Formulary
   # equality means repeated loads of the same struct hit the same object key.
   def api_cache_keys(name, formula_struct)
     keys = [name.to_s]
-    if formula_struct.respond_to?(:name) && !formula_struct.name.to_s.empty?
-      keys << formula_struct.name.to_s
+    if formula_struct_responds?(formula_struct, :name)
+      struct_name = formula_struct_read(formula_struct, :name).to_s
+      keys << struct_name unless struct_name.empty?
     end
-    if formula_struct.respond_to?(:full_name) && !formula_struct.full_name.to_s.empty?
-      keys << formula_struct.full_name.to_s
+    if formula_struct_responds?(formula_struct, :full_name)
+      full_name = formula_struct_read(formula_struct, :full_name).to_s
+      keys << full_name unless full_name.empty?
     end
     keys << formula_struct
     keys.compact
+  end
+
+  def formula_struct_responds?(formula_struct, attribute)
+    if formula_struct.is_a?(Hash)
+      formula_struct.key?(attribute) || formula_struct.key?(attribute.to_s)
+    else
+      formula_struct.respond_to?(attribute)
+    end
+  end
+
+  def formula_struct_read(formula_struct, attribute)
+    if formula_struct.is_a?(Hash)
+      formula_struct.key?(attribute) ? formula_struct[attribute] : formula_struct[attribute.to_s]
+    else
+      formula_struct.public_send(attribute)
+    end
   end
 
   def api_cache_key(value)
@@ -8263,6 +8511,11 @@ module Formulary
   def formula_struct_like?(object)
     return false if object.nil?
 
+    if object.is_a?(Hash)
+      return FORMULA_STRUCT_ATTRIBUTES.any? do |attribute|
+        object.key?(attribute) || object.key?(attribute.to_s)
+      end
+    end
     FORMULA_STRUCT_ATTRIBUTES.any? { |attribute| object.respond_to?(attribute) }
   end
 
@@ -8275,7 +8528,7 @@ module Formulary
     end
 
     missing = FORMULA_STRUCT_REQUIRED_ATTRIBUTES.reject do |attribute|
-      formula_struct.respond_to?(attribute)
+      formula_struct_responds?(formula_struct, attribute)
     end
     unless missing.empty?
       raise PybrewFormulaUnavailableError,
@@ -8283,9 +8536,9 @@ module Formulary
             "#{name.inspect}: missing required accessor(s) #{missing.join('/')}"
     end
 
-    return true unless formula_struct.respond_to?(:dependencies)
+    return true unless formula_struct_responds?(formula_struct, :dependencies)
 
-    raw = formula_struct.dependencies
+    raw = formula_struct_read(formula_struct, :dependencies)
     return true if raw.nil? || raw.is_a?(Hash) || raw.respond_to?(:each) || raw.respond_to?(:name)
 
     raise PybrewFormulaUnavailableError,
@@ -9107,7 +9360,18 @@ module Utils
 
     def search_query_string(*main_params, **qualifiers)
       terms = main_params.flatten.compact.map(&:to_s)
-      qualifiers.each { |key, value| terms << "#{key}:#{value}" }
+      from = qualifiers.delete(:from)
+      to = qualifiers.delete(:to)
+      if !from.nil? && !to.nil?
+        terms << "created:#{from}..#{to}"
+      elsif !from.nil?
+        terms << "created:>=#{from}"
+      elsif !to.nil?
+        terms << "created:<=#{to}"
+      end
+      qualifiers.each do |key, value|
+        Array(value).flatten.each { |item| terms << "#{key}:#{item}" }
+      end
       "q=#{URI.encode_www_form_component(terms.join(" "))}"
     end
 
@@ -9201,6 +9465,145 @@ module Utils
         end
       end
       urls
+    end
+
+    MAX_PER_PAGE = 100
+
+    def search(entity, *queries, **qualifiers)
+      get_json("#{url_to("search", entity)}?#{search_query_string(*queries, **qualifiers)}")
+    end
+
+    def search_issues_items(query, **qualifiers)
+      json = search_issues(query, **qualifiers)
+      json.is_a?(Hash) ? Array(json["items"]) : Array(json)
+    end
+
+    def pull_request_title_regex(name, version = nil)
+      quoted = Regexp.quote(name.to_s)
+      if version.nil? || version.to_s.empty?
+        /(?:^|\s)#{quoted}(?::|,|\s|$)/i
+      else
+        /(?:^|\s)#{quoted}(?::|,|\s)(?:.*\s)?#{Regexp.quote(version.to_s)}(?::|,|\s|$)/i
+      end
+    end
+
+    def fetch_pull_requests(name, tap_remote_repo, state: nil, version: nil)
+      return [] if tap_remote_repo.nil? || tap_remote_repo.to_s.empty?
+
+      regex = pull_request_title_regex(name, version)
+      qualifiers = { repo: tap_remote_repo.to_s, type: "pr", in: "title" }
+      qualifiers[:state] = state unless state.nil?
+      search_issues_items(name.to_s, **qualifiers).select do |pr|
+        pr.is_a?(Hash) && pr["html_url"].to_s.include?("/pull/") && regex.match?(pr["title"].to_s)
+      end
+    end
+
+    def fetch_open_pull_requests(name, tap_remote_repo, version: nil)
+      fetch_pull_requests(name, tap_remote_repo, state: "open", version: version)
+    end
+
+    def print_pull_requests_matching(query, only = nil)
+      qualifiers = { type: "pr", user: "Homebrew" }
+      qualifiers[:is] = only unless only.nil?
+      search_issues_items(query, **qualifiers)
+    end
+
+    def pull_request_commits(user, repo, pull_request, per_page: MAX_PER_PAGE)
+      get_json("#{url_to("repos", user, repo, "pulls", pull_request, "commits")}?per_page=#{per_page}")
+    end
+
+    def pull_request_labels(user, repo, pull_request)
+      get_json(url_to("repos", user, repo, "pulls", pull_request, "labels"))
+    end
+
+    def get_pull_request_changed_files(tap_remote_repo, pull_request)
+      get_json(url_to("repos", tap_remote_repo, "pulls", pull_request, "files"))
+    end
+
+    def pull_request_changed_files(tap_remote_repo, pull_request)
+      get_pull_request_changed_files(tap_remote_repo, pull_request)
+    end
+
+    def members_by_team(org, team)
+      get_json(url_to("orgs", org, "teams", team, "members"))
+    end
+
+    def organisation_repositories(organisation, _from = nil, _to = nil, _verbose = false)
+      data = get_json("#{url_to("orgs", organisation, "repos")}?per_page=#{MAX_PER_PAGE}")
+      if data.is_a?(Hash)
+        Array(data["items"] || data["repositories"])
+      else
+        Array(data)
+      end
+    end
+
+    def sponsorships(user)
+      data = get_json(url_to("users", user, "sponsors"))
+      data.is_a?(Hash) ? Array(data["items"] || data["sponsors"]) : Array(data)
+    end
+
+    def sponsorship_tiers(user)
+      data = get_json(url_to("users", user, "sponsors", "tiers"))
+      data.is_a?(Hash) ? Array(data["items"] || data["tiers"]) : Array(data)
+    end
+
+    def fork_exists?(repo, org: nil)
+      parts = repo.to_s.split("/")
+      reponame = parts.length > 1 ? parts[1] : parts.first
+      username = org
+      if username.nil? || username.to_s.empty?
+        current = user
+        username = current.is_a?(Hash) ? current["login"] : nil
+      end
+      return false if username.nil? || username.to_s.empty?
+
+      data = get_json(url_to("repos", username, reponame))
+      !(data.is_a?(Hash) && data["message"].to_s == "Not Found")
+    rescue ScriptError, StandardError
+      false
+    end
+
+    def check_for_duplicate_pull_requests(name, tap_remote_repo, file: nil, quiet: false, state: nil, version: nil)
+      fetch_pull_requests(name, tap_remote_repo, state: state, version: version)
+    end
+
+    def repository_approved_reviews(user, repo, pull_request, commit: nil)
+      data = get_json(url_to("repos", user, repo, "pulls", pull_request, "reviews"))
+      reviews = data.is_a?(Hash) ? Array(data["items"] || data["reviews"]) : Array(data)
+      result = []
+      reviews.each do |review|
+        next unless review.is_a?(Hash) && review["state"].to_s == "APPROVED"
+        next if !commit.nil? && !commit.to_s.empty? &&
+                review["commit_id"].to_s != commit.to_s &&
+                review.dig("commit", "oid").to_s != commit.to_s
+        next if review.key?("author_association") &&
+                !%w[MEMBER OWNER].include?(review["author_association"].to_s)
+
+        author = review["user"].is_a?(Hash) ? review["user"] : {}
+        result << { "login" => author["login"], "name" => author["login"] }
+      end
+      result
+    end
+
+    def search_approved_pull_requests_in_user_or_organisation(user, reviewed_by, from: nil, to: nil)
+      qualifiers = { user: user, reviewed_by: reviewed_by }
+      qualifiers[:from] = from unless from.nil?
+      qualifiers[:to] = to unless to.nil?
+      search_issues_items("is:pr", **qualifiers)
+    end
+
+    def multiple_short_commits_exist?(user, repo, commit)
+      data = get_json(url_to("repos", user, repo, "commits", commit))
+      data.is_a?(Hash) && !data.empty? && data["sha"].to_s == commit.to_s
+    rescue ScriptError, StandardError
+      false
+    end
+
+    def too_many_open_prs?(tap)
+      repo = tap.respond_to?(:full_name) ? tap.full_name : tap.to_s
+      search_issues_items("is:pr", repo: repo).length > 0
+    rescue ScriptError, StandardError
+      false
     end
 
     def unsupported_write!(name)

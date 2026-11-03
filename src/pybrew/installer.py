@@ -5,6 +5,7 @@ from __future__ import annotations
 import heapq
 import json
 import os
+import platform
 import posixpath
 import re
 import shutil
@@ -76,11 +77,14 @@ class RelocationReport:
     skipped_binaries: int = 0
 
 
-def _record_post_install(keg: Path) -> None:
+def _record_post_install(keg: Path, sbom: Optional[Mapping[str, Any]] = None) -> None:
     """Mark the install receipt after a successful post_install run."""
 
     receipt = read_receipt(keg)
     receipt["post_install_ran"] = True
+    if sbom is not None:
+        # post_install may add files, so refresh the SBOM after it runs.
+        receipt["sbom"] = dict(sbom)
     path = receipt_path(keg)
     path.write_text(
         json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -91,6 +95,7 @@ def safe_extract_tar(archive: Path, destination: Path) -> None:
     """Extract a bottle/source tarball without allowing path escapes."""
 
     destination.mkdir(parents=True, exist_ok=True)
+    pending_hardlinks: list[tuple[str, str, int]] = []
     try:
         tar = tarfile.open(archive)
     except tarfile.TarError as error:
@@ -126,14 +131,39 @@ def safe_extract_tar(archive: Path, destination: Path) -> None:
                 os.chmod(target, member.mode & 0o777)
                 continue
             if member.islnk():
-                # Hard links are rare in Homebrew bottles; copy the referenced
-                # file if it has already been extracted.
-                source_path = destination / member.linkname
-                if source_path.is_file():
-                    shutil.copy2(source_path, target)
+                linkname = member.linkname
+                link_parts = Path(linkname).parts
+                if not linkname or linkname.startswith("/") or ".." in link_parts:
+                    raise BottleError(
+                        f"refusing unsafe hard link target in archive: {name!r} -> {linkname!r}"
+                    )
+                # The target may appear later in the tarball; resolve all
+                # hard links after regular files have been extracted.
+                pending_hardlinks.append((name, linkname, member.mode & 0o777))
                 continue
             # Devices/FIFOs are not valid in bottles.
             raise BottleError(f"unsupported archive member type for {name!r}")
+
+    remaining = pending_hardlinks
+    while remaining:
+        deferred: list[tuple[str, str, int]] = []
+        for name, linkname, mode in remaining:
+            source_path = destination / linkname
+            target = destination / name
+            if not source_path.is_file():
+                deferred.append((name, linkname, mode))
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if target.exists() or target.is_symlink():
+                target.unlink()
+            shutil.copy2(source_path, target)
+            os.chmod(target, mode)
+        if len(deferred) == len(remaining):
+            name, linkname, _mode = deferred[0]
+            raise BottleError(
+                f"hard link target not found in archive: {name!r} -> {linkname!r}"
+            )
+        remaining = deferred
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +353,137 @@ def read_bottle_manifest(
         entries=tuple(entries),
         receipt=receipt,
     )
+
+
+# ---------------------------------------------------------------------------
+# receipt SBOM / source metadata
+# ---------------------------------------------------------------------------
+
+SBOM_SCHEMA = "pybrew-keg-sbom-1"
+
+
+def build_keg_sbom(
+    keg: Path,
+    *,
+    exclude: Iterable[str] = ("INSTALL_RECEIPT.json",),
+) -> dict[str, Any]:
+    """Build a compact, deterministic SBOM for the files in a keg.
+
+    The receipt itself is excluded by default: it is written after this helper
+    runs and would otherwise make its own checksum self-referential.  Symlinks
+    are recorded with their target instead of hashing the target.
+    """
+
+    keg = Path(keg)
+    excluded = set(exclude)
+    files: list[dict[str, Any]] = []
+    symlinks: list[dict[str, str]] = []
+    if keg.is_dir():
+        for current_root, dirnames, filenames in os.walk(keg, followlinks=False):
+            dirnames.sort()
+            current_path = Path(current_root)
+            for dirname in list(dirnames):
+                candidate = current_path / dirname
+                if not candidate.is_symlink():
+                    continue
+                relative = candidate.relative_to(keg).as_posix()
+                if relative in excluded:
+                    dirnames.remove(dirname)
+                    continue
+                symlinks.append(
+                    {"path": relative, "target": os.readlink(candidate)}
+                )
+                dirnames.remove(dirname)
+            for filename in sorted(filenames):
+                candidate = current_path / filename
+                relative = candidate.relative_to(keg).as_posix()
+                if relative in excluded:
+                    continue
+                if candidate.is_symlink():
+                    symlinks.append(
+                        {"path": relative, "target": os.readlink(candidate)}
+                    )
+                    continue
+                if not candidate.is_file():
+                    continue
+                try:
+                    size = candidate.stat().st_size
+                    digest = sha256_file(candidate)
+                except OSError:
+                    continue
+                files.append({"path": relative, "size": size, "sha256": digest})
+    files.sort(key=lambda item: item["path"])
+    symlinks.sort(key=lambda item: item["path"])
+    return {
+        "schema": SBOM_SCHEMA,
+        "algorithm": "sha256",
+        "file_count": len(files),
+        "symlink_count": len(symlinks),
+        "total_size": sum(int(item["size"]) for item in files),
+        "files": files,
+        "symlinks": symlinks,
+    }
+
+
+def _source_metadata(formula: Formula, options: InstallOptions) -> dict[str, Any]:
+    """Source fields added to the existing receipt ``source`` object."""
+
+    spec = formula.head if options.head else formula.stable
+    return {
+        "spec": "head" if options.head else "stable",
+        "url": spec.url,
+        "sha256": spec.sha256,
+        "tag": spec.tag,
+        "branch": spec.branch,
+        "revision": spec.revision,
+        "using": spec.using,
+        "mirrors": list(spec.mirrors),
+        "version": formula.version,
+        "pkg_version": formula.pkg_version,
+    }
+
+
+def _build_metadata(
+    options: InstallOptions,
+    from_bottle: bool,
+    bottle_tag: Optional[str],
+    environment: Optional[Mapping[str, str]],
+) -> dict[str, Any]:
+    """Compact build information for the install receipt."""
+
+    env = os.environ if environment is None else environment
+    compiler_keys = (
+        "PYBREW_COMPILER",
+        "PYBREW_CC",
+        "PYBREW_CXX",
+        "CC",
+        "CXX",
+        "CFLAGS",
+        "CXXFLAGS",
+        "LDFLAGS",
+    )
+    return {
+        "from_bottle": from_bottle,
+        "build_from_source": not from_bottle,
+        "spec": "head" if options.head else "stable",
+        "bottle_tag": bottle_tag,
+        "options": {
+            "force": options.force,
+            "ignore_dependencies": options.ignore_dependencies,
+            "build_from_source": options.build_from_source,
+            "head": options.head,
+            "overwrite": options.overwrite,
+            "link": options.link,
+        },
+        "environment": {
+            key: env[key] for key in compiler_keys if env.get(key)
+        },
+        "built_on": {
+            "os": platform.system(),
+            "os_version": platform.release(),
+            "arch": platform.machine(),
+        },
+    }
 
 
 def find_keg_root(extract_root: Path, formula: Formula) -> Path:
@@ -1226,6 +1387,7 @@ class Installer:
             )
 
         bottle_manifest: Optional[BottleManifest] = None
+        bottle_tag: Optional[str] = None
         if options.head or options.build_from_source:
             from_bottle = False
             self._install_from_source(formula, keg, options)
@@ -1241,10 +1403,12 @@ class Installer:
                     )
             else:
                 from_bottle = True
+                bottle_tag = bottle[0]
                 bottle_manifest = self._install_from_bottle(
                     formula, bottle, keg, options, apply_bottle_file
                 )
 
+        sbom = build_keg_sbom(keg)
         write_receipt(
             keg,
             formula,
@@ -1252,6 +1416,11 @@ class Installer:
             installed_as_dependency=as_dependency,
             bottle_manifest=(
                 bottle_manifest.summary() if bottle_manifest is not None else None
+            ),
+            sbom=sbom,
+            source_metadata=_source_metadata(formula, options),
+            build_metadata=_build_metadata(
+                options, from_bottle, bottle_tag, self.environment
             ),
         )
         linked = False
@@ -1272,7 +1441,7 @@ class Installer:
         # leaves the keg in place so it can be inspected or retried.
         if has_post_install(formula):
             run_post_install(formula, self.config, keg=keg)
-            _record_post_install(keg)
+            _record_post_install(keg, sbom=build_keg_sbom(keg))
 
         return InstallResult(
             formula.name,
@@ -1432,6 +1601,38 @@ class Installer:
         if keg is None:
             raise PybrewError(f"{formula.name} is not installed")
         return self.linker.unlink(formula, keg)
+
+    # -- linkage diagnostics ---------------------------------------------
+    def linkage_report(
+        self,
+        formula: "str | Formula",
+        version: Optional[str] = None,
+        extra_search_paths: Iterable[Path] = (),
+    ) -> LinkageReport:
+        """Return the linkage report for an installed formula's keg.
+
+        This is the formula-level diagnostic path: the same :func:`check_linkage`
+        used by the opt-in install check, but callable on a committed keg
+        without reinstalling.  A missing formula raises ``PybrewError``.
+        """
+
+        name = formula.name if isinstance(formula, Formula) else str(formula)
+        keg = self.cellar.keg(name, version)
+        if keg is None:
+            raise PybrewError(f"{name} is not installed")
+        return check_linkage(keg, self.config, extra_search_paths)
+
+    def linkage_diagnostic(
+        self,
+        formula: "str | Formula",
+        version: Optional[str] = None,
+        extra_search_paths: Iterable[Path] = (),
+    ) -> str:
+        """Human-readable linkage diagnostic for an installed formula."""
+
+        return self.linkage_report(
+            formula, version, extra_search_paths
+        ).format()
 
 
 # -- the tiny source-install DSL -----------------------------------------

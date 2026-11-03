@@ -1845,3 +1845,101 @@ def test_execute_livecheck_strategy_fetcher_failure(allow_ruby: None) -> None:
 
     assert result["executed"] is False
     assert "transport down" in (result["error"] or "")
+
+
+# ---------------------------------------------------------------------------
+# Cask#check_livecheck (CLI-facing livecheck strategy API)
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_cask_check_livecheck_with_fake_fetcher(allow_ruby: None) -> None:
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  livecheck do\n'
+            '    url "https://example.com/tool"\n'
+            '    strategy :page_match do |page|\n'
+            '      page.scan(/tool-(\\d+(?:\\.\\d+)*)/).flatten\n'
+            '    end\n'
+            '  end\n'
+        )
+    )
+    calls: list[str] = []
+
+    def fetcher(url: str) -> str:
+        calls.append(url)
+        return "tool-3.4.5"
+
+    result = cask.check_livecheck(fetcher=fetcher)
+
+    assert calls == ["https://example.com/tool"]
+    assert result["executed"] is True
+    assert result["result"] == ["3.4.5"]
+    assert cask.livecheck_result == result
+
+
+def test_cask_check_livecheck_offline_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import Cask
+    from pybrew.cask_ruby import ALLOW_ENV
+
+    cask = Cask(token="offline", livecheck={"strategy_source": "|page| page"})
+    monkeypatch.setenv(ALLOW_ENV, "1")
+
+    result = cask.check_livecheck()
+
+    assert result["executed"] is False
+    assert "no network" in (result["reason"] or "")
+    assert cask.livecheck_result is None
+
+
+def test_cask_check_livecheck_requires_ruby_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import Cask
+    from pybrew.cask_ruby import ALLOW_ENV
+
+    cask = Cask(token="gated", livecheck={"strategy_source": "|page| page"})
+    monkeypatch.delenv(ALLOW_ENV, raising=False)
+
+    result = cask.check_livecheck(page="anything")
+
+    assert result["executed"] is False
+    assert ALLOW_ENV in (result["reason"] or "")
+
+
+def test_cask_check_livecheck_without_strategy_block() -> None:
+    from pybrew.cask import Cask
+
+    cask = Cask(token="plain")
+
+    result = cask.check_livecheck(page="anything")
+
+    assert result["executed"] is False
+    assert "no livecheck strategy block" in (result["reason"] or "")
+    assert cask.livecheck_result is None
+
+
+@requires_ruby
+def test_evaluator_invalid_lifecycle_dates_are_immediate(
+    allow_ruby: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _fixed_today(monkeypatch)
+
+    deprecated = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  deprecate! date: "not-a-date", because: "old"\n'
+        )
+    )
+    assert deprecated.deprecated is True
+
+    disabled = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  disable! date: "2025-13-40", because: "broken"\n'
+        )
+    )
+    assert disabled.disabled is True

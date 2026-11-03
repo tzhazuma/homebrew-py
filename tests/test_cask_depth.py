@@ -385,3 +385,279 @@ def test_upgrade_removes_artifact_missing_from_new_version(
     assert not first.room.exists()
     receipt = json.loads((result.room / ".metadata" / "receipt.json").read_text())
     assert receipt["installed"] == [str(shared)]
+
+
+# ---------------------------------------------------------------------------
+# artifact target path safety beyond Library/completion artifacts
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["../escape.app", "nested/../../escape.app", "~/escape.app"],
+)
+def test_app_artifact_target_cannot_escape_appdir(
+    cask_env: SimpleNamespace, target: str
+) -> None:
+    archive = cask_env.tmp_path / "AppEscape-1.0.zip"
+    digest = _make_zip(archive, {"Payload.app/Contents/Info.plist": b"<plist/>"})
+    _write_cask(
+        cask_env.tap,
+        "appescape",
+        "1.0",
+        digest,
+        archive,
+        artifacts=f'  app "Payload.app", target: "{target}"',
+    )
+
+    with pytest.raises(CaskError, match="unsafe artifact target"):
+        cask_env.installer.install(cask_env.loader.load("appescape"))
+    assert not (cask_env.tmp_path / "escape.app").exists()
+
+
+def test_app_artifact_absolute_target_is_rejected(
+    cask_env: SimpleNamespace,
+) -> None:
+    outside = cask_env.tmp_path / "outside-app"
+    archive = cask_env.tmp_path / "AppAbsolute-1.0.zip"
+    digest = _make_zip(archive, {"Payload.app/Contents/Info.plist": b"<plist/>"})
+    _write_cask(
+        cask_env.tap,
+        "appabsolute",
+        "1.0",
+        digest,
+        archive,
+        artifacts=f'  app "Payload.app", target: "{outside}"',
+    )
+
+    with pytest.raises(CaskError, match="unsafe artifact target"):
+        cask_env.installer.install(cask_env.loader.load("appabsolute"))
+    assert not outside.exists()
+
+
+@pytest.mark.parametrize("target", ["../escape", "~/escape"])
+def test_binary_artifact_target_cannot_escape_bin(
+    cask_env: SimpleNamespace, target: str
+) -> None:
+    archive = cask_env.tmp_path / "BinEscape-1.0.zip"
+    digest = _make_zip(archive, {"bin/tool": b"#!/bin/sh\necho tool\n"})
+    _write_cask(
+        cask_env.tap,
+        "binescape",
+        "1.0",
+        digest,
+        archive,
+        artifacts=f'  binary "bin/tool", target: "{target}"',
+    )
+
+    with pytest.raises(CaskError, match="unsafe artifact target"):
+        cask_env.installer.install(cask_env.loader.load("binescape"))
+    assert not (cask_env.config.bin.parent / "escape").exists()
+
+
+def test_binary_absolute_target_is_rejected(cask_env: SimpleNamespace) -> None:
+    outside = cask_env.tmp_path / "outside-bin"
+    archive = cask_env.tmp_path / "BinAbsolute-1.0.zip"
+    digest = _make_zip(archive, {"bin/tool": b"#!/bin/sh\n"})
+    _write_cask(
+        cask_env.tap,
+        "binabsolute",
+        "1.0",
+        digest,
+        archive,
+        artifacts=f'  binary "bin/tool", target: "{outside}"',
+    )
+
+    with pytest.raises(CaskError, match="unsafe artifact target"):
+        cask_env.installer.install(cask_env.loader.load("binabsolute"))
+    assert not outside.exists()
+
+
+@pytest.mark.parametrize("target", ["../escape.AppImage", "~/escape.AppImage"])
+def test_appimage_artifact_target_cannot_escape_appdir(
+    cask_env: SimpleNamespace, target: str
+) -> None:
+    archive = cask_env.tmp_path / "ImageEscape-1.0.zip"
+    digest = _make_zip(archive, {"Payload.AppImage": b"#!/bin/sh\n"})
+    _write_cask(
+        cask_env.tap,
+        "imageescape",
+        "1.0",
+        digest,
+        archive,
+        artifacts=f'  appimage "Payload.AppImage", target: "{target}"',
+    )
+
+    with pytest.raises(CaskError, match="unsafe artifact target"):
+        cask_env.installer.install(cask_env.loader.load("imageescape"))
+
+
+# ---------------------------------------------------------------------------
+# completion artifacts: uninstall and upgrade cleanup
+# ---------------------------------------------------------------------------
+
+
+def _completion_paths(config: Config) -> dict[str, Path]:
+    return {
+        "bash": config.prefix / "share/bash-completion/completions/tool.bash",
+        "zsh": config.prefix / "share/zsh/site-functions/_tool",
+        "fish": config.prefix / "share/fish/vendor_completions.d/tool.fish",
+    }
+
+
+def test_completion_artifacts_uninstall_removes_all(
+    cask_env: SimpleNamespace,
+) -> None:
+    archive = cask_env.tmp_path / "Completions-1.0.zip"
+    digest = _make_zip(
+        archive,
+        {
+            "completions/tool.bash": b"complete -W tool tool\n",
+            "completions/_tool": b"#compdef tool\n",
+            "completions/tool.fish": b"complete -c tool\n",
+        },
+    )
+    _write_cask(
+        cask_env.tap,
+        "completions",
+        "1.0",
+        digest,
+        archive,
+        artifacts=(
+            '  bash_completion "completions/tool.bash"\n'
+            '  zsh_completion "completions/_tool"\n'
+            '  fish_completion "completions/tool.fish"'
+        ),
+    )
+    cask_env.installer.install(cask_env.loader.load("completions"))
+    paths = _completion_paths(cask_env.config)
+    assert all(path.is_file() for path in paths.values())
+
+    cask_env.installer.uninstall("completions")
+
+    assert not any(path.exists() for path in paths.values())
+    assert not (cask_env.config.caskroom / "completions").exists()
+
+
+def test_upgrade_removes_completion_artifact_missing_from_new_version(
+    cask_env: SimpleNamespace,
+) -> None:
+    archive = cask_env.tmp_path / "Completions-1.0.zip"
+    digest = _make_zip(
+        archive,
+        {
+            "completions/tool.bash": b"complete -W tool tool\n",
+            "completions/tool.fish": b"complete -c tool\n",
+        },
+    )
+    _write_cask(
+        cask_env.tap,
+        "completions",
+        "1.0",
+        digest,
+        archive,
+        artifacts=(
+            '  bash_completion "completions/tool.bash"\n'
+            '  fish_completion "completions/tool.fish"'
+        ),
+    )
+    cask_env.installer.install(cask_env.loader.load("completions"))
+    paths = _completion_paths(cask_env.config)
+    assert paths["bash"].is_file()
+    assert paths["fish"].is_file()
+
+    # 2.0 keeps only the bash completion.
+    _write_cask(
+        cask_env.tap,
+        "completions",
+        "2.0",
+        digest,
+        archive,
+        artifacts='  bash_completion "completions/tool.bash"',
+    )
+    result = cask_env.installer.upgrade(cask_env.loader.load("completions"))
+
+    assert result.version == "2.0"
+    assert paths["bash"].is_file()
+    assert not paths["fish"].exists()
+
+
+def test_upgrade_keeps_shared_binary_symlink(cask_env: SimpleNamespace) -> None:
+    archive = cask_env.tmp_path / "BinUpgrade-1.0.zip"
+    digest = _make_zip(
+        archive,
+        {"BinUpgrade.app/Contents/MacOS/tool": b"#!/bin/sh\necho one\n"},
+    )
+    _write_cask(
+        cask_env.tap,
+        "binupgrade",
+        "1.0",
+        digest,
+        archive,
+        artifacts=(
+            '  app "BinUpgrade.app"\n'
+            '  binary "BinUpgrade.app/Contents/MacOS/tool"'
+        ),
+    )
+    cask_env.installer.install(cask_env.loader.load("binupgrade"))
+    target = cask_env.config.bin / "tool"
+    assert target.is_symlink()
+    assert target.exists()
+
+    _write_cask(
+        cask_env.tap,
+        "binupgrade",
+        "2.0",
+        digest,
+        archive,
+        artifacts=(
+            '  app "BinUpgrade.app"\n'
+            '  binary "BinUpgrade.app/Contents/MacOS/tool"'
+        ),
+    )
+    cask_env.installer.upgrade(cask_env.loader.load("binupgrade"))
+
+    assert target.is_symlink()
+    assert target.exists()
+
+
+# ---------------------------------------------------------------------------
+# zap: glob expansion, no matches, unsafe roots
+# ---------------------------------------------------------------------------
+
+
+def test_zap_glob_removes_multiple_paths(cask_env: SimpleNamespace) -> None:
+    cask = parse_cask_source('cask "zappy" do\n  version "1.0"\nend\n')
+    root = cask_env.config.prefix / "zap"
+    nested = root / "nested"
+    nested.mkdir(parents=True)
+    first = root / "one.txt"
+    second = root / "two.txt"
+    third = nested / "three.log"
+    for path in (first, second, third):
+        path.write_text("zap me\n", encoding="utf-8")
+    cask.zap = [str(root / "*.txt"), str(nested / "*.log")]
+
+    removed = cask_env.installer.zap(cask)
+
+    assert set(removed) == {first, second, third}
+    assert not any(path.exists() for path in (first, second, third))
+
+
+def test_zap_without_matches_is_a_noop(cask_env: SimpleNamespace) -> None:
+    cask = parse_cask_source('cask "zappy" do\n  version "1.0"\nend\n')
+    cask.zap = [str(cask_env.config.prefix / "missing-*.txt")]
+
+    assert cask_env.installer.zap(cask) == []
+
+
+def test_zap_refuses_paths_outside_allowed_roots(
+    cask_env: SimpleNamespace,
+) -> None:
+    cask = parse_cask_source('cask "zappy" do\n  version "1.0"\nend\n')
+    outside = Path("/etc/hosts")
+    cask.zap = [str(outside)]
+
+    with pytest.raises(CaskError, match="outside allowed roots"):
+        cask_env.installer.zap(cask)
+    assert outside.exists()

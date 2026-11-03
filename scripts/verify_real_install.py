@@ -107,6 +107,9 @@ def main() -> int:
         assert opt.is_symlink(), f"missing opt link: {opt}"
         assert receipt["version"] == "1.0", receipt
         assert receipt["poured_from_bottle"] is False, receipt
+        assert receipt["build"]["from_bottle"] is False, receipt
+        assert receipt["sbom"]["file_count"] >= 1, receipt
+        assert any(item["path"] == "bin/hello.sh" for item in receipt["sbom"]["files"])
         run = subprocess.run([str(binary)], text=True, capture_output=True)
         assert run.stdout.strip() == "hello-from-pybrew", run
         print("installed:", keg)

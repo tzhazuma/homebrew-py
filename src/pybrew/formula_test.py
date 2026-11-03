@@ -53,6 +53,11 @@ MAX_TAP_FORMULA_INDEX = 20000
 #: lookups (e.g. ``Formula[dep_name]``) can resolve uninstalled formulae.
 MAX_EAGER_FORMULA_ENTRIES = 10000
 
+#: Maximum number of formula sources read when an alias is missing from the
+#: cheap ``Aliases`` symlink metadata.  Lookups of real formula names never
+#: trigger this scan, keeping the 10000-formula path lightweight.
+MAX_SOURCE_ALIAS_SCAN = 2000
+
 #: Bounded in-process caches (parsed formulae and tap indexes).
 FORMULA_CACHE_LIMIT = 256
 TAP_INDEX_CACHE_LIMIT = 8
@@ -144,6 +149,17 @@ class FormulaTestContext
   # predicate forms (Minitest's ``UNDEFINED``).
   UNDEFINED = Object.new.freeze
 
+  # PYBREW_* keys that are process/platform configuration rather than parent
+  # test state; dependency tests inherit these.
+  PYBREW_INHERITED_ENV = %w[
+    PYBREW_MACOS_VERSION
+    PYBREW_SDK_DIRS
+    PYBREW_SDK_PATH
+    PYBREW_SDK_VERSION
+    PYBREW_TEST_FIXTURES
+    PYBREW_XCRUN
+  ].freeze
+
   # Available on Ruby 2.7+ and defined by the runner on older Rubies.
   NO_MATCHING_PATTERN_ERROR = NoMatchingPatternError
 
@@ -185,7 +201,7 @@ class FormulaTestContext
     # Numeric/alphabetic tokens, e.g. "1.2.3-beta" => [1, 2, 3, "beta"].
     def segments
       @segments ||= to_s.scan(/\d+|[A-Za-z]+/).map do |part|
-        part =~ /\A\d+\z/ ? part.to_i : part
+        part =~ /\A\d+\z/ ? part.to_i : part.downcase
       end
     end
 
@@ -430,10 +446,21 @@ class FormulaTestContext
       previous_context = FormulaTestContext.current
       previous_dir = Dir.pwd
       saved_env = {}
+      hidden_env = {}
       dependency_testpath = nil
       begin
         dependency_testpath = @context.dependency_testpath(@name)
-        @context.dependency_test_environment(@info, dependency_testpath).each do |key, value|
+        dependency_env = @context.dependency_test_environment(@info, dependency_testpath)
+        # Parent tests may leave PYBREW_* markers behind; the dependency must
+        # not inherit them.  Framework keys are re-set explicitly below.
+        ENV.keys.each do |key|
+          next unless key.is_a?(String) && key.start_with?("PYBREW_")
+          next if dependency_env.key?(key)
+          next if FormulaTestContext::PYBREW_INHERITED_ENV.include?(key)
+          hidden_env[key] = ENV[key]
+          ENV.delete(key)
+        end
+        dependency_env.each do |key, value|
           saved_env[key] = ENV[key]
           ENV[key] = value.to_s
         end
@@ -446,6 +473,9 @@ class FormulaTestContext
           Dir.chdir(previous_dir)
         rescue StandardError
           # The original directory should still exist; keep going if it does not.
+        end
+        hidden_env.each do |key, value|
+          ENV[key] = value
         end
         saved_env.each do |key, value|
           value.nil? ? ENV.delete(key) : ENV[key] = value
@@ -621,6 +651,11 @@ class FormulaTestContext
       "PYBREW_PREFIX" => dependency_prefix,
       "PYBREW_FORMULA_PREFIX" => dependency_prefix,
       "PYBREW_TESTPATH" => testpath.to_s,
+      # HOMEBREW_PREFIX/HOMEBREW_CELLAR are process-global Ruby constants; only
+      # their environment copies can be pinned per dependency.  A test body
+      # that rebinds the constants still affects the whole process.
+      "HOMEBREW_PREFIX" => @homebrew_prefix.to_s,
+      "HOMEBREW_CELLAR" => @cellar.to_s,
       "PWD" => testpath.to_s,
       "TMPDIR" => testpath.to_s,
       "TEMP" => testpath.to_s,
@@ -733,14 +768,18 @@ class FormulaTestContext
   end
 
   def assert_match(pattern, string, message = nil)
-    regexp = pattern.is_a?(Regexp) ? pattern : Regexp.new(pattern.to_s)
+    assert_respond_to pattern, :=~
+    @assertions = assertions + 1
+    regexp = pattern.is_a?(Regexp) ? pattern : Regexp.new(Regexp.escape(pattern.to_s))
     return if regexp.match?(string.to_s)
 
     raise_failure("Expected #{string.inspect} to match #{pattern.inspect}", message)
   end
 
   def refute_match(pattern, string, message = nil)
-    regexp = pattern.is_a?(Regexp) ? pattern : Regexp.new(pattern.to_s)
+    assert_respond_to pattern, :=~
+    @assertions = assertions + 1
+    regexp = pattern.is_a?(Regexp) ? pattern : Regexp.new(Regexp.escape(pattern.to_s))
     return unless regexp.match?(string.to_s)
 
     raise_failure("Expected #{string.inspect} to not match #{pattern.inspect}", message)
@@ -771,12 +810,16 @@ class FormulaTestContext
   end
 
   def assert_includes(collection, object, message = nil)
+    assert_respond_to collection, :include?
+    @assertions = assertions + 1
     return if collection.include?(object)
 
     raise_failure("Expected #{collection.inspect} to include #{object.inspect}", message)
   end
 
   def refute_includes(collection, object, message = nil)
+    assert_respond_to collection, :include?
+    @assertions = assertions + 1
     return unless collection.include?(object)
 
     raise_failure("Expected #{collection.inspect} to not include #{object.inspect}", message)
@@ -793,6 +836,7 @@ class FormulaTestContext
       assert_stream("stderr", actual, err, message)
       return
     end
+    @assertions = assertions + 1
     return if expected == actual
 
     raise_failure("Expected output #{expected.inspect} to equal #{actual.inspect}", message)
@@ -870,22 +914,22 @@ class FormulaTestContext
     rescue SignalException, SystemExit
       raise
     rescue *exceptions => error
+      pass
       return error
     rescue Exception => error
+      @assertions = assertions + 1
       raise_failure(
         "Expected #{exceptions.inspect} to be raised, but #{error.class} was raised: " \
         "#{error.message}",
         message
       )
     end
+    @assertions = assertions + 1
     raise_failure("Expected #{exceptions.inspect} to be raised, but nothing was raised", message)
   end
 
   def assert_silent(message = nil)
-    out, err = capture_io { yield }
-    return if out.empty? && err.empty?
-
-    raise_failure("Expected silence, got stdout=#{out.inspect} stderr=#{err.inspect}", message)
+    assert_output("", "", message) { yield }
   end
 
   def assert_path_not_exists(path, message = nil)
@@ -1166,11 +1210,10 @@ class FormulaTestContext
   attr_writer :assertions
 
   ASSERTION_METHODS = %i[
-    assert refute assert_equal refute_equal assert_match refute_match
+    assert refute assert_equal refute_equal
     assert_predicate refute_predicate assert_empty refute_empty
-    assert_includes refute_includes assert_output refute_output
-    assert_not_equal assert_operator refute_operator assert_kind_of
-    assert_instance_of assert_respond_to assert_raises assert_silent
+    refute_output assert_not_equal assert_operator refute_operator assert_kind_of
+    assert_instance_of assert_respond_to
     assert_path_exists refute_path_exists assert_path_not_exists
     assert_directory refute_directory assert_file refute_file
     assert_symlink refute_symlink assert_executable refute_executable
@@ -1205,6 +1248,10 @@ class FormulaTestContext
 
   def assert_stream(stream, expected, actual, message)
     return if expected.nil?
+
+    @assertions = assertions + 1
+    # Minitest's assert_match also counts its internal assert_respond_to.
+    @assertions = assertions + 1 if expected.is_a?(Regexp)
     return if output_matches?(expected, actual)
 
     if expected.is_a?(Regexp)
@@ -1881,6 +1928,9 @@ class _TapIndex:
         self.by_qualified_name: dict[str, tuple[Tap, Path]] = {}
         self.by_alias: dict[str, tuple[Tap, Path]] = {}
         self.by_qualified_alias: dict[str, tuple[Tap, Path]] = {}
+        self.source_aliases: dict[str, tuple[Tap, Path]] = {}
+        self._source_alias_attempted = False
+        self.source_alias_budget_exhausted = False
 
     def add(self, tap: Tap, path: Path) -> None:
         name = path.stem
@@ -1908,6 +1958,35 @@ class _TapIndex:
                 if resolved is not None:
                     return resolved
         return None
+
+    def resolve_source_alias(self, name: str) -> Optional[tuple[Tap, Path]]:
+        """Resolve an alias declared in formula source (no Aliases symlink).
+
+        The scan is lazy (only when the cheap indexes miss), bounded by
+        :data:`MAX_SOURCE_ALIAS_SCAN`, and cached on the index.
+        """
+
+        alias = name.split("/")[-1]
+        if not self._source_alias_attempted:
+            self._scan_source_aliases()
+        return self.source_aliases.get(alias)
+
+    def _scan_source_aliases(self) -> None:
+        self._source_alias_attempted = True
+        pattern = re.compile(r"""^\s*alias\s+["']([^"']+)["']""", re.MULTILINE)
+        scanned = 0
+        for tap in self.taps:
+            for path in tap.formula_paths():
+                if scanned >= MAX_SOURCE_ALIAS_SCAN:
+                    self.source_alias_budget_exhausted = True
+                    return
+                scanned += 1
+                try:
+                    source = path.read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    continue
+                for alias_name in pattern.findall(source):
+                    self.source_aliases.setdefault(alias_name, (tap, path))
 
 
 def _tap_alias_entries(tap: Tap) -> list[tuple[str, Path]]:
@@ -2130,6 +2209,8 @@ def _formula_entries(
         seen.add(requested)
         resolved = index.resolve(requested)
         if resolved is None:
+            resolved = index.resolve_source_alias(requested)
+        if resolved is None:
             if required:
                 entries[requested] = _formula_entry(
                     requested,
@@ -2195,6 +2276,19 @@ def _formula_entries(
         if len(entries) >= MAX_FORMULA_ENTRIES:
             break
         alias_tap, alias_target = index.by_alias[alias_name]
+        canonical = alias_target.stem
+        entry = entries.get(canonical) or entries.get(f"{alias_tap.name}/{canonical}")
+        if entry is None:
+            continue
+        entries.setdefault(alias_name, entry)
+        entries.setdefault(f"{alias_tap.name}/{alias_name}", entry)
+
+    # Source-only aliases are only known when the lazy scan already ran; keep
+    # the normal (name) lookup path free of source parsing.
+    for alias_name in sorted(index.source_aliases):
+        if len(entries) >= MAX_FORMULA_ENTRIES:
+            break
+        alias_tap, alias_target = index.source_aliases[alias_name]
         canonical = alias_target.stem
         entry = entries.get(canonical) or entries.get(f"{alias_tap.name}/{canonical}")
         if entry is None:

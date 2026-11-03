@@ -927,3 +927,22 @@ def test_ruby_shim_exposes_cask_delegators_and_documents_no_sudo() -> None:
     # helper that could silently escalate.
     assert "sudo is not supported" in _CASK_SCRIPT_SHIM
     assert "def sudo" not in _CASK_SCRIPT_SHIM
+
+
+def test_ruby_shim_exposes_macos_release_names_and_version_helpers() -> None:
+    from pybrew.cask_installer import _CASK_SCRIPT_SHIM
+
+    for snippet in (
+        "RELEASE_NAMES",
+        "def release_version",
+        "def release_name",
+        "def pretty_name",
+        "def to_sym",
+        "outdated_release?",
+        "def self.language",
+        "def self.languages",
+        "def caskroom_path",
+        "def arch",
+        "def language",
+    ):
+        assert snippet in _CASK_SCRIPT_SHIM

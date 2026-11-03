@@ -773,3 +773,37 @@ def test_source_build_passes_selected_compiler_env_and_argv(
     assert cxx["argv"] == "--cxx-probe"
     assert cxx["CXX"] == str(fake_bin / "clang++")
     assert cxx["CXXFLAGS"] == f"-O3 -I{prefix / 'include'}"
+
+
+def test_opt_in_superenv_compiler_shims(tmp_path: Path) -> None:
+    import subprocess
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    fake_bin = tmp_path / "fake-bin"
+    cc = _fake_compiler(fake_bin, "clang", "cc-report.txt")
+    cxx = _fake_compiler(fake_bin, "clang++", "cxx-report.txt")
+    prepared = source_builder.build_environment(
+        config,
+        {
+            "PATH": str(fake_bin),
+            "PYBREW_SUPERENV": "1",
+            "PYBREW_CC": str(cc),
+            "PYBREW_CXX": str(cxx),
+        },
+    )
+    assert prepared.superenv is not None
+    env = prepared.env
+    assert env["SUPERENV"] == "1"
+    assert env["PATH"].startswith(f"{prepared.superenv.root}{os.pathsep}")
+    assert env["CC"] == str(prepared.superenv.root / "cc")
+    assert env["CXX"] == str(prepared.superenv.root / "c++")
+    assert env["HOMEBREW_CC"] == str(cc)
+    assert env["HOMEBREW_CXX"] == str(cxx)
+
+    subprocess.run([env["CC"], "-c", "hello.c"], env=env, cwd=tmp_path, check=True)
+    report = _compiler_report(tmp_path / "cc-report.txt")
+    assert "-isystem" in report["argv"]
+    assert str(config.prefix / "include") in report["argv"]
+    assert "-L" in report["argv"]
+    assert report["CC"] == env["CC"]

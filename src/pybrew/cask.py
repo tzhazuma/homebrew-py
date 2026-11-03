@@ -10,7 +10,7 @@ import plistlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from .errors import FormulaParseError, PybrewError
 from .models import is_linux, is_macos, macos_major_version
@@ -258,6 +258,39 @@ class Cask:
     @property
     def outdated(self) -> bool:
         return self.outdated_version() is not None
+
+    def check_livecheck(
+        self,
+        *,
+        fetcher: Optional[Callable[[str], Any]] = None,
+        page: Optional[str | bytes] = None,
+        timeout: Optional[float] = None,
+    ) -> dict[str, Any]:
+        """Bounded livecheck strategy check for CLI/caller use.
+
+        Delegates to :func:`pybrew.cask_ruby.execute_livecheck_strategy` (the
+        local import avoids a ``cask`` <-> ``cask_ruby`` cycle).  No network is
+        performed unless the caller injects a ``fetcher`` or passes ``page``
+        content; arbitrary Ruby still requires ``PYBREW_ALLOW_CASK_RUBY=1``.
+        """
+
+        from .cask_ruby import STRATEGY_TIMEOUT, execute_livecheck_strategy
+
+        return execute_livecheck_strategy(
+            self,
+            fetcher=fetcher,
+            page=page,
+            timeout=STRATEGY_TIMEOUT if timeout is None else timeout,
+        )
+
+    @property
+    def livecheck_result(self) -> Optional[dict[str, Any]]:
+        """Return the last stored livecheck strategy result, if any."""
+
+        if not isinstance(self.livecheck, dict):
+            return None
+        result = self.livecheck.get("strategy_result")
+        return result if isinstance(result, dict) else None
 
     def _app_candidates(self) -> list[Path]:
         prefix = Path(os.environ.get("HOMEBREW_PREFIX", "/usr/local"))

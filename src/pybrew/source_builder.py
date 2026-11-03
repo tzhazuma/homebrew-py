@@ -32,6 +32,7 @@ import os
 import platform
 import re
 import shutil
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -1102,11 +1103,21 @@ class CompilerSelection:
 
 
 @dataclass(frozen=True)
+class SuperenvShims:
+    """Generated opt-in compiler shims (a bounded Superenv compatibility layer)."""
+
+    root: Path
+    cc: Path
+    cxx: Path
+
+
+@dataclass(frozen=True)
 class BuildEnvironment:
     """A fully prepared source-build environment plus its compiler choice."""
 
     env: dict[str, str]
     compiler: CompilerSelection
+    superenv: Optional[SuperenvShims] = None
 
 
 def _first_environment_value(
@@ -1210,6 +1221,62 @@ def _merge_flags(existing: str, additions: Iterable[str]) -> str:
     return result
 
 
+def install_superenv_shims(
+    config: Config, environment: Mapping[str, str]
+) -> tuple[dict[str, str], SuperenvShims]:
+    """Install opt-in compiler shims and prepend them to ``PATH``.
+
+    This is deliberately opt-in via ``PYBREW_SUPERENV=1``.  The shims are thin
+    wrappers around the selected real compilers that add the keg include/lib
+    paths; they do not claim to implement Homebrew's full flag-sanitizing
+    Superenv.  The generated scripts are stable on disk so parallel builds can
+    reuse them.
+    """
+
+    env = dict(environment)
+    prefix = config.prefix
+    include = str(prefix / "include")
+    lib = str(prefix / "lib")
+    root = prefix / "var" / "pybrew" / "superenv" / "shims"
+    root.mkdir(parents=True, exist_ok=True)
+
+    def real_driver(names: Iterable[str], fallback: str) -> str:
+        for name in names:
+            found = _which_in(env, name)
+            if found:
+                return found
+        resolved = shutil.which(fallback)
+        return resolved or f"/usr/bin/{fallback}"
+
+    cc = _first_environment_value(env, ("CC", "PYBREW_CC")) or real_driver(
+        ("clang", "gcc", "cc"), "cc"
+    )
+    cxx = _first_environment_value(env, ("CXX", "PYBREW_CXX")) or real_driver(
+        ("clang++", "g++", "c++"), "c++"
+    )
+
+    def write_shim(path: Path, driver: str) -> None:
+        script = (
+            "#!/bin/sh\n"
+            f"exec {shlex.quote(driver)} -isystem {shlex.quote(include)} "
+            f"-L {shlex.quote(lib)} \"$@\"\n"
+        )
+        path.write_text(script, encoding="utf-8")
+        path.chmod(0o755)
+
+    cc_path = root / "cc"
+    cxx_path = root / "c++"
+    write_shim(cc_path, cc)
+    write_shim(cxx_path, cxx)
+    env["PATH"] = os.pathsep.join([str(root), env.get("PATH", os.defpath)])
+    env["CC"] = str(cc_path)
+    env["CXX"] = str(cxx_path)
+    env["HOMEBREW_CC"] = cc
+    env["HOMEBREW_CXX"] = cxx
+    env["SUPERENV"] = "1"
+    return env, SuperenvShims(root=root, cc=cc_path, cxx=cxx_path)
+
+
 def build_environment(
     config: Config,
     base_env: Optional[Mapping[str, str]] = None,
@@ -1248,6 +1315,9 @@ def build_environment(
         env["CC"] = compiler.cc
     if compiler.cxx is not None:
         env["CXX"] = compiler.cxx
+    if env.get("PYBREW_SUPERENV") == "1":
+        env, shims = install_superenv_shims(config, env)
+        return BuildEnvironment(env=env, compiler=compiler, superenv=shims)
     return BuildEnvironment(env=env, compiler=compiler)
 
 

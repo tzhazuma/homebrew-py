@@ -1502,7 +1502,10 @@ class CaskInstaller:
                 source = self._find(source_root, artifact.source)
                 if source is None:
                     raise CaskError(f"{cask.token}: app {artifact.source!r} not found in archive")
-                destination = appdir / (artifact.target or source.name)
+                relative = _safe_artifact_target(
+                    artifact.target, source.name, cask.token
+                )
+                destination = appdir / relative
                 if destination.exists():
                     if not force:
                         raise CaskError(f"{cask.token}: {destination} already exists")
@@ -1530,7 +1533,10 @@ class CaskInstaller:
                                 f"{cask.token}: binary {artifact.source!r} not found"
                             )
                         source_path = found
-                target = self.config.bin / (artifact.target or source_path.name)
+                relative = _safe_artifact_target(
+                    artifact.target, source_path.name, cask.token
+                )
+                target = self.config.bin / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 if target.exists() or target.is_symlink():
                     if not force:
@@ -1547,7 +1553,10 @@ class CaskInstaller:
                     raise CaskError(
                         f"{cask.token}: appimage {artifact.source!r} not found in archive"
                     )
-                destination = appdir / (artifact.target or source.name)
+                relative = _safe_artifact_target(
+                    artifact.target, source.name, cask.token
+                )
+                destination = appdir / relative
                 if destination.exists() or destination.is_symlink():
                     if not force:
                         raise CaskError(f"{cask.token}: {destination} already exists")

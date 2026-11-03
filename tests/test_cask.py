@@ -2503,3 +2503,106 @@ end
         installer.install(
             CaskLoader(discover_taps([tap])).load("past-disable")
         )
+
+
+def test_deprecate_and_disable_invalid_dates_are_immediate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fixed_cask_today(monkeypatch)
+
+    deprecated = parse_cask_source(
+        'cask "bad-date" do\n'
+        '  version "1.0"\n'
+        '  deprecate! date: "not-a-date", because: "still old"\n'
+        'end\n'
+    )
+    # Invalid dates fall back to pybrew's historical immediate behavior.
+    assert deprecated.deprecated is True
+    assert deprecated.deprecation_date == "not-a-date"
+
+    disabled = parse_cask_source(
+        'cask "bad-disable" do\n'
+        '  version "1.0"\n'
+        '  disable! date: "2025-13-40", because: "still broken"\n'
+        'end\n'
+    )
+    assert disabled.disabled is True
+
+
+def test_deprecate_and_disable_date_ordering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fixed_cask_today(monkeypatch)
+
+    # Future deprecation + already-effective disable.
+    mixed = parse_cask_source(
+        'cask "mixed" do\n'
+        '  version "1.0"\n'
+        '  deprecate! date: "2025-01-01", because: "later"\n'
+        '  disable! date: "2024-01-01", because: "broken"\n'
+        'end\n'
+    )
+    assert mixed.deprecated is False
+    assert mixed.disabled is True
+
+    # Effective deprecation + future disable promotes to deprecation.
+    promoted = parse_cask_source(
+        'cask "promoted" do\n'
+        '  version "1.0"\n'
+        '  deprecate! date: "2024-01-01", because: "old"\n'
+        '  disable! date: "2025-01-01", because: "broken"\n'
+        'end\n'
+    )
+    assert promoted.deprecated is True
+    assert promoted.disabled is False
+    assert promoted.deprecation_reason == "broken"
+
+
+def test_lifecycle_date_equal_to_today_is_active(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fixed_cask_today(monkeypatch, "2024-06-01")
+
+    deprecated = parse_cask_source(
+        'cask "today" do\n'
+        '  version "1.0"\n'
+        '  deprecate! date: "2024-06-01", because: "today"\n'
+        'end\n'
+    )
+    assert deprecated.deprecated is True
+
+    disabled = parse_cask_source(
+        'cask "today-disable" do\n'
+        '  version "1.0"\n'
+        '  disable! date: "2024-06-01", because: "today"\n'
+        'end\n'
+    )
+    assert disabled.disabled is True
+
+
+def test_cask_check_livecheck_default_parser_without_strategy() -> None:
+    cask = parse_cask_source(
+        'cask "plain-livecheck" do\n'
+        '  version "1.0"\n'
+        '  livecheck do\n'
+        '    regex(/tiny/)\n'
+        '  end\n'
+        'end\n'
+    )
+
+    result = cask.check_livecheck(page="anything")
+
+    assert result["executed"] is False
+    assert "no livecheck strategy block" in (result["reason"] or "")
+    assert cask.livecheck_result is None
+
+
+def test_cask_livecheck_result_property() -> None:
+    from pybrew.cask import Cask
+
+    payload = {"executed": True, "result": ["1.0"], "error": None}
+    cask = Cask(token="result", livecheck={"strategy_result": payload})
+    assert cask.livecheck_result == payload
+
+    bare = Cask(token="bare")
+    assert bare.livecheck_result is None

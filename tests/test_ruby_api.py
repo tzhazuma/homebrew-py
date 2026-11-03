@@ -6460,3 +6460,211 @@ def test_keg_ignore_interrupts_uninstall_and_noop_helpers(
         "false",
         "false",
     ]
+
+
+def test_sandbox_policy_surface_presence_and_explicit_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-sandbox-policy",
+        "1.0",
+        (
+            '  names = %w[add_rule allow_read allow_read_if_exists allow_write\n'
+            '             allow_write_path deny_all_network deny_read deny_write apply!\n'
+            '             capture cleanup_sandbox copy_pty_output protect_homebrew_state\n'
+            '             record_log executable! ensure_sandbox_available!\n'
+            '             executable_candidate_paths executable_name executable_usable?\n'
+            '             apply_before_exec? sandbox_command sandbox_environment\n'
+            '             run_command ruby_command for_operation operation\n'
+            '             isolate_operation? tty_state terminal_ioctl_request\n'
+            '             ensure_child_tty_available home_write_paths path_filter\n'
+            '             expand_realpath]\n'
+            '  presence = names.all? { |name| Sandbox.respond_to?(name.to_sym) }\n'
+            '  errors = []\n'
+            '  %w[allow_read apply! capture cleanup_sandbox protect_homebrew_state record_log].each do |name|\n'
+            '    begin\n'
+            '      Sandbox.public_send(name, "/tmp")\n'
+            '      errors << "none"\n'
+            '    rescue NotImplementedError => error\n'
+            '      errors << error.class.name\n'
+            '    end\n'
+            '  end\n'
+            '  ensure_error = begin\n'
+            '    Sandbox.ensure_sandbox_available!\n'
+            '    "none"\n'
+            '  rescue NotImplementedError => error\n'
+            '    error.class.name\n'
+            '  end\n'
+            '  (prefix/"sandbox-policy.txt").write [\n'
+            '    presence.to_s,\n'
+            '    Sandbox.apply_before_exec?.to_s,\n'
+            '    Sandbox.isolate_operation?.to_s,\n'
+            '    Sandbox.executable_candidate_paths.empty?.to_s,\n'
+            '    Sandbox.home_write_paths.empty?.to_s,\n'
+            '    Sandbox.path_filter.nil?.to_s,\n'
+            '    Sandbox.for_operation { "ran" },\n'
+            '    Sandbox.sandbox_command("echo", "x").join(","),\n'
+            '    Sandbox.ruby_command("--version").join(","),\n'
+            '    Sandbox.run_command("echo", "x").inspect,\n'
+            '    errors.join(","),\n'
+            '    ensure_error\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "sandbox-policy.txt").read_text().splitlines() == [
+        "true",
+        "false",
+        "false",
+        "true",
+        "true",
+        "true",
+        "ran",
+        "echo,x",
+        "ruby,--version",
+        "nil",
+        "NotImplementedError,NotImplementedError,NotImplementedError,"
+        "NotImplementedError,NotImplementedError,NotImplementedError",
+        "NotImplementedError",
+    ]
+
+
+def test_utils_github_extended_reads_and_write_guards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    fake_curl = tmp_path / "fake-curl-ext"
+    fake_curl.write_text(
+        "#!/bin/sh\n"
+        'url=""\n'
+        'for arg in "$@"; do\n'
+        '  case "$arg" in http*) url="$arg" ;; esac\n'
+        'done\n'
+        'case "$url" in\n'
+        "  */repos/homebrew/foo/pulls/7/commits*) printf '%s' '[{\"sha\":\"abc\"}]' ;;\n"
+        "  */repos/homebrew/foo/pulls/7/labels*) printf '%s' '[{\"name\":\"bump\"}]' ;;\n"
+        "  */repos/homebrew/foo/pulls/7/files*) printf '%s' '[{\"filename\":\"Formula/foo.rb\"}]' ;;\n"
+        "  */repos/homebrew/foo/pulls/7/reviews*) printf '%s' "
+        "'[{\"state\":\"APPROVED\",\"commit_id\":\"abc\",\"author_association\":\"MEMBER\",\"user\":{\"login\":\"rev\"}}]' ;;\n"
+        "  */repos/homebrew/foo/commits/abc*) printf '%s' '{\"sha\":\"abc\"}' ;;\n"
+        "  */repos/homebrew/bar*) printf '%s' '{\"full_name\":\"homebrew/bar\"}' ;;\n"
+        "  */repos/homebrew/nothing*) printf '%s' '{\"message\":\"Not Found\"}' ;;\n"
+        "  */orgs/homebrew/teams/core/members*) printf '%s' '[{\"login\":\"alice\"}]' ;;\n"
+        "  */orgs/homebrew/repos*) printf '%s' '[{\"name\":\"foo\"}]' ;;\n"
+        "  */users/alice/sponsors/tiers*) printf '%s' '[{\"monthly_price_in_cents\":500}]' ;;\n"
+        "  */users/alice/sponsors*) printf '%s' '[{\"login\":\"sponsor\"}]' ;;\n"
+        "  */search/issues*) printf '%s' "
+        "'{\"total_count\":1,\"items\":[{\"number\":9,\"title\":\"foo: update\",\"html_url\":\"https://github.com/homebrew/foo/pull/9\",\"state\":\"open\"}]}' ;;\n"
+        "  */search/repositories*) printf '%s' '{\"total_count\":2,\"items\":[]}' ;;\n"
+        "  */user*) printf '%s' '{\"login\":\"tester\"}' ;;\n"
+        "  *) printf '%s' '{}' ;;\n"
+        'esac\n'
+    )
+    fake_curl.chmod(0o755)
+    formula = _formula(
+        "ruby-github-ext",
+        "1.0",
+        (
+            '  ENV["PYBREW_GITHUB_CURL"] = "' + str(fake_curl) + '"\n'
+            '  prs = Utils::GitHub.fetch_pull_requests("foo", "homebrew/foo", state: "open")\n'
+            '  open_prs = Utils::GitHub.fetch_open_pull_requests("foo", "homebrew/foo")\n'
+            '  commits = Utils::GitHub.pull_request_commits("homebrew", "foo", 7)\n'
+            '  labels = Utils::GitHub.pull_request_labels("homebrew", "foo", 7)\n'
+            '  files = Utils::GitHub.pull_request_changed_files("homebrew/foo", 7)\n'
+            '  reviews = Utils::GitHub.repository_approved_reviews("homebrew", "foo", 7)\n'
+            '  members = Utils::GitHub.members_by_team("homebrew", "core")\n'
+            '  org_repos = Utils::GitHub.organisation_repositories("homebrew")\n'
+            '  sponsors = Utils::GitHub.sponsorships("alice")\n'
+            '  tiers = Utils::GitHub.sponsorship_tiers("alice")\n'
+            '  fork_true = Utils::GitHub.fork_exists?("homebrew/bar", org: "homebrew")\n'
+            '  fork_false = Utils::GitHub.fork_exists?("homebrew/nothing", org: "homebrew")\n'
+            '  regex = Utils::GitHub.pull_request_title_regex("foo", "1.2.3")\n'
+            '  dupes = Utils::GitHub.check_for_duplicate_pull_requests("foo", "homebrew/foo")\n'
+            '  repo_search = Utils::GitHub.search("repositories", "foo bar")\n'
+            '  short_commits = Utils::GitHub.multiple_short_commits_exist?("homebrew", "foo", "abc")\n'
+            '  too_many = Utils::GitHub.too_many_open_prs?("homebrew/foo")\n'
+            '  printed = Utils::GitHub.print_pull_requests_matching("foo")\n'
+            '  write_errors = []\n'
+            '  %w[create_fork upload_release_asset workflow_dispatch_event].each do |name|\n'
+            '    begin\n'
+            '      Utils::GitHub.public_send(name, "homebrew/foo")\n'
+            '      write_errors << "none"\n'
+            '    rescue NotImplementedError => error\n'
+            '      write_errors << error.class.name\n'
+            '    end\n'
+            '  end\n'
+            '  (prefix/"github-ext.txt").write [\n'
+            '    prs.size.to_s, open_prs.first["number"].to_s, commits.first["sha"],\n'
+            '    labels.first["name"], files.first["filename"], reviews.first["login"],\n'
+            '    members.first["login"], org_repos.first["name"], sponsors.first["login"],\n'
+            '    tiers.first["monthly_price_in_cents"].to_s, fork_true.to_s, fork_false.to_s,\n'
+            '    regex.match?("foo: update 1.2.3").to_s, dupes.size.to_s,\n'
+            '    repo_search["total_count"].to_s, short_commits.to_s, too_many.to_s,\n'
+            '    printed.size.to_s, write_errors.join(",")\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "github-ext.txt").read_text().splitlines() == [
+        "1",
+        "9",
+        "abc",
+        "bump",
+        "Formula/foo.rb",
+        "rev",
+        "alice",
+        "foo",
+        "sponsor",
+        "500",
+        "true",
+        "false",
+        "true",
+        "1",
+        "2",
+        "true",
+        "true",
+        "1",
+        "NotImplementedError,NotImplementedError,NotImplementedError",
+    ]
+
+
+def test_formulary_struct_json_hash_and_malformed_edge(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-json-struct",
+        "1.0",
+        (
+            '  json_struct = JSON.parse(%q({"name":"json-fixture",\n'
+            '    "full_name":"homebrew/core/json-fixture","desc":"json desc",\n'
+            '    "homepage":"https://json.example","version":"9.9",\n'
+            '    "license":{"default":"MIT"},"dependencies":{"dep":"build"}}))\n'
+            '  klass = Formulary.load_formula_from_struct!("json-fixture", json_struct)\n'
+            '  instance = klass.new\n'
+            '  defined_full = Formulary.formula_class_defined_from_api?("homebrew/core/json-fixture").to_s\n'
+            '  begin\n'
+            '    Formulary.load_formula_from_struct!("bad-json", {"desc" => "no version"})\n'
+            '    bad_error = "none"\n'
+            '  rescue => error\n'
+            '    bad_error = error.class.name + ":" + error.message.include?("malformed").to_s\n'
+            '  end\n'
+            '  (prefix/"json-struct.txt").write [\n'
+            '    klass.loaded_desc, klass.loaded_version, klass.loaded_license,\n'
+            '    instance.dependencies.map(&:name).join(","),\n'
+            '    instance.dependencies.first.build?.to_s,\n'
+            '    defined_full, bad_error\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "json-struct.txt").read_text().splitlines() == [
+        "json desc",
+        "9.9",
+        "MIT",
+        "dep",
+        "true",
+        "true",
+        "PybrewFormulaUnavailableError:true",
+    ]

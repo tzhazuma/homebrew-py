@@ -18,12 +18,24 @@ from pathlib import Path
 
 import pytest
 
-from pybrew.cellar import read_receipt, write_receipt
-from pybrew.errors import BottleError, ChecksumMismatch, DependencyError
+from pybrew.cellar import (
+    Cellar,
+    Linker,
+    read_receipt,
+    receipt_path,
+    write_receipt,
+)
+from pybrew.errors import (
+    BottleError,
+    ChecksumMismatch,
+    DependencyError,
+    PybrewError,
+)
 from pybrew.installer import (
     InstallOptions,
     Installer,
     LinkageError,
+    build_keg_sbom,
     check_linkage,
     read_bottle_manifest,
 )
@@ -330,16 +342,23 @@ def _make_bottle(
     *,
     files: dict[str, bytes] | None = None,
     symlinks: dict[str, str] | None = None,
+    hardlinks: dict[str, str] | None = None,
     receipt: dict[str, object] | None = None,
 ) -> Path:
     files = dict(files or {})
     symlinks = dict(symlinks or {})
+    hardlinks = dict(hardlinks or {})
     if receipt is not None:
         files["INSTALL_RECEIPT.json"] = json.dumps(receipt).encode("utf-8")
     top = f"{name}/{version}"
     directories: set[str] = {top}
-    for relative in list(files) + list(symlinks):
+    for relative in list(files) + list(symlinks) + list(hardlinks):
         parent = Path(relative).parent
+        while str(parent) not in ("", "."):
+            directories.add(f"{top}/{parent}")
+            parent = parent.parent
+    for target in hardlinks.values():
+        parent = Path(target).parent
         while str(parent) not in ("", "."):
             directories.add(f"{top}/{parent}")
             parent = parent.parent
@@ -347,6 +366,16 @@ def _make_bottle(
     with tarfile.open(path, "w:gz") as tar:
         for directory in sorted(directories):
             _add_member(tar, directory, mode=0o755, kind=tarfile.DIRTYPE)
+        # Hard links are intentionally written before their targets so tests
+        # exercise deferred extraction rather than archive-order luck.
+        for relative, target in sorted(hardlinks.items()):
+            _add_member(
+                tar,
+                f"{top}/{relative}",
+                mode=0o644,
+                kind=tarfile.LNKTYPE,
+                target=f"{top}/{target}",
+            )
         for relative, data in sorted(files.items()):
             _add_member(tar, f"{top}/{relative}", data)
         for relative, target in sorted(symlinks.items()):
@@ -367,6 +396,8 @@ def _formula_with_local_bottle(
     *,
     files: dict[str, bytes],
     symlinks: dict[str, str] | None = None,
+    hardlinks: dict[str, str] | None = None,
+    receipt: dict[str, object] | None = None,
 ) -> tuple[Formula, Path]:
     tag = candidate_bottle_tags()[0]
     bottle = _make_bottle(
@@ -375,6 +406,8 @@ def _formula_with_local_bottle(
         version,
         files=files,
         symlinks=symlinks,
+        hardlinks=hardlinks,
+        receipt=receipt,
     )
     formula = Formula(name=name, version=version)
     formula.bottle = BottleSpec(
@@ -639,6 +672,9 @@ def test_write_receipt_keeps_old_shape_without_bottle_manifest(
     write_receipt(keg, formula, poured_from_bottle=False)
     receipt = read_receipt(keg)
     assert "bottle_manifest" not in receipt
+    assert "sbom" not in receipt
+    assert "build" not in receipt
+    assert receipt["source"] == {"path": None, "tap": None}
     assert receipt["version"] == "1.0"
     assert receipt["poured_from_bottle"] is False
 
@@ -834,3 +870,384 @@ def test_resolve_reports_missing_dependency(tmp_path: Path) -> None:
     )
     with pytest.raises(DependencyError, match="not available"):
         installer.resolve(formula)
+
+
+# -- manifest edge cases -------------------------------------------------
+def test_manifest_records_hardlinks_and_missing_receipt(tmp_path: Path) -> None:
+    bottle = _make_bottle(
+        tmp_path / "hardlink.bottle.tar.gz",
+        "hardlink",
+        "1.0",
+        files={"bin/tool": b"tool payload"},
+        hardlinks={"bin/tool-link": "bin/tool"},
+    )
+    manifest = read_bottle_manifest(bottle)
+    top = "hardlink/1.0"
+    assert manifest.receipt is None
+    assert manifest.hardlinks == {
+        f"{top}/bin/tool-link": f"{top}/bin/tool"
+    }
+    assert manifest.hardlink_count == 1
+    summary = manifest.summary()
+    assert summary["hardlink_count"] == 1
+    assert summary["receipt"] is None
+
+
+def test_install_extracts_deferred_hardlink_without_receipt(
+    tmp_path: Path,
+) -> None:
+    formula, bottle = _formula_with_local_bottle(
+        tmp_path,
+        "hardlink-install",
+        "1.0",
+        files={"bin/tool": b"tool payload"},
+        hardlinks={"bin/tool-link": "bin/tool"},
+    )
+    installer = _direct_installer(tmp_path)
+    result = installer.install(
+        formula,
+        InstallOptions(ignore_dependencies=True, bottle_file=bottle),
+    )[-1]
+
+    assert (result.keg / "bin" / "tool").read_bytes() == b"tool payload"
+    assert (result.keg / "bin" / "tool-link").read_bytes() == b"tool payload"
+    receipt = read_receipt(result.keg)
+    assert receipt["bottle_manifest"]["receipt"] is None
+    assert receipt["bottle_manifest"]["hardlink_count"] == 1
+    paths = {item["path"] for item in receipt["sbom"]["files"]}
+    assert {"bin/tool", "bin/tool-link"} <= paths
+
+
+def test_manifest_and_install_preserve_relative_symlink_targets(
+    tmp_path: Path,
+) -> None:
+    formula, bottle = _formula_with_local_bottle(
+        tmp_path,
+        "symlink-install",
+        "1.0",
+        files={"share/data.txt": b"data", "bin/tool": b"tool"},
+        symlinks={
+            "bin/data-link": "../share/data.txt",
+            "lib/libfoo.dylib": "libfoo.1.dylib",
+        },
+    )
+    manifest = read_bottle_manifest(bottle)
+    top = "symlink-install/1.0"
+    assert manifest.symlinks[f"{top}/bin/data-link"] == "../share/data.txt"
+    assert manifest.symlinks[f"{top}/lib/libfoo.dylib"] == "libfoo.1.dylib"
+
+    installer = _direct_installer(tmp_path)
+    result = installer.install(
+        formula,
+        InstallOptions(ignore_dependencies=True, bottle_file=bottle),
+    )[-1]
+    assert os.readlink(result.keg / "bin" / "data-link") == "../share/data.txt"
+    assert (result.keg / "bin" / "data-link").read_text() == "data"
+    symlinks = {
+        item["path"]: item["target"]
+        for item in read_receipt(result.keg)["sbom"]["symlinks"]
+    }
+    assert symlinks["bin/data-link"] == "../share/data.txt"
+
+
+# -- receipt source/build/SBOM metadata ----------------------------------
+def test_receipt_has_source_build_metadata_and_sbom_for_bottle(
+    sample,
+) -> None:
+    config = Config.default(
+        prefix=sample.prefix, taps=[sample.tap], cache=sample.cache
+    )
+    config.ensure()
+    loader = FormulaLoader(discover_taps([sample.tap]))
+    formula = loader.load("hello")
+    installer = Installer(config, loader)
+    result = installer.install(
+        formula,
+        InstallOptions(ignore_dependencies=True, bottle_file=sample.bottle),
+    )[-1]
+    receipt = read_receipt(result.keg)
+
+    for old_key in (
+        "homebrew_version",
+        "source",
+        "version",
+        "runtime_dependencies",
+        "installed_as_dependency",
+        "poured_from_bottle",
+        "built_as_bottle",
+        "installed_on_request",
+        "bottle_manifest",
+    ):
+        assert old_key in receipt
+
+    source = receipt["source"]
+    assert source["path"] == str(sample.formula)
+    assert source["tap"] == formula.tap
+    assert source["url"] == formula.stable.url
+    assert source["sha256"] == formula.stable.sha256
+    assert source["spec"] == "stable"
+
+    build = receipt["build"]
+    assert build["from_bottle"] is True
+    assert build["build_from_source"] is False
+    assert build["bottle_tag"] == sample.tag
+    assert build["spec"] == "stable"
+    assert build["options"]["ignore_dependencies"] is True
+    assert "built_on" in build and "os" in build["built_on"]
+
+    sbom = receipt["sbom"]
+    assert sbom["schema"] == "pybrew-keg-sbom-1"
+    assert sbom["algorithm"] == "sha256"
+    assert sbom["file_count"] == len(sbom["files"])
+    assert sbom["symlink_count"] == len(sbom["symlinks"])
+    files = {item["path"]: item for item in sbom["files"]}
+    hello = files["bin/hello"]
+    assert hello["size"] == (result.keg / "bin" / "hello").stat().st_size
+    assert hello["sha256"] == hashlib.sha256(
+        (result.keg / "bin" / "hello").read_bytes()
+    ).hexdigest()
+    assert "INSTALL_RECEIPT.json" not in files
+    symlinks = {item["path"]: item["target"] for item in sbom["symlinks"]}
+    assert symlinks["lib/libhello.1.dylib"] == "libhello.dylib"
+
+
+def test_receipt_has_source_build_metadata_and_sbom_for_source(
+    tmp_path: Path,
+) -> None:
+    project = _project(tmp_path, "metadata-source")
+    (project / "PAYLOAD").write_text("source payload\n", encoding="utf-8")
+    tap = _make_tap(
+        tmp_path,
+        "metadata-source",
+        "1.0",
+        project,
+        '    bin.install "PAYLOAD"',
+    )
+    config, result = _install(tmp_path, tap, "metadata-source")
+    receipt = read_receipt(result.keg)
+
+    assert receipt["poured_from_bottle"] is False
+    assert receipt["source"]["spec"] == "stable"
+    assert receipt["source"]["url"].startswith("file:")
+    assert receipt["source"]["sha256"]
+    assert receipt["build"]["from_bottle"] is False
+    assert receipt["build"]["build_from_source"] is True
+    assert receipt["build"]["bottle_tag"] is None
+    sbom = receipt["sbom"]
+    files = {item["path"]: item for item in sbom["files"]}
+    payload = files["bin/PAYLOAD"]
+    assert payload["sha256"] == hashlib.sha256(b"source payload\n").hexdigest()
+    assert "INSTALL_RECEIPT.json" not in files
+
+
+def test_write_receipt_merges_optional_sbom_and_metadata(tmp_path: Path) -> None:
+    keg = tmp_path / "keg"
+    keg.mkdir()
+    formula = Formula(name="metadata-fixture", version="1.0")
+    write_receipt(
+        keg,
+        formula,
+        poured_from_bottle=False,
+        source_metadata={
+            "url": "https://example.com/source.tar.gz",
+            "sha256": "a" * 64,
+            "spec": "stable",
+        },
+        build_metadata={"from_bottle": False, "spec": "stable"},
+        sbom={"schema": "test-sbom", "file_count": 1},
+    )
+    receipt = read_receipt(keg)
+    assert receipt["source"]["path"] is None
+    assert receipt["source"]["tap"] is None
+    assert receipt["source"]["url"] == "https://example.com/source.tar.gz"
+    assert receipt["source"]["sha256"] == "a" * 64
+    assert receipt["build"]["from_bottle"] is False
+    assert receipt["sbom"]["schema"] == "test-sbom"
+
+
+# -- formula-level linkage diagnostics -----------------------------------
+def test_post_install_refreshes_receipt_sbom(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    formula, bottle = _formula_with_local_bottle(
+        tmp_path,
+        "post-sbom",
+        "1.0",
+        files={"bin/tool": b"tool"},
+    )
+    installer = _direct_installer(tmp_path)
+
+    def fake_post_install(_formula, _config, keg=None) -> None:
+        assert keg is not None
+        (keg / "post-marker").write_text("post", encoding="utf-8")
+
+    monkeypatch.setattr("pybrew.installer.has_post_install", lambda _formula: True)
+    monkeypatch.setattr("pybrew.installer.run_post_install", fake_post_install)
+    result = installer.install(
+        formula,
+        InstallOptions(ignore_dependencies=True, bottle_file=bottle),
+    )[-1]
+    receipt = read_receipt(result.keg)
+    assert receipt["post_install_ran"] is True
+    paths = {item["path"] for item in receipt["sbom"]["files"]}
+    assert "post-marker" in paths
+
+
+def test_formula_linkage_report_after_install(tmp_path: Path) -> None:
+    formula, bottle = _formula_with_local_bottle(
+        tmp_path,
+        "linkage-report",
+        "1.0",
+        files={"bin/tool": _synthetic_elf("libmissing.so")},
+    )
+    installer = _direct_installer(tmp_path)
+    installer.install(
+        formula,
+        InstallOptions(ignore_dependencies=True, bottle_file=bottle),
+    )
+
+    report = installer.linkage_report("linkage-report")
+    assert report.checked == 1
+    assert [issue.reference for issue in report.issues] == ["libmissing.so"]
+    diagnostic = installer.linkage_diagnostic(formula)
+    assert "dangling" in diagnostic
+    assert "bin/tool" in diagnostic
+    assert "libmissing.so" in diagnostic
+
+
+def test_formula_linkage_report_clean_keg(tmp_path: Path) -> None:
+    formula, bottle = _formula_with_local_bottle(
+        tmp_path,
+        "linkage-clean",
+        "1.0",
+        files={
+            "bin/tool": _synthetic_elf("libpresent.so"),
+            "lib/libpresent.so": b"library",
+        },
+    )
+    installer = _direct_installer(tmp_path)
+    installer.install(
+        formula,
+        InstallOptions(ignore_dependencies=True, bottle_file=bottle),
+    )
+    report = installer.linkage_report("linkage-clean")
+    assert report.checked == 1
+    assert report.issues == []
+    assert installer.linkage_diagnostic("linkage-clean") == "linkage OK"
+
+
+def test_formula_linkage_report_missing_install(tmp_path: Path) -> None:
+    installer = _direct_installer(tmp_path)
+    with pytest.raises(PybrewError, match="not installed"):
+        installer.linkage_report("not-installed")
+
+
+# -- uninstall / relink / upgrade cleanup --------------------------------
+def test_uninstall_removes_receipt_sbom_and_links(sample) -> None:
+    config = Config.default(
+        prefix=sample.prefix, taps=[sample.tap], cache=sample.cache
+    )
+    config.ensure()
+    loader = FormulaLoader(discover_taps([sample.tap]))
+    installer = Installer(config, loader)
+    result = installer.install(
+        loader.load("hello"),
+        InstallOptions(ignore_dependencies=True, bottle_file=sample.bottle),
+    )[-1]
+    keg = result.keg
+    assert receipt_path(keg).is_file()
+    assert read_receipt(keg)["sbom"]["file_count"] >= 1
+    assert (config.prefix / "bin" / "hello").is_symlink()
+
+    removed = installer.uninstall("hello")
+    assert removed == [keg]
+    assert not keg.exists()
+    assert not receipt_path(keg).exists()
+    assert not (config.cellar / "hello").exists()
+    assert not os.path.lexists(config.prefix / "bin" / "hello")
+    assert not os.path.lexists(config.opt_path("hello"))
+
+
+def test_relink_removes_stale_links_from_previous_keg(tmp_path: Path) -> None:
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    old_keg = config.keg_path("relink-fixture", "1.0")
+    (old_keg / "bin").mkdir(parents=True)
+    (old_keg / "bin" / "old-tool").write_text("old", encoding="utf-8")
+    new_keg = config.keg_path("relink-fixture", "2.0")
+    (new_keg / "bin").mkdir(parents=True)
+    (new_keg / "bin" / "new-tool").write_text("new", encoding="utf-8")
+
+    linker = Linker(config)
+    linker.link(Formula(name="relink-fixture", version="1.0"), old_keg)
+    assert (config.prefix / "bin" / "old-tool").is_symlink()
+
+    result = linker.link(
+        Formula(name="relink-fixture", version="2.0"), new_keg, overwrite=True
+    )
+    assert not os.path.lexists(config.prefix / "bin" / "old-tool")
+    assert (config.prefix / "bin" / "new-tool").is_symlink()
+    assert any(path.name == "old-tool" for path in result.removed)
+    assert config.opt_path("relink-fixture").resolve() == new_keg.resolve()
+
+
+def test_upgrade_removes_old_receipt_and_stale_links(tmp_path: Path) -> None:
+    from pybrew.maintenance import upgrade_formula
+
+    formula, _bottle = _formula_with_local_bottle(
+        tmp_path,
+        "upgrade-fixture",
+        "2.0",
+        files={"bin/new-tool": b"new tool\n"},
+    )
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    old_formula = Formula(name="upgrade-fixture", version="1.0")
+    old_keg = config.keg_path("upgrade-fixture", "1.0")
+    (old_keg / "bin").mkdir(parents=True)
+    (old_keg / "bin" / "old-tool").write_text("old", encoding="utf-8")
+    write_receipt(
+        old_keg,
+        old_formula,
+        poured_from_bottle=False,
+        bottle_manifest={"file_count": 1},
+        sbom={"file_count": 1},
+    )
+    Linker(config).link(old_formula, old_keg)
+    assert (config.prefix / "bin" / "old-tool").is_symlink()
+
+    messages = upgrade_formula(config, FormulaLoader([]), formula)
+    assert messages == ["upgrade-fixture 2.0"]
+    assert not old_keg.exists()
+    assert not receipt_path(old_keg).exists()
+    assert not os.path.lexists(config.prefix / "bin" / "old-tool")
+    assert (config.prefix / "bin" / "new-tool").is_symlink()
+
+    new_keg = config.keg_path("upgrade-fixture", "2.0")
+    receipt = read_receipt(new_keg)
+    assert receipt["poured_from_bottle"] is True
+    assert receipt["build"]["from_bottle"] is True
+    assert receipt["sbom"]["file_count"] >= 1
+    assert not (old_keg / "INSTALL_RECEIPT.json").exists()
+
+
+def test_remove_keg_refuses_symlinked_keg(tmp_path: Path) -> None:
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "keep.txt").write_text("keep", encoding="utf-8")
+    rack = config.rack_path("evil")
+    rack.mkdir(parents=True)
+    link = rack / "1.0"
+    link.symlink_to(outside)
+
+    with pytest.raises(PybrewError, match="symlinked keg"):
+        Cellar(config).remove_keg(link)
+    assert (outside / "keep.txt").read_text() == "keep"

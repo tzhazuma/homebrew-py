@@ -85,6 +85,21 @@ def test_install_real_homebrew_bottle(tmp_path: Path) -> None:
     assert summary["file_count"] == manifest.file_count
     assert summary["symlink_count"] == manifest.symlink_count
     assert summary["total_size"] == manifest.total_size
+    assert receipt["source"]["spec"] == "stable"
+    assert receipt["source"]["url"]
+    assert receipt["source"]["sha256"]
+    assert receipt["build"]["from_bottle"] is True
+    assert receipt["build"]["bottle_tag"] == tag
+    sbom = receipt["sbom"]
+    assert sbom["file_count"] == len(sbom["files"])
+    assert sbom["symlink_count"] == len(sbom["symlinks"])
+    sbom_paths = {item["path"] for item in sbom["files"]}
+    sbom_paths.update(item["path"] for item in sbom["symlinks"])
+    assert "lib/libslirp.dylib" in sbom_paths
+    assert all(
+        "sha256" in item and "path" in item and "size" in item
+        for item in sbom["files"]
+    )
     # Real bottles are relocatable; text files should not retain placeholders.
     for path in keg.rglob("*.pc"):
         if path.is_file():

@@ -105,27 +105,44 @@ def _tokens(version: str) -> list[object]:
 
 
 def compare_versions(left: str, right: str) -> int:
-    """Return -1/0/1 for natural ordering of two version strings."""
+    """Return -1/0/1 for natural ordering of two version strings.
+
+    Numeric segments compare numerically, letter segments compare
+    case-insensitively after numeric segments, and a trailing letter token
+    (for example ``1.0-beta``) sorts before the plain release while extra
+    numeric segments (``1.0.0`` vs ``1.0``) keep their historical ordering.
+    """
 
     lt, rt = _tokens(left), _tokens(right)
-    for a, b in zip(lt, rt):
+    sentinel = object()
+    for index in range(max(len(lt), len(rt))):
+        a = lt[index] if index < len(lt) else sentinel
+        b = rt[index] if index < len(rt) else sentinel
+        if a is sentinel:
+            # Left side ended: a plain release sorts after a pre-release suffix.
+            return 1 if isinstance(b, str) else -1
+        if b is sentinel:
+            return 1 if isinstance(a, int) else -1
         if a == b:
             continue
         if isinstance(a, int) and isinstance(b, int):
             return -1 if a < b else 1
         if isinstance(a, int):
             return 1  # numeric segment sorts after a text segment
-        if isinstance(b, int) is False and isinstance(b, int):
+        if isinstance(b, int):
             return -1
         return -1 if str(a) < str(b) else 1
-    if len(lt) == len(rt):
-        return 0
-    return -1 if len(lt) < len(rt) else 1
+    return 0
 
 
 @total_ordering
 class Version:
-    """Small value object around a version string."""
+    """Small value object around a version string.
+
+    The token parser exposes numeric/letter segments plus ``major``,
+    ``minor`` and ``patch``; comparisons stay String-compatible and match
+    :func:`compare_versions`.
+    """
 
     __slots__ = ("value",)
 
@@ -137,6 +154,39 @@ class Version:
 
     def __repr__(self) -> str:  # pragma: no cover - trivial
         return f"Version({self.value!r})"
+
+    @property
+    def segments(self) -> list[object]:
+        """Numeric/letter tokens, e.g. ``"1.2.3-beta"`` -> ``[1, 2, 3, "beta"]``."""
+
+        return _tokens(self.value)
+
+    def _segment(self, index: int) -> int:
+        tokens = self.segments
+        if index >= len(tokens):
+            return 0
+        token = tokens[index]
+        return token if isinstance(token, int) else 0
+
+    @property
+    def major(self) -> int:
+        return self._segment(0)
+
+    @property
+    def minor(self) -> int:
+        return self._segment(1)
+
+    @property
+    def patch(self) -> int:
+        return self._segment(2)
+
+    @property
+    def major_minor(self) -> "Version":
+        return Version(".".join(str(token) for token in self.segments[:2]))
+
+    @property
+    def major_minor_patch(self) -> "Version":
+        return Version(".".join(str(token) for token in self.segments[:3]))
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, Version):
@@ -154,3 +204,97 @@ class Version:
 
     def __hash__(self) -> int:  # pragma: no cover - trivial
         return hash(self.value)
+
+
+_PKG_VERSION_RE = re.compile(r"^(?P<version>.*?)(?:_(?P<revision>\d+))?$")
+
+
+class PkgVersion(Version):
+    """Formula version plus Homebrew's optional revision suffix (``1.0_2``)."""
+
+    __slots__ = ("_version", "_revision")
+
+    def __init__(self, version: object, revision: int = 0):
+        if isinstance(version, PkgVersion):
+            base = version.version
+            if revision == 0:
+                revision = version.revision
+        elif isinstance(version, Version):
+            base = version
+        else:
+            base = Version(str(version))
+        self._version = base
+        self._revision = int(revision)
+        super().__init__(str(self))
+
+    @classmethod
+    def parse(cls, text: object) -> "PkgVersion":
+        match = _PKG_VERSION_RE.match(str(text))
+        if match is None:
+            return cls(Version(""), 0)
+        return cls(Version(match.group("version")), int(match.group("revision") or 0))
+
+    @property
+    def version(self) -> Version:
+        return self._version
+
+    @property
+    def revision(self) -> int:
+        return self._revision
+
+    @property
+    def segments(self) -> list[object]:
+        return self._version.segments
+
+    @property
+    def major(self) -> int:
+        return self._version.major
+
+    @property
+    def minor(self) -> int:
+        return self._version.minor
+
+    @property
+    def patch(self) -> int:
+        return self._version.patch
+
+    @property
+    def major_minor(self) -> Version:
+        return self._version.major_minor
+
+    @property
+    def major_minor_patch(self) -> Version:
+        return self._version.major_minor_patch
+
+    def __str__(self) -> str:
+        if self._revision > 0:
+            return f"{self._version}_{self._revision}"
+        return str(self._version)
+
+    def __repr__(self) -> str:  # pragma: no cover - trivial
+        return f"PkgVersion({str(self)!r}, revision={self._revision})"
+
+    def __eq__(self, other: object) -> bool:
+        if isinstance(other, PkgVersion):
+            return self._version == other._version and self._revision == other._revision
+        if isinstance(other, Version):
+            return self._revision == 0 and self._version == other
+        if isinstance(other, str):
+            return self == PkgVersion.parse(other)
+        return NotImplemented
+
+    def __lt__(self, other: object) -> bool:
+        if isinstance(other, PkgVersion):
+            if self._version != other._version:
+                return self._version < other._version
+            return self._revision < other._revision
+        if isinstance(other, Version):
+            if self._version != other:
+                return self._version < other
+            return False
+        if isinstance(other, str):
+            return self < PkgVersion.parse(other)
+        return NotImplemented
+
+    def __hash__(self) -> int:  # pragma: no cover - trivial
+        return hash(str(self))

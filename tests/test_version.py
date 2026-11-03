@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pybrew.version import Version, compare_versions, detect_version
+from pybrew.version import PkgVersion, Version, compare_versions, detect_version
 
 
 def test_detect_common_source_urls() -> None:
@@ -47,3 +47,30 @@ def test_version_string_compatibility() -> None:
         Version("1.9"),
         Version("1.10"),
     ]
+
+
+def test_version_token_parser() -> None:
+    version = Version("1.2.3-beta")
+
+    assert version.segments == [1, 2, 3, "beta"]
+    assert (version.major, version.minor, version.patch) == (1, 2, 3)
+    assert str(version.major_minor) == "1.2"
+    assert str(version.major_minor_patch) == "1.2.3"
+    assert compare_versions("1.0", "1.0-beta") > 0
+    assert compare_versions("1.0-beta", "1.0") < 0
+
+
+def test_pkg_version_revision_behavior() -> None:
+    pkg = PkgVersion.parse("1.2.3_2")
+
+    assert pkg.version == Version("1.2.3")
+    assert pkg.revision == 2
+    assert str(pkg) == "1.2.3_2"
+    assert pkg.segments == [1, 2, 3]
+    assert (pkg.major, pkg.minor, pkg.patch) == (1, 2, 3)
+    assert pkg > PkgVersion.parse("1.2.3_1")
+    assert pkg > "1.2.3_1"
+    assert pkg < "1.2.4"
+    assert pkg == "1.2.3_2"
+    assert PkgVersion.parse("1.2.3").revision == 0
+    assert str(PkgVersion("1.2.3", 0)) == "1.2.3"
