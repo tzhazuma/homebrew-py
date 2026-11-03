@@ -3214,6 +3214,7 @@ end
 
 class PybrewSourceSpec
   attr_reader :url, :sha256, :version, :spec
+  attr_accessor :owner
 
   def initialize(info, spec)
     @info = info || {}
@@ -5353,8 +5354,12 @@ class PybrewFormulaRef
     [:stable, :head]
   end
 
-  def spec_eval(*_args)
-    nil
+  def spec_eval(class_spec, _name = nil)
+    spec = class_spec.dup
+    return nil if spec.nil? || spec.url.nil?
+
+    spec.owner = self if spec.respond_to?(:owner=)
+    spec
   end
 
   def build=(tab)
@@ -6045,8 +6050,12 @@ class PybrewFormulaRef
     [full_name]
   end
 
-  def spec_eval(*_args)
-    nil
+  def spec_eval(class_spec, _name = nil)
+    spec = class_spec.dup
+    return nil if spec.nil? || spec.url.nil?
+
+    spec.owner = self if spec.respond_to?(:owner=)
+    spec
   end
 
   def spec_syms
@@ -9200,6 +9209,14 @@ class PybrewInstallContext
 
   def formula
     self
+  end
+
+  def spec_eval(class_spec, _name = nil)
+    spec = class_spec.dup
+    return nil if spec.nil? || spec.url.nil?
+
+    spec.owner = self if spec.respond_to?(:owner=)
+    spec
   end
 
   def version

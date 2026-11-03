@@ -6097,3 +6097,25 @@ spec = PybrewBottleSpec.new("root_url" => "https://example.invalid/bottles")
         name="raw-body",
     )
     assert (keg / "root-url.txt").read_text() == "https://example.invalid/bottles"
+
+
+def test_formula_spec_eval_raw(tmp_path: Path) -> None:
+    keg = _run_raw_body(
+        tmp_path,
+        '''
+source = PybrewSourceSpec.new({ "url" => "https://example.invalid/a.tar.gz" }, :stable)
+evaluated = spec_eval(source, :stable)
+empty = spec_eval(PybrewSourceSpec.new({}, :stable), :stable)
+(prefix/"spec-eval.txt").write [
+  evaluated.url,
+  evaluated.owner.equal?(self).to_s,
+  empty.nil?.to_s
+].join("\\n")
+''',
+        name="raw-body",
+    )
+    assert (keg / "spec-eval.txt").read_text().splitlines() == [
+        "https://example.invalid/a.tar.gz",
+        "true",
+        "true",
+    ]
