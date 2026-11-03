@@ -3900,14 +3900,26 @@ module Sandbox
     end
 
     def bwrap_policy_args
-      args = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
       write_paths = []
       rules.each do |rule|
         next unless rule[:kind] == :allow_write
 
         write_paths.concat(rule_paths(rule[:payload]))
       end
-      write_paths.uniq.each { |path| args << "--bind" << path << path }
+
+      if strict?
+        args = ["--dev", "/dev", "--proc", "/proc"]
+        sandbox_read_roots.each do |root|
+          args << "--ro-bind" << root.to_s << root.to_s
+        end
+        write_paths.concat(["/tmp", "/private/tmp", HOMEBREW_CELLAR.to_s,
+                            HOMEBREW_PREFIX.to_s])
+      else
+        args = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
+      end
+      write_paths.map(&:to_s).reject(&:empty?).uniq.each do |path|
+        args << "--bind" << path << path
+      end
       network_allowed = rules.any? { |rule| rule[:kind] == :allow_network }
       args << "--unshare-net" unless network_allowed
       args
@@ -7210,6 +7222,145 @@ class Keg
     mapping = {}
     relocation_placeholder_pairs.each { |from, to| mapping[to] = from }
     relocate(mapping, dry_run: dry_run, files: files)
+  end
+
+  BINARY_MACHO_MAGICS = [
+    [0xFE, 0xED, 0xFA, 0xCE], [0xCE, 0xFA, 0xED, 0xFE],
+    [0xFE, 0xED, 0xFA, 0xCF], [0xCF, 0xFA, 0xED, 0xFE],
+    [0xCA, 0xFE, 0xBA, 0xBE], [0xBE, 0xBA, 0xFE, 0xCA],
+  ].freeze
+  BINARY_ELF_MAGIC = [0x7F, 0x45, 0x4C, 0x46].freeze
+
+  def binary_kind(path)
+    bytes = path.binread(4).bytes
+    return :elf if bytes == BINARY_ELF_MAGIC
+    return :macho if BINARY_MACHO_MAGICS.include?(bytes)
+
+    :unknown
+  rescue ScriptError, StandardError
+    :unknown
+  end
+
+  def binary_relocation_files(files = nil)
+    entries = if files.nil?
+      Dir.glob((@path/"**/*").to_s, File::FNM_DOTMATCH)
+    else
+      Array(files).map(&:to_s)
+    end
+    entries.map { |entry| Pathname.new(entry) }.select do |path|
+      next false if path.symlink?
+      next false unless path.file?
+      next false if path.to_s.include?("/.git/")
+
+      %i[macho elf].include?(binary_kind(path))
+    end
+  end
+
+  def binary_tool_override(env_name)
+    return [false, nil] unless ENV.key?(env_name) && !ENV[env_name].to_s.empty?
+
+    path = Pathname.new(ENV[env_name].to_s)
+    [true, path.file? && path.executable? ? path.to_s : nil]
+  end
+
+  def binary_relocation_tool(kind)
+    env_name = kind == :macho ? "PYBREW_INSTALL_NAME_TOOL" : "PYBREW_PATCHELF"
+    provided, override = binary_tool_override(env_name)
+    return override if provided
+
+    kind == :macho ? Utils.which("install_name_tool") : Utils.which("patchelf")
+  end
+
+  def binary_relocation_plan(replacements = {}, files: nil, rpath_additions: [],
+                             rpath_deletions: [])
+    mapping = relocation_mapping(replacements)
+    plan = { "files" => [], "commands" => [], "skipped" => [] }
+    binary_relocation_files(files).each do |path|
+      kind = binary_kind(path)
+      tool = binary_relocation_tool(kind)
+      if tool.nil?
+        plan["skipped"] << {
+          "file" => path.to_s,
+          "kind" => kind.to_s,
+          "reason" => "relocation tool not found",
+        }
+        next
+      end
+      commands = []
+      if kind == :macho
+        mapping.each { |old, new| commands << [tool, "-change", old, new, path.to_s] }
+        Array(rpath_deletions).each do |value|
+          commands << [tool, "-delete_rpath", value.to_s, path.to_s]
+        end
+        Array(rpath_additions).each do |value|
+          commands << [tool, "-add_rpath", value.to_s, path.to_s]
+        end
+      else
+        mapping.each do |old, new|
+          commands << [tool, "--replace-needed", old, new, path.to_s]
+        end
+        unless Array(rpath_additions).empty?
+          rpath = Array(rpath_additions).map(&:to_s).join(":")
+          commands << [tool, "--set-rpath", rpath, path.to_s]
+        end
+      end
+      next if commands.empty?
+
+      plan["files"] << path.to_s
+      plan["commands"].concat(commands)
+    end
+    plan
+  end
+
+  def binary_relocation_report(replacements = {}, files: nil, rpath_additions: [],
+                               rpath_deletions: [])
+    binary_relocation_plan(
+      replacements,
+      files: files,
+      rpath_additions: rpath_additions,
+      rpath_deletions: rpath_deletions
+    )
+  end
+
+  def relocate_binary_files(replacements = {}, dry_run: false, files: nil,
+                            strict: false, rpath_additions: [], rpath_deletions: [])
+    plan = binary_relocation_plan(
+      replacements,
+      files: files,
+      rpath_additions: rpath_additions,
+      rpath_deletions: rpath_deletions
+    )
+    if strict && !plan["skipped"].empty?
+      skipped = plan["skipped"].first
+      raise RuntimeError,
+            "binary relocation tool unavailable for #{skipped["file"]} " \
+            "(#{skipped["kind"]}); install install_name_tool/patchelf or set " \
+            "PYBREW_INSTALL_NAME_TOOL/PYBREW_PATCHELF"
+    end
+    executed = []
+    unless dry_run
+      plan["commands"].each do |command|
+        begin
+          Utils.popen_read(*command.map(&:to_s), safe: true)
+          executed << command
+        rescue ScriptError, StandardError => error
+          raise RuntimeError,
+                "binary relocation failed for #{command.last}: " \
+                "#{error.class}: #{error.message}"
+        end
+      end
+    end
+    {
+      "files" => plan["files"],
+      "commands" => plan["commands"],
+      "executed" => executed,
+      "skipped" => plan["skipped"],
+      "dry_run" => !!dry_run,
+    }
+  end
+
+  def relocate_binaries(*args, **options)
+    relocate_binary_files(*args, **options)
   end
 
   def prepare_debug_symbols

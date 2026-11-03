@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import asdict
 import os
 import subprocess
 import sys
@@ -1368,7 +1369,22 @@ def cmd_linkage(args: argparse.Namespace) -> int:
         print(f"Error: {error}", file=sys.stderr)
         return 1
     if getattr(args, "json", False):
-        print(json.dumps({"formula": label, "ok": ok, "report": text}, indent=2))
+        print(
+            json.dumps(
+                {
+                    "formula": label,
+                    "ok": ok,
+                    "report": text,
+                    "checked": report.checked,
+                    "skipped": report.skipped,
+                    "issues": [asdict(issue) for issue in report.issues],
+                    "unsupported": [asdict(problem) for problem in report.unsupported],
+                    "corrupt": [asdict(problem) for problem in report.corrupt],
+                    "audit": [asdict(audit) for audit in getattr(report, "audit", [])],
+                },
+                indent=2,
+            )
+        )
     else:
         print(text)
     return 0 if ok else 1

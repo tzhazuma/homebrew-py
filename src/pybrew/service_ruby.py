@@ -487,6 +487,7 @@ def _spec_from_result(
         }
     if user_config_home is not None:
         spec.user_config_home = str(user_config_home)
+    spec.formula_name = str(formula.name)
     warnings = data.get("warnings")
     if isinstance(warnings, list):
         spec.warnings = [str(warning) for warning in warnings]

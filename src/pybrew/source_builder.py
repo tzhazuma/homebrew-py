@@ -1160,6 +1160,8 @@ def _flag_value(
         return None
     if token.startswith("-L") and len(token) > 2:
         return "library", token[2:], 1
+    if token.startswith("-Wa,") and len(token) > len("-Wa,"):
+        return "assembler", token[len("-Wa,") :], 1
     for prefix in _RPATH_PREFIXES:
         if token.startswith(prefix):
             return "rpath", token[len(prefix) :], 1
@@ -1168,6 +1170,52 @@ def _flag_value(
         if following.startswith("-Wl,"):
             return "rpath", following[len("-Wl,") :], 2
     return None
+
+
+def _sanitize_assembler_options(payload: str) -> str:
+    """Filter unsafe path options out of a ``-Wa,`` assembler payload.
+
+    Safe assembler switches pass through unchanged.  Include/library path
+    options under the bounded system roots are dropped; unrelated paths are
+    preserved.  Commas are the option separator understood by drivers.
+    """
+
+    parts = payload.split(",")
+    result: list[str] = []
+    index = 0
+    while index < len(parts):
+        part = parts[index]
+        if part in ("-I", "-L"):
+            if index + 1 < len(parts):
+                path_value = parts[index + 1]
+                roots = (
+                    _SYSTEM_INCLUDE_ROOTS
+                    if part == "-I"
+                    else _SYSTEM_LIBRARY_ROOTS
+                )
+                if not _path_under(os.path.normpath(path_value), roots):
+                    result.extend((part, path_value))
+                index += 2
+                continue
+            index += 1
+            continue
+        if part.startswith("-I") and len(part) > 2:
+            if not _path_under(
+                os.path.normpath(part[2:]), _SYSTEM_INCLUDE_ROOTS
+            ):
+                result.append(part)
+            index += 1
+            continue
+        if part.startswith("-L") and len(part) > 2:
+            if not _path_under(
+                os.path.normpath(part[2:]), _SYSTEM_LIBRARY_ROOTS
+            ):
+                result.append(part)
+            index += 1
+            continue
+        result.append(part)
+        index += 1
+    return ",".join(result)
 
 
 def sanitize_flag_list(
@@ -1199,6 +1247,12 @@ def sanitize_flag_list(
             index += 1
             continue
         kind, path, consumed = parsed
+        if kind == "assembler":
+            cleaned = _sanitize_assembler_options(path)
+            if cleaned:
+                result.append("-Wa," + cleaned)
+            index += consumed
+            continue
         normalised = os.path.normpath(path)
         if kind == "include":
             unsafe = _path_under(normalised, _SYSTEM_INCLUDE_ROOTS)
@@ -1331,6 +1385,8 @@ def flag_value(args, index):
         return None
     if token.startswith("-L") and len(token) > 2:
         return "library", token[2:], 1
+    if token.startswith("-Wa,") and len(token) > len("-Wa,"):
+        return "assembler", token[len("-Wa,"):], 1
     for flag_prefix in RPATH_PREFIXES:
         if token.startswith(flag_prefix):
             return "rpath", token[len(flag_prefix):], 1
@@ -1339,6 +1395,45 @@ def flag_value(args, index):
         if following.startswith("-Wl,"):
             return "rpath", following[len("-Wl,"):], 2
     return None
+
+
+def sanitize_assembler_options(payload):
+    parts = payload.split(",")
+    result = []
+    index = 0
+    while index < len(parts):
+        part = parts[index]
+        if part in ("-I", "-L"):
+            if index + 1 < len(parts):
+                path_value = parts[index + 1]
+                roots = (
+                    SYSTEM_INCLUDE_ROOTS
+                    if part == "-I"
+                    else SYSTEM_LIBRARY_ROOTS
+                )
+                if not path_under(os.path.normpath(path_value), roots):
+                    result.extend((part, path_value))
+                index += 2
+                continue
+            index += 1
+            continue
+        if part.startswith("-I") and len(part) > 2:
+            if not path_under(
+                os.path.normpath(part[2:]), SYSTEM_INCLUDE_ROOTS
+            ):
+                result.append(part)
+            index += 1
+            continue
+        if part.startswith("-L") and len(part) > 2:
+            if not path_under(
+                os.path.normpath(part[2:]), SYSTEM_LIBRARY_ROOTS
+            ):
+                result.append(part)
+            index += 1
+            continue
+        result.append(part)
+        index += 1
+    return ",".join(result)
 
 
 SOURCE_LANGUAGES = {
@@ -1391,15 +1486,18 @@ OPTIONS_WITH_VALUES = frozenset(
 
 
 def detect_language(args, default):
-    """Return (language, explicit_x_seen).
+    """Return (language, explicit_x_seen, mixed_sources).
 
-    The first recognized source extension selects the driver; an explicit -x
-    language overrides extension detection.
+    The first recognized source extension selects the driver.  When several
+    distinct source languages are present in one invocation the compiler is
+    allowed to infer each file's language (no -x is injected); an explicit -x
+    language overrides extension detection entirely.
     """
 
     explicit_seen = False
     explicit_language = None
     extension_language = None
+    extension_languages = []
     index = 0
     while index < len(args):
         token = args[index]
@@ -1424,24 +1522,34 @@ def detect_language(args, default):
         if token.startswith("-"):
             index += 1
             continue
-        if extension_language is None:
-            suffix = os.path.splitext(token)[1]
-            extension_language = (
-                "assembler-with-cpp"
-                if suffix == ".S"
-                else SOURCE_LANGUAGES.get(suffix.lower())
-            )
+        suffix = os.path.splitext(token)[1]
+        source_language = (
+            "assembler-with-cpp"
+            if suffix == ".S"
+            else SOURCE_LANGUAGES.get(suffix.lower())
+        )
+        if source_language is not None:
+            if extension_language is None:
+                extension_language = source_language
+            if source_language not in extension_languages:
+                extension_languages.append(source_language)
         index += 1
     if explicit_seen:
-        return explicit_language or default, True
+        return explicit_language or default, True, False
     if extension_language is not None:
-        return extension_language, False
-    return default, False
+        return (
+            extension_language,
+            False,
+            len(extension_languages) > 1,
+        )
+    return default, False, False
 
 
-language, explicit_language = detect_language(arguments, default_language)
+language, explicit_language, mixed_sources = detect_language(
+    arguments, default_language
+)
 language_flags = []
-if not explicit_language:
+if not explicit_language and not mixed_sources:
     if language == "objc":
         language_flags = ["-x", "objective-c"]
     elif language == "objc++":
@@ -1469,6 +1577,12 @@ while index < len(arguments):
         index += 1
         continue
     kind, path, consumed = parsed
+    if kind == "assembler":
+        cleaned = sanitize_assembler_options(path)
+        if cleaned:
+            filtered.append("-Wa," + cleaned)
+        index += consumed
+        continue
     normalised = os.path.normpath(path)
     if kind == "include":
         unsafe = path_under(normalised, SYSTEM_INCLUDE_ROOTS)
@@ -2025,9 +2139,12 @@ def install_superenv_shims(
     paths and sanitize system include/library flags at invocation time.  The
     helper also detects .c/.cc/.cpp/.m/.mm/.s/.S/.asm inputs and dispatches to
     the corresponding C/C++/ObjC/ObjC++/assembler driver.  The first recognized
-    source extension selects the driver; an explicit ``-x`` wins.  Bounded
-    language flags are added only when no explicit ``-x`` was supplied.  This
-    is a bounded compatibility layer, not Homebrew's full Superenv.
+    source extension selects the driver; an explicit ``-x`` wins.  For a mixed
+    source invocation the first source still selects the driver but no ``-x``
+    is injected, letting the compiler infer each file by extension.  Bounded
+    language flags are added only for a single known source language and no
+    explicit ``-x``.  This is a bounded compatibility layer, not Homebrew's
+    full Superenv.
     """
 
     env = dict(environment)

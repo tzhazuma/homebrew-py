@@ -624,6 +624,148 @@ def test_resolve_render_user_environment_context_precedence(
     assert resolve_render_user_environment(formula, ServiceSpec()) is None
 
 
+# ---------------------------------------------------------------------------
+# standalone ServiceSpec explicit render context
+# ---------------------------------------------------------------------------
+
+
+def test_standalone_spec_render_rereads_user_env_with_config_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    non_root: None,
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    user_home = tmp_path / "user-config"
+    env_path = _write_user_env(user_home, "svc", "FOO=one\nPATH=/from-file\n")
+    monkeypatch.setenv(USER_CONFIG_HOME_ENV, str(user_home))
+    formula = _formula_with_service(
+        'run [opt_bin/"svc"]\nenvironment_variables FOO: "formula"'
+    )
+    spec = parse_service_block(formula, config)
+    spec.warnings = ["kept warning"]
+    assert spec.formula_name == "svc"
+    assert spec.user_config_home == str(user_home)
+
+    # The manager context disappears, but the standalone spec can still
+    # explicitly re-read from the passed context directory.
+    monkeypatch.delenv(USER_CONFIG_HOME_ENV, raising=False)
+    env_path.write_text("FOO=two\nBAR=added\n", encoding="utf-8")
+    env_path.chmod(0o600)
+
+    effective = spec.effective_environment_variables(user_config_home=user_home)
+    assert effective == {"FOO": "two", "BAR": "added"}
+    # Explicit context ignores the stale parse snapshot; no context uses it.
+    assert spec.render_environment_variables(
+        default_path=str(config.prefix / "bin"),
+        user_config_home=user_home,
+    ) == {"FOO": "two", "BAR": "added", "PATH": str(config.prefix / "bin")}
+    assert spec.render_environment_variables() == {"FOO": "one", "PATH": "/from-file"}
+
+    # The standalone spec itself is never mutated.
+    assert spec.environment_variables == {"FOO": "formula"}
+    assert spec.user_environment_variables == {"FOO": "one", "PATH": "/from-file"}
+    assert spec.warnings == ["kept warning"]
+
+
+def test_standalone_spec_render_explicit_user_environment_wins(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    non_root: None,
+) -> None:
+    user_home = tmp_path / "user-config"
+    _write_user_env(user_home, "svc", "FOO=from-file\n")
+    spec = ServiceSpec(
+        environment_variables={"FOO": "declared", "KEEP": "yes"},
+        user_environment_variables={"FOO": "snapshot"},
+        formula_name="svc",
+    )
+
+    # Explicit user_environment wins over both the file context and snapshot.
+    assert spec.render_environment_variables(
+        user_environment={"FOO": "explicit"},
+        user_config_home=user_home,
+    ) == {"FOO": "explicit", "KEEP": "yes"}
+    # Explicit empty mapping means no current overrides, not the snapshot.
+    assert spec.render_environment_variables(user_environment={}) == {
+        "FOO": "declared",
+        "KEEP": "yes",
+    }
+    # user_environment={} plus a context still wins (no file read).
+    assert spec.effective_environment_variables(
+        user_environment={}, user_config_home=user_home
+    ) == {"FOO": "declared", "KEEP": "yes"}
+    assert spec.user_environment_variables == {"FOO": "snapshot"}
+
+
+def test_standalone_spec_render_removal_does_not_use_stale_snapshot(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    non_root: None,
+) -> None:
+    user_home = tmp_path / "user-config"
+    env_path = _write_user_env(user_home, "svc", "FOO=one\n")
+    config = _config(tmp_path, monkeypatch)
+    monkeypatch.setenv(USER_CONFIG_HOME_ENV, str(user_home))
+    spec = parse_service_block(
+        _formula_with_service('environment_variables FOO: "formula"'),
+        config,
+    )
+    assert spec.user_environment_variables == {"FOO": "one"}
+    monkeypatch.delenv(USER_CONFIG_HOME_ENV, raising=False)
+    env_path.unlink()
+
+    # A passed context with no file supersedes the stale snapshot.
+    assert spec.effective_environment_variables(user_config_home=user_home) == {
+        "FOO": "formula"
+    }
+    assert spec.render_environment_variables(
+        default_path="/default/bin", user_config_home=user_home
+    ) == {"FOO": "formula", "PATH": "/default/bin"}
+
+
+def test_standalone_spec_render_context_needs_formula_name(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    non_root: None,
+) -> None:
+    user_home = tmp_path / "user-config"
+    _write_user_env(user_home, "svc", "FOO=fresh\n")
+    formula = _formula()
+    bare = ServiceSpec(environment_variables={"FOO": "declared"})
+
+    with pytest.raises(ServiceError, match="requires a formula name"):
+        bare.render_environment_variables(user_config_home=user_home)
+
+    # formula_name or a Formula-like object supplies the missing name.
+    named = ServiceSpec(
+        environment_variables={"FOO": "declared"}, formula_name="svc"
+    )
+    assert named.render_environment_variables(
+        user_config_home=user_home
+    ) == {"FOO": "fresh"}
+    object_based = ServiceSpec(
+        environment_variables={"FOO": "declared"},
+        user_environment_variables={"FOO": "snapshot"},
+    )
+    assert object_based.render_environment_variables(
+        formula=formula, user_config_home=user_home
+    ) == {"FOO": "fresh"}
+    assert bare.render_environment_variables(
+        formula="svc", user_config_home=user_home
+    ) == {"FOO": "fresh"}
+
+    # from_hash round-trips the captured name for standalone specs.
+    restored = ServiceSpec.from_hash(
+        {
+            "environment_variables": {"FOO": "declared"},
+            "formula_name": "svc",
+        }
+    )
+    assert restored.render_environment_variables(
+        user_config_home=user_home
+    ) == {"FOO": "fresh"}
+
+
 def test_plist_generation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config = _config(tmp_path, monkeypatch)
     formula = _formula()

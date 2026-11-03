@@ -21,8 +21,10 @@ The systemd renderer writes effective values only.
 Renderers with formula context re-read the user env file at render time (see
 :func:`resolve_render_user_environment`) so edits or removals after parsing are
 honoured instead of a stale snapshot.  A standalone :class:`ServiceSpec` with no
-context keeps using its parse-time snapshot, and explicit
-``user_environment`` arguments let callers supply their own values.
+context keeps using its parse-time snapshot; callers can pass explicit
+``user_environment`` values or a ``user_config_home`` context (with
+``formula_name``/``formula`` when the spec was not parsed) to
+:meth:`ServiceSpec.render_environment_variables` and re-read at render time.
 """
 
 from __future__ import annotations
@@ -264,8 +266,16 @@ def resolve_user_config_home(
     return Path(text)
 
 
+def _service_formula_name(formula: Any) -> str:
+    """Return a bare formula name from a Formula-like object or a string."""
+
+    if isinstance(formula, str):
+        return formula
+    return str(getattr(formula, "name", None) or "")
+
+
 def read_user_service_env(
-    formula: Formula,
+    formula: Any,
     user_config_home: Optional[Path] = None,
     euid: Optional[int] = None,
 ) -> dict[str, str]:
@@ -277,13 +287,14 @@ def read_user_service_env(
     are ignored, invalid lines are ignored, and the remaining ``KEY=value``
     pairs override the formula-declared environment.  ``user_config_home``
     injects a directory for tests/callers; otherwise ``HOMEBREW_USER_CONFIG_HOME``
-    is used and an unset value means "no overrides".
+    is used and an unset value means "no overrides".  ``formula`` may be a
+    Formula-like object or a bare name string.
     """
 
     base = resolve_user_config_home(user_config_home)
     if base is None:
         return {}
-    name = str(formula.name or "")
+    name = _service_formula_name(formula)
     if (
         not name
         or name in (".", "..")
@@ -392,6 +403,9 @@ class ServiceSpec:
     #: :attr:`user_environment_variables`; it stays optional so ServiceSpec
     #: objects remain standalone.
     user_config_home: Optional[str] = None
+    #: Formula name captured at parse time so a standalone spec can explicitly
+    #: re-read ``services/<name>.env`` when a caller passes ``user_config_home``.
+    formula_name: Optional[str] = None
 
     @classmethod
     def from_hash(cls, data: dict[str, Any]) -> "ServiceSpec":
@@ -470,10 +484,47 @@ class ServiceSpec:
             str(key): str(value) for key, value in self.environment_variables.items()
         }
 
+    def _resolve_render_overrides(
+        self,
+        user_environment: Optional[dict[str, str]],
+        user_config_home: Optional[Path],
+        formula_name: Optional[str],
+        formula: Any,
+    ) -> Optional[dict[str, str]]:
+        """Resolve explicit render-time overrides for a standalone spec.
+
+        ``user_environment`` wins when supplied.  ``user_config_home`` makes the
+        method re-read ``services/<formula>.env`` (the formula name comes from
+        ``formula_name``, a Formula-like ``formula``, or the name captured when
+        the spec was parsed).  ``None`` means "no explicit context", so callers
+        fall back to the spec's parse-time snapshot.
+        """
+
+        if user_environment is not None:
+            return user_environment
+        if user_config_home is None:
+            return None
+        name = formula_name
+        if not name and isinstance(formula, str):
+            name = formula
+        if not name and formula is not None:
+            name = getattr(formula, "name", None)
+        if not name:
+            name = self.formula_name
+        if not name:
+            raise ServiceError(
+                "user_config_home requires a formula name; pass formula_name=... "
+                "or render a ServiceSpec produced by parse_service_block()"
+            )
+        return read_user_service_env(str(name), user_config_home)
+
     def effective_environment_variables(
         self,
         prefix: Optional[Path] = None,
         user_environment: Optional[dict[str, str]] = None,
+        user_config_home: Optional[Path] = None,
+        formula_name: Optional[str] = None,
+        formula: Any = None,
     ) -> dict[str, str]:
         """Return declared environment merged with Homebrew user overrides.
 
@@ -485,15 +536,20 @@ class ServiceSpec:
         ``user_environment`` explicitly supplies fresh user overrides (for
         example re-read at render time); ``None`` uses the parse-time snapshot
         stored in :attr:`user_environment_variables`, while an empty dict means
-        "no current overrides" and ignores that snapshot.
+        "no current overrides" and ignores that snapshot.  A standalone spec can
+        instead pass ``user_config_home`` (plus ``formula_name``/``formula``
+        when it was not parsed) to re-read the user env file at call time.
         """
 
-        environment = self.declared_environment_variables()
-        overrides = (
-            self.user_environment_variables
-            if user_environment is None
-            else user_environment
+        overrides = self._resolve_render_overrides(
+            user_environment,
+            user_config_home,
+            formula_name,
+            formula,
         )
+        if overrides is None:
+            overrides = self.user_environment_variables
+        environment = self.declared_environment_variables()
         for key, value in overrides.items():
             environment[str(key)] = str(value)
         return environment
@@ -502,6 +558,9 @@ class ServiceSpec:
         self,
         default_path: Optional[str] = None,
         user_environment: Optional[dict[str, str]] = None,
+        user_config_home: Optional[Path] = None,
+        formula_name: Optional[str] = None,
+        formula: Any = None,
     ) -> dict[str, str]:
         """Return the environment a renderer should write.
 
@@ -513,11 +572,18 @@ class ServiceSpec:
 
         ``user_environment`` lets a renderer with a formula/config context pass
         freshly resolved overrides instead of the spec's stale parse-time
-        snapshot (see :func:`resolve_render_user_environment`).
+        snapshot (see :func:`resolve_render_user_environment`).  Standalone
+        ServiceSpec callers can pass ``user_config_home`` to re-read the user
+        env file explicitly (no stale snapshot), optionally with
+        ``formula_name``/``formula`` when the name was not captured at parse
+        time.
         """
 
         environment = self.effective_environment_variables(
-            user_environment=user_environment
+            user_environment=user_environment,
+            user_config_home=user_config_home,
+            formula_name=formula_name,
+            formula=formula,
         )
         if default_path is not None:
             environment.setdefault("PATH", default_path)
@@ -794,6 +860,7 @@ def parse_service_block(
         spec.user_environment_variables = overrides
     if context is not None:
         spec.user_config_home = str(context)
+    spec.formula_name = str(formula.name)
     return spec
 
 

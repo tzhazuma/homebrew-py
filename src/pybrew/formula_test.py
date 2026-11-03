@@ -218,7 +218,7 @@ class FormulaTestContext
         return true if %w[1 true yes on].include?(raw)
         return false if %w[0 false no off].include?(raw)
 
-        legacy == true
+        Version.legacy == true
       end
 
       def homebrew_enabled?
@@ -227,26 +227,26 @@ class FormulaTestContext
         raw = ENV["PYBREW_VERSION_HOMEBREW"].to_s.strip.downcase
         return true if %w[1 true yes on].include?(raw)
         return false if %w[0 false no off].include?(raw)
-        return true if homebrew == true
-        return false if homebrew == false
+        return true if Version.homebrew == true
+        return false if Version.homebrew == false
 
         true
       end
 
       def with_homebrew(enabled = true)
-        previous = homebrew
-        self.homebrew = enabled
+        previous = Version.homebrew
+        Version.homebrew = enabled
         yield
       ensure
-        self.homebrew = previous
+        Version.homebrew = previous
       end
 
       def with_legacy(enabled = true)
-        previous = legacy
-        self.legacy = enabled
+        previous = Version.legacy
+        Version.legacy = enabled
         yield
       ensure
-        self.legacy = previous
+        Version.legacy = previous
       end
     end
 
@@ -572,20 +572,38 @@ class FormulaTestContext
       end
       left = tokens
       right = other.tokens
-      length = [left.length, right.length].max
-      length.times do |index|
-        left_token = left[index] || NullToken.new
-        right_token = right[index] || NullToken.new
+      maximum = [left.length, right.length].max
+      left_index = 0
+      right_index = 0
+      while left_index < maximum
+        left_token = left[left_index] || NullToken.new
+        right_token = right[right_index] || NullToken.new
         comparison = left_token.compare(right_token)
-        return comparison unless comparison.zero?
+        if comparison.zero?
+          left_index += 1
+          right_index += 1
+          next
+        end
+        if left_token.is_a?(NumericToken) && !right_token.is_a?(NumericToken)
+          return 1 if left_token.compare(NullToken.new) > 0
+
+          left_index += 1
+          next
+        end
+        if !left_token.is_a?(NumericToken) && right_token.is_a?(NumericToken)
+          return -1 if right_token.compare(NullToken.new) > 0
+
+          right_index += 1
+          next
+        end
+        return comparison
       end
       0
     end
 
     def hash
-      return [homebrew_hash_key, 0].hash if self.class.homebrew_enabled?
-
-      super
+      key = self.class.homebrew_enabled? ? homebrew_hash_key : segments
+      [key, 0].hash
     end
 
     # String defines == before Comparable in the ancestor chain for a String
@@ -627,11 +645,14 @@ class FormulaTestContext
     private
 
     def homebrew_hash_key
-      key = tokens.map do |token|
-        [token.class_name, token.value, token.revision]
+      prefix = []
+      tokens.each do |token|
+        break unless token.is_a?(NumericToken)
+
+        prefix << token.value
       end
-      key.pop while !key.empty? && key.last[0] == "numeric" && key.last[1].zero?
-      key
+      prefix.pop while !prefix.empty? && prefix.last.zero?
+      prefix
     end
 
     def version_tokens
@@ -698,11 +719,12 @@ class FormulaTestContext
     end
 
     def hash
-      if self.class.homebrew_enabled?
-        return [@version.send(:homebrew_hash_key), @revision].hash
+      key = if self.class.homebrew_enabled?
+        @version.send(:homebrew_hash_key)
+      else
+        @version.segments
       end
-
-      super
+      [key, @revision].hash
     end
 
     def token_classes

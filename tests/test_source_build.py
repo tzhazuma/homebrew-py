@@ -1916,7 +1916,7 @@ def test_superenv_shims_mixed_language_first_source_wins(
     )
     argv = shlex.split(_compiler_report(tmp_path / "cc-report.txt")["argv"])
     assert "first.c" in argv and "second.m" in argv
-    assert "objective-c" not in argv
+    assert "-x" not in argv
     assert not (tmp_path / "objc-report.txt").exists()
 
     subprocess.run(
@@ -1927,7 +1927,17 @@ def test_superenv_shims_mixed_language_first_source_wins(
     )
     argv = shlex.split(_compiler_report(tmp_path / "objc-report.txt")["argv"])
     assert "first.m" in argv and "second.c" in argv
-    assert argv[argv.index("-x") + 1] == "objective-c"
+    assert "-x" not in argv
+
+    subprocess.run(
+        [env["CC"], "-x", "c", "-c", "first.m", "second.c"],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+    )
+    argv = shlex.split(_compiler_report(tmp_path / "cc-report.txt")["argv"])
+    assert argv.count("-x") == 1
+    assert argv[argv.index("-x") + 1] == "c"
 
 
 def test_resource_stage_path_is_safe_and_deterministic(tmp_path: Path) -> None:
@@ -2015,3 +2025,87 @@ end
     assert (result.keg / "bin" / "data.txt").read_text() == "data payload\n"
     assert (result.keg / "share" / "extra.txt").read_text() == "extra payload\n"
     assert (result.keg / "share" / "data.txt").read_text() == "data payload\n"
+
+
+def test_sanitize_flag_list_handles_assembler_wa_options(
+    tmp_path: Path,
+) -> None:
+    import pybrew.source_builder as source_builder
+
+    tokens = source_builder.sanitize_flag_list(
+        [
+            "-Wa,--noexecstack",
+            "-Wa,-adhln",
+            "-Wa,-I/usr/include",
+            "-Wa,-I,/usr/local/include",
+            "-Wa,-L/usr/lib",
+            "-Wa,-L,/usr/local/lib",
+            "-Wa,-I/opt/assembler-include",
+            "-Wa,-L/opt/assembler-lib",
+            "-O2",
+        ],
+        tmp_path / "prefix",
+    )
+
+    assert "-Wa,--noexecstack" in tokens
+    assert "-Wa,-adhln" in tokens
+    assert "-Wa,-I/opt/assembler-include" in tokens
+    assert "-Wa,-L/opt/assembler-lib" in tokens
+    assert not any("/usr/include" in token for token in tokens)
+    assert not any("/usr/local/include" in token for token in tokens)
+    assert not any("/usr/lib" in token for token in tokens)
+    assert not any("/usr/local/lib" in token for token in tokens)
+    assert "-O2" in tokens
+
+
+def test_superenv_shims_sanitize_wa_options_and_s_pp_flags(
+    tmp_path: Path,
+) -> None:
+    import subprocess
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    fake_bin = tmp_path / "fake-bin"
+    cc = _fake_compiler(fake_bin, "clang", "cc-report.txt")
+    cxx = _fake_compiler(fake_bin, "clang++", "cxx-report.txt")
+    prepared = source_builder.build_environment(
+        config,
+        {
+            "PATH": str(fake_bin),
+            "PYBREW_SUPERENV": "1",
+            "PYBREW_CC": str(cc),
+            "PYBREW_CXX": str(cxx),
+        },
+    )
+    env = prepared.env
+    subprocess.run(
+        [
+            env["CC"],
+            "-DASM_DEFINE=1",
+            "-Wa,-I/usr/include",
+            "-Wa,-L/usr/lib",
+            "-Wa,--noexecstack",
+            "-Wa,-I/opt/assembler-include",
+            "-c",
+            "unit.S",
+        ],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+    )
+    argv = shlex.split(_compiler_report(tmp_path / "cc-report.txt")["argv"])
+    assert "-DASM_DEFINE=1" in argv
+    assert "-Wa,--noexecstack" in argv
+    assert "-Wa,-I/opt/assembler-include" in argv
+    assert not any("/usr/include" in token for token in argv)
+    assert not any("/usr/lib" in token for token in argv)
+    assert argv[argv.index("-x") + 1] == "assembler-with-cpp"
+
+    subprocess.run(
+        [env["CC"], "-c", "unit.s"],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+    )
+    argv = shlex.split(_compiler_report(tmp_path / "cc-report.txt")["argv"])
+    assert argv[argv.index("-x") + 1] == "assembler"

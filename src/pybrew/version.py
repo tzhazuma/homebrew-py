@@ -356,15 +356,39 @@ def _version_tokens(version: str) -> list[Token]:
 
 
 def _homebrew_compare_token_lists(left: list[Token], right: list[Token]) -> int:
-    """Homebrew-style comparison with a NullToken for missing segments."""
+    """Homebrew's token loop, including its null/zero-skipping behavior.
+
+    A numeric zero compared with a non-numeric token is skipped (both sides),
+    so e.g. ``1.0.0`` compares equal to ``1.0-alpha`` in Homebrew's bounded
+    table.  The loop also treats a missing token as NullToken.
+    """
 
     length = max(len(left), len(right))
-    for index in range(length):
-        left_token = left[index] if index < len(left) else NullToken()
-        right_token = right[index] if index < len(right) else NullToken()
+    left_index = 0
+    right_index = 0
+    while left_index < length:
+        left_token = left[left_index] if left_index < len(left) else NullToken()
+        right_token = right[right_index] if right_index < len(right) else NullToken()
         comparison = left_token.compare(right_token)
-        if comparison:
-            return comparison
+        if comparison == 0:
+            left_index += 1
+            right_index += 1
+            continue
+        if isinstance(left_token, NumericToken) and not isinstance(
+            right_token, NumericToken
+        ):
+            if left_token.compare(NullToken()) > 0:
+                return 1
+            left_index += 1
+            continue
+        if not isinstance(left_token, NumericToken) and isinstance(
+            right_token, NumericToken
+        ):
+            if right_token.compare(NullToken()) > 0:
+                return -1
+            right_index += 1
+            continue
+        return comparison
     return 0
 
 
@@ -630,19 +654,26 @@ class Version:
         return NotImplemented
 
     def _homebrew_hash_key(self) -> tuple:
-        tokens = _version_tokens(self.value)
-        while tokens and tokens[-1].kind == "numeric" and tokens[-1].value == 0:
-            tokens.pop()
-        return tuple(
-            (token.kind, token.value, token.revision) for token in tokens
-        )
+        # Equal versions must hash equally even with Homebrew's zero-skipping:
+        # use the leading numeric prefix with trailing zeros removed, so
+        # 1.0.0 and 1.0-alpha (equal by the bounded table) share a key.
+        prefix: list[int] = []
+        for token in _version_tokens(self.value):
+            if not isinstance(token, NumericToken):
+                break
+            prefix.append(token.value)
+        while prefix and prefix[-1] == 0:
+            prefix.pop()
+        return tuple(prefix)
 
     def __hash__(self) -> int:
-        # The default keeps the String-compatible hash; the opt-in mode uses a
-        # canonical key so homebrew-equal versions (1.0/1.0.0) hash equally.
+        # Equal versions must hash equally in every mode: Homebrew uses the
+        # canonical numeric prefix, legacy uses its raw token list.
         if _homebrew_mode_enabled():
-            return hash((self._homebrew_hash_key(), 0))
-        return hash(self.value)
+            key = self._homebrew_hash_key()
+        else:
+            key = tuple(_tokens(self.value))
+        return hash((key, 0))
 
 
 _PKG_VERSION_RE = re.compile(r"^(?P<version>.*?)(?:_(?P<revision>\d+))?$")
@@ -760,5 +791,7 @@ class PkgVersion(Version):
 
     def __hash__(self) -> int:
         if _homebrew_mode_enabled():
-            return hash((self._version._homebrew_hash_key(), self._revision))
-        return hash(self.value)
+            key = self._version._homebrew_hash_key()
+        else:
+            key = tuple(_tokens(self._version.value))
+        return hash((key, self._revision))

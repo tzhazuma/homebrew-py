@@ -2688,7 +2688,9 @@ def test_dsl_legacy_mode_env_restores_extra_numeric_behavior(tmp_path: Path) -> 
   refute Version.new("1.0") == Version.new("1.0.0")
   assert Version.new("1.0-p1") < Version.new("1.0")
   assert Version.new("1.0-foo") < Version.new("1.0")
-  assert_equal Version.new("1.0").hash, "1.0".hash
+  assert Version.new("1.0") == Version.new("01.0")
+  assert_equal Version.new("1.0").hash, Version.new("01.0").hash
+  assert_equal PkgVersion.parse("1.0_0").hash, Version.new("1.0").hash
 end
 """
     formula, config = _installed_formula(tmp_path, source)
@@ -2697,5 +2699,51 @@ end
         config,
         ruby=_REAL_RUBY,
         env={"PYBREW_VERSION_LEGACY": "1"},
+    )
+    assert result.success is True
+
+
+@requires_ruby
+def test_dsl_homebrew_bounded_table_and_hash_consistency(tmp_path: Path) -> None:
+    source = """do
+  versions = ["1.0", "1.0.0", "1.0-alpha", "1.0-p1", "1.0-post1", "1.0-foo", "1.0.1"]
+  expected = [
+    [0, 0, 1, -1, -1, -1, -1],
+    [0, 0, 0, 0, 0, 0, -1],
+    [-1, -1, 0, -1, -1, -1, -1],
+    [1, 1, 1, 0, 1, 1, -1],
+    [1, 1, 1, -1, 0, -1, -1],
+    [1, 1, 1, -1, 1, 0, -1],
+    [1, 1, 1, 1, 1, 1, 0],
+  ]
+  objects = versions.map { |value| Version.new(value) }
+  versions.each_index do |left_index|
+    versions.each_index do |right_index|
+      comparison = expected[left_index][right_index]
+      left = objects[left_index]
+      right = objects[right_index]
+      assert_equal comparison, left <=> right
+      assert_equal(comparison.zero?, left == right)
+      assert_equal(comparison.negative?, left < right)
+      assert_equal(comparison.positive?, left > right)
+      assert_equal left.hash, right.hash if comparison.zero?
+    end
+  end
+
+  Version.with_legacy do
+    assert Version.new("1.0.0") > Version.new("1.0")
+    assert Version.new("1.0-p1") < Version.new("1.0")
+    assert Version.new("1.0") == Version.new("01.0")
+    assert_equal Version.new("1.0").hash, Version.new("01.0").hash
+    assert_equal PkgVersion.parse("1.0_0").hash, Version.new("1.0").hash
+  end
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(
+        formula,
+        config,
+        ruby=_REAL_RUBY,
+        env={"PYBREW_VERSION_LEGACY": ""},
     )
     assert result.success is True

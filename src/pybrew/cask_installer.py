@@ -1869,14 +1869,16 @@ class CaskInstaller:
         ``["move", staged_source, target]``,
         ``["hardlink", staged_source, target]``,
         ``["symlink", relative_link_target, target]`` (``link`` is an alias),
-        and ``["chmod", octal_mode, target]``.  Targets are relative to the
-        artifact's dirmethod base (absolute targets must stay inside it);
-        symlink targets must be relative and stay inside the base.  ``copy``
-        handles files and whole directories (``copytree``).  All
-        structural/source/target validation happens before anything is
-        installed; chmod existence is checked when that step executes and
-        chmod-affected paths are deliberately not added to the receipt (they
-        are modifications, not newly installed paths).
+        and ``["chmod", octal_mode, target]``.  `chmod` also accepts an
+        optional fourth element (``true``/``"track"``) requiring the target to
+        have been created by an earlier step so it is receipt-tracked; with no
+        fourth element chmod is a pure modification and is NOT added to the
+        receipt.  Targets are relative to the artifact's dirmethod base
+        (absolute targets must stay inside it); symlink targets must be
+        relative and stay inside the base.  ``copy`` handles files and whole
+        directories (``copytree``).  All structural/source/target validation
+        happens before anything is installed; chmod existence is checked when
+        that step executes.
         """
 
         if not isinstance(step, (list, tuple)) or len(step) < 2:
@@ -1967,11 +1969,33 @@ class CaskInstaller:
                 ),
             }
         if op == "chmod":
-            if len(step) != 3:
+            if len(step) not in (3, 4):
                 raise CaskError(
                     f"{cask.token}: generic artifact 'chmod' step takes "
-                    "mode and target"
+                    "mode, target and an optional track flag"
                 )
+            track = False
+            if len(step) == 4:
+                raw_track = step[3]
+                if isinstance(raw_track, bool):
+                    track = raw_track
+                elif isinstance(raw_track, str):
+                    flag = raw_track.strip().lstrip(":").lower()
+                    if flag in ("track", "true", "yes", "1", "tracked"):
+                        track = True
+                    elif flag in ("untracked", "false", "no", "0"):
+                        track = False
+                    else:
+                        raise CaskError(
+                            f"{cask.token}: generic artifact chmod track "
+                            f"flag {raw_track!r} must be true/false or "
+                            "'track'/'untracked'"
+                        )
+                else:
+                    raise CaskError(
+                        f"{cask.token}: generic artifact chmod track flag "
+                        "must be a boolean or a track/untracked string"
+                    )
             raw_mode = step[1]
             if isinstance(raw_mode, bool):
                 raise CaskError(
@@ -2004,6 +2028,7 @@ class CaskInstaller:
             return {
                 "op": op,
                 "mode": mode,
+                "track": track,
                 "destination": self._generic_step_destination(
                     cask, base_dir, step[2]
                 ),
@@ -2066,6 +2091,7 @@ class CaskInstaller:
             for step in raw_steps
         ]
         created: list[Path] = []
+        moved: list[tuple[Path, Path]] = []
         try:
             for item in planned:
                 op = str(item["op"])
@@ -2076,6 +2102,17 @@ class CaskInstaller:
                             f"{cask.token}: generic artifact chmod target "
                             f"{destination} must be an existing "
                             "non-symlink path"
+                        )
+                    covered_by_created = any(
+                        destination == path
+                        or path in destination.parents
+                        for path in created
+                    )
+                    if bool(item.get("track")) and not covered_by_created:
+                        raise CaskError(
+                            f"{cask.token}: generic artifact cannot "
+                            f"receipt-track chmod target {destination} "
+                            "because it was not created by an earlier step"
                         )
                     os.chmod(destination, int(item["mode"]))
                     continue
@@ -2101,7 +2138,9 @@ class CaskInstaller:
                         shutil.copy2(source, destination)
                 elif op == "move":
                     destination.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.move(str(item["source"]), str(destination))
+                    source = Path(item["source"])
+                    shutil.move(str(source), str(destination))
+                    moved.append((source, destination))
                 elif op == "hardlink":
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     os.link(Path(item["source"]), destination)
@@ -2126,6 +2165,19 @@ class CaskInstaller:
                     )
                 created.append(destination)
         except Exception:
+            # Best-effort restoration of moved staged sources before removing
+            # the paths this install created.
+            for source, destination in reversed(moved):
+                try:
+                    if (
+                        (destination.exists() or destination.is_symlink())
+                        and not source.exists()
+                        and not source.is_symlink()
+                    ):
+                        source.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(destination), str(source))
+                except Exception:
+                    pass
             for path in reversed(created):
                 try:
                     self._remove_path(path)

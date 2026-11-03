@@ -1835,3 +1835,223 @@ def test_zap_removes_directory_recursively(
 
     assert removed == [tree]
     assert not tree.exists()
+
+
+# ---------------------------------------------------------------------------
+# Wave 10: chmod tracking and rollback restoration edges
+# ---------------------------------------------------------------------------
+
+
+def test_generic_artifact_steps_chmod_tracked_on_created_path(
+    cask_env: SimpleNamespace,
+) -> None:
+    import os
+    import stat as stat_module
+
+    _write_steps_cask(
+        cask_env,
+        (
+            '  artifact "ignored", steps: ['
+            '["copy", "files/app.txt", "tracked.txt"], '
+            '["chmod", "600", "tracked.txt", "track"]]'
+        ),
+    )
+
+    result = cask_env.installer.install(cask_env.loader.load("steps"))
+
+    target = cask_env.config.applications / "tracked.txt"
+    assert stat_module.S_IMODE(os.stat(target).st_mode) == 0o600
+    assert result.artifacts == [str(target)]
+    cask_env.installer.uninstall("steps")
+    assert not target.exists()
+
+
+def test_generic_artifact_steps_chmod_tracked_inside_copied_directory(
+    cask_env: SimpleNamespace,
+) -> None:
+    _write_steps_cask(
+        cask_env,
+        (
+            '  artifact "ignored", steps: ['
+            '["copy", "tree", "tracked-tree"], '
+            '["chmod", "600", "tracked-tree/readme.txt", "track"]]'
+        ),
+        entries={
+            "tree/readme.txt": b"tree readme\n",
+            "tree/nested/keep.txt": b"keep\n",
+        },
+    )
+
+    cask_env.installer.install(cask_env.loader.load("steps"))
+
+    target = cask_env.config.applications / "tracked-tree" / "readme.txt"
+    assert target.is_file()
+    cask_env.installer.uninstall("steps")
+    assert not (cask_env.config.applications / "tracked-tree").exists()
+
+
+def test_generic_artifact_steps_chmod_tracked_preexisting_rejected(
+    cask_env: SimpleNamespace,
+) -> None:
+    import os
+    import stat as stat_module
+
+    preexisting = cask_env.config.prefix / "share" / "pre.txt"
+    preexisting.parent.mkdir(parents=True, exist_ok=True)
+    preexisting.write_text("preexisting\n", encoding="utf-8")
+    before_mode = stat_module.S_IMODE(os.stat(preexisting).st_mode)
+    _write_steps_cask(
+        cask_env,
+        (
+            '  artifact "ignored", dirmethod: :prefix, steps: ['
+            '["chmod", "600", "share/pre.txt", true]]'
+        ),
+    )
+
+    with pytest.raises(CaskError, match="cannot receipt-track"):
+        cask_env.installer.install(cask_env.loader.load("steps"))
+    assert preexisting.is_file()
+    assert stat_module.S_IMODE(os.stat(preexisting).st_mode) == before_mode
+
+
+def test_generic_artifact_steps_chmod_invalid_track_flag(
+    cask_env: SimpleNamespace,
+) -> None:
+    _write_steps_cask(
+        cask_env,
+        '  artifact "ignored", steps: [["chmod", "644", "x.txt", "maybe"]]',
+    )
+
+    with pytest.raises(CaskError, match="track flag"):
+        cask_env.installer.install(cask_env.loader.load("steps"))
+
+
+def test_generic_artifact_steps_chmod_explicit_untracked(
+    cask_env: SimpleNamespace,
+) -> None:
+    import os
+    import stat as stat_module
+
+    preexisting = cask_env.config.prefix / "share" / "untracked.txt"
+    preexisting.parent.mkdir(parents=True, exist_ok=True)
+    preexisting.write_text("untracked\n", encoding="utf-8")
+    _write_steps_cask(
+        cask_env,
+        (
+            '  artifact "ignored", dirmethod: :prefix, steps: ['
+            '["chmod", "640", "share/untracked.txt", "untracked"]]'
+        ),
+    )
+
+    cask_env.installer.install(cask_env.loader.load("steps"))
+
+    assert (
+        stat_module.S_IMODE(os.stat(preexisting).st_mode) == 0o640
+    )
+    cask_env.installer.uninstall("steps")
+    assert preexisting.is_file()
+
+
+def _unit_steps_rollback(
+    cask_env: SimpleNamespace,
+    staging: Path,
+    steps: list[object],
+) -> None:
+    from pybrew.cask import Artifact
+
+    cask = parse_cask_source(
+        'cask "unit-rollback" do\n  version "1.0"\nend\n'
+    )
+    artifact = Artifact(
+        "artifact", "ignored", None, {"steps": steps}
+    )
+    with pytest.raises(CaskError):
+        cask_env.installer._install_generic_artifact_steps(
+            cask, artifact, staging, False, []
+        )
+
+
+def test_steps_move_rollback_restores_staged_source(
+    cask_env: SimpleNamespace,
+) -> None:
+    staging = cask_env.tmp_path / "staging-move"
+    staging.mkdir()
+    source = staging / "move.txt"
+    source.write_text("move payload\n", encoding="utf-8")
+
+    _unit_steps_rollback(
+        cask_env,
+        staging,
+        [
+            ["move", "move.txt", "out.txt"],
+            ["chmod", "644", "missing.txt"],
+        ],
+    )
+
+    assert source.is_file()
+    assert source.read_text() == "move payload\n"
+    assert not (cask_env.config.applications / "out.txt").exists()
+
+
+def test_steps_copy_directory_rollback(
+    cask_env: SimpleNamespace,
+) -> None:
+    staging = cask_env.tmp_path / "staging-copy"
+    tree = staging / "tree"
+    tree.mkdir(parents=True)
+    (tree / "keep.txt").write_text("keep\n", encoding="utf-8")
+
+    _unit_steps_rollback(
+        cask_env,
+        staging,
+        [
+            ["copy", "tree", "out-tree"],
+            ["chmod", "644", "missing.txt"],
+        ],
+    )
+
+    assert tree.is_dir()
+    assert (tree / "keep.txt").is_file()
+    assert not (cask_env.config.applications / "out-tree").exists()
+
+
+def test_steps_hardlink_rollback(
+    cask_env: SimpleNamespace,
+) -> None:
+    staging = cask_env.tmp_path / "staging-hard"
+    staging.mkdir()
+    source = staging / "hard.txt"
+    source.write_text("hard payload\n", encoding="utf-8")
+
+    _unit_steps_rollback(
+        cask_env,
+        staging,
+        [
+            ["hardlink", "hard.txt", "out-hard.txt"],
+            ["chmod", "644", "missing.txt"],
+        ],
+    )
+
+    assert source.is_file()
+    assert not (cask_env.config.applications / "out-hard.txt").exists()
+
+
+def test_steps_symlink_rollback(
+    cask_env: SimpleNamespace,
+) -> None:
+    staging = cask_env.tmp_path / "staging-link"
+    staging.mkdir()
+    source = staging / "link-source.txt"
+    source.write_text("source\n", encoding="utf-8")
+
+    _unit_steps_rollback(
+        cask_env,
+        staging,
+        [
+            ["symlink", "link-source.txt", "out-link.txt"],
+            ["chmod", "644", "missing.txt"],
+        ],
+    )
+
+    assert source.is_file()
+    assert not (cask_env.config.applications / "out-link.txt").exists()

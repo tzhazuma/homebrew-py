@@ -1186,6 +1186,44 @@ def test_ruby_render_time_user_env_uses_injectable_context(
     )
 
 
+@requires_ruby
+def test_ruby_standalone_spec_render_rereads_explicit_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    allow_ruby: None,
+    non_root: None,
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    user_home = tmp_path / "user-config"
+    env_path = _write_user_env(user_home, "svc", "FOO=one\n")
+    monkeypatch.setenv(USER_CONFIG_HOME_ENV, str(user_home))
+    formula = _formula_with_service(
+        'run [opt_bin/"svc"]\nenvironment_variables FOO: "formula"'
+    )
+    spec = parse_service_block(formula, config)
+    assert spec.formula_name == "svc"
+    assert spec.user_environment_variables == {"FOO": "one"}
+
+    # Drop the ambient context; the standalone spec can still re-read on
+    # demand via an explicit user_config_home.
+    monkeypatch.delenv(USER_CONFIG_HOME_ENV, raising=False)
+    env_path.write_text("FOO=two\nBAR=added\n", encoding="utf-8")
+    env_path.chmod(0o600)
+
+    assert spec.effective_environment_variables(user_config_home=user_home) == {
+        "FOO": "two",
+        "BAR": "added",
+    }
+    assert spec.render_environment_variables(
+        default_path=str(config.prefix / "bin"), user_config_home=user_home
+    ) == {"FOO": "two", "BAR": "added", "PATH": str(config.prefix / "bin")}
+    # Without an explicit context the parse-time snapshot is still used.
+    assert spec.render_environment_variables() == {"FOO": "one"}
+    # No stale mutation of the evaluator's snapshot or declared env.
+    assert spec.user_environment_variables == {"FOO": "one"}
+    assert spec.environment_variables == {"FOO": "formula"}
+
+
 def test_user_service_env_bounded_parse_and_security(
     tmp_path: Path,
     non_root: None,

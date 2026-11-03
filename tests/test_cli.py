@@ -203,3 +203,15 @@ def test_livecheck_headers_and_invalid_header(run_cli, tmp_path: Path) -> None:
     proc = run_cli("livecheck", "livecheck", "--page", str(page), "--header", "bad")
     assert proc.returncode == 1
     assert "invalid --header" in proc.stderr
+
+
+def test_linkage_json_structure(run_cli, sample) -> None:
+    assert run_cli("install", "hello", bottle_tag=sample.tag).returncode == 0
+    proc = run_cli("linkage", "hello", "--json")
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert isinstance(payload["checked"], int)
+    assert payload["issues"] == []
+    assert isinstance(payload["unsupported"], list)
+    assert isinstance(payload["corrupt"], list)
+    assert isinstance(payload["audit"], list)

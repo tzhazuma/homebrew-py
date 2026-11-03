@@ -7845,3 +7845,113 @@ def test_utils_github_graphql_pagination_rate_limit_enterprise(
         "10",
         "true",
     ]
+
+
+def test_keg_binary_relocation_fake_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    tool_log = tmp_path / "binary-tool.log"
+    fake_tool = tmp_path / "fake-binary-tool"
+    fake_tool.write_text(
+        "#!/bin/sh\n"
+        'printf \'%s\\n\' "$@" >> "' + str(tool_log) + '"\n'
+        "exit 0\n"
+    )
+    fake_tool.chmod(0o755)
+    monkeypatch.setenv("PYBREW_INSTALL_NAME_TOOL", str(fake_tool))
+    monkeypatch.setenv("PYBREW_PATCHELF", str(fake_tool))
+    monkeypatch.setenv("FAKE_BINARY_TOOL_LOG", str(tool_log))
+    keg = _run_raw_body(
+        tmp_path,
+        """
+keg_path = prefix
+(keg_path/"bin").mkpath
+macho = keg_path/"bin"/"macho"
+macho.binwrite([0xCF, 0xFA, 0xED, 0xFE].pack("C*") + "dummy")
+elf = keg_path/"bin"/"elf"
+elf.binwrite([0x7F, 0x45, 0x4C, 0x46].pack("C*") + "dummy")
+outside = Pathname.new(Dir.tmpdir)/"pybrew-reloc-binary-#{Process.pid}"
+outside.binwrite([0xCF, 0xFA, 0xED, 0xFE].pack("C*") + "outside")
+link = keg_path/"bin"/"linked"
+link.make_symlink(outside) unless link.symlink?
+keg = Keg.new(keg_path)
+mapping = { "/old/lib" => "/new/lib" }
+dry = keg.relocate_binary_files(mapping, dry_run: true)
+real = keg.relocate_binary_files(mapping)
+log = Pathname.new(ENV["FAKE_BINARY_TOOL_LOG"]).read
+outside_raw = File.binread(outside.to_s)
+ENV["PYBREW_INSTALL_NAME_TOOL"] = "/nonexistent/install_name_tool"
+missing = keg.relocate_binary_files(mapping)
+missing_strict = begin
+  keg.relocate_binary_files(mapping, strict: true)
+  "none"
+rescue => error
+  error.class.name + "|" + error.message.include?("tool unavailable").to_s
+end
+(prefix/"binary-relocation.txt").write [
+  dry["files"].length.to_s, dry["commands"].length.to_s,
+  real["executed"].length.to_s,
+  log.include?("-change").to_s, log.include?("--replace-needed").to_s,
+  log.include?("linked").to_s, outside_raw.include?("outside").to_s,
+  missing["skipped"].length.to_s, missing_strict,
+  dry["files"].any? { |file| file.end_with?("macho") }.to_s
+].join("\\n")
+""",
+        name="ruby-keg-binary-relocation",
+    )
+    assert (keg / "binary-relocation.txt").read_text().splitlines() == [
+        "2",
+        "2",
+        "2",
+        "true",
+        "true",
+        "false",
+        "true",
+        "1",
+        "RuntimeError|true",
+        "true",
+    ]
+
+
+def test_sandbox_strict_bwrap_args(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    fake_bwrap = tmp_path / "bwrap"
+    fake_bwrap.write_text("#!/bin/sh\nexit 0\n")
+    fake_bwrap.chmod(0o755)
+    formula = _formula(
+        "ruby-bwrap-strict",
+        "1.0",
+        (
+            '  ENV["PYBREW_SANDBOX"] = "1"\n'
+            '  ENV["PYBREW_SANDBOX_STRICT"] = "1"\n'
+            '  ENV["PYBREW_SANDBOX_PATH"] = "' + str(fake_bwrap) + '"\n'
+            '  Sandbox.allow_write("/tmp/out")\n'
+            '  args = Sandbox.bwrap_policy_args\n'
+            '  joined = args.join(",")\n'
+            '  network_unshared = args.include?("--unshare-net")\n'
+            '  Sandbox.allow_network\n'
+            '  network_args = Sandbox.bwrap_policy_args.join(",")\n'
+            '  (prefix/"bwrap-strict.txt").write [\n'
+            '    joined.include?("--ro-bind,/System,/System").to_s,\n'
+            '    joined.include?("--ro-bind,/usr,/usr").to_s,\n'
+            '    joined.include?("--ro-bind,/,/").to_s,\n'
+            '    joined.include?("--bind,/tmp/out,/tmp/out").to_s,\n'
+            '    network_unshared.to_s,\n'
+            '    network_args.include?("--unshare-net").to_s,\n'
+            '    joined.include?("--dev,/dev").to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "bwrap-strict.txt").read_text().splitlines() == [
+        "true",
+        "true",
+        "false",
+        "true",
+        "true",
+        "false",
+        "true",
+    ]

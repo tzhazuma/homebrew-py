@@ -198,7 +198,9 @@ def test_homebrew_mode_env_null_token(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Version("1.0") != Version("1.0.0")
     assert Version("1.0-p1") < Version("1.0")
     assert compare_versions("1.0.0", "1.0", missing_numeric_zero=True) == 0
-    assert hash(Version("1.0")) == hash("1.0")
+    assert Version("1.0") == Version("01.0")
+    assert hash(Version("1.0")) == hash(Version("01.0"))
+    assert hash(PkgVersion("1.0", 0)) == hash(Version("1.0"))
 
 
 def test_homebrew_mode_class_flag_and_context() -> None:
@@ -268,3 +270,47 @@ def test_version_token_hierarchy_and_precedence() -> None:
     assert hash(NullToken()) == hash(NumericToken(0))
     assert hash(AlphaToken("alpha", 1)) != hash(AlphaToken("alpha", 2))
     assert hash(PkgVersion("1.0", 2)) != hash(PkgVersion("1.0", 0))
+
+
+def test_version_homebrew_bounded_table_and_hash_consistency() -> None:
+    versions = [
+        "1.0",
+        "1.0.0",
+        "1.0-alpha",
+        "1.0-p1",
+        "1.0-post1",
+        "1.0-foo",
+        "1.0.1",
+    ]
+    expected = [
+        [0, 0, 1, -1, -1, -1, -1],
+        [0, 0, 0, 0, 0, 0, -1],
+        [-1, -1, 0, -1, -1, -1, -1],
+        [1, 1, 1, 0, 1, 1, -1],
+        [1, 1, 1, -1, 0, -1, -1],
+        [1, 1, 1, -1, 1, 0, -1],
+        [1, 1, 1, 1, 1, 1, 0],
+    ]
+    objects = [Version(value) for value in versions]
+
+    for left_index, left_name in enumerate(versions):
+        for right_index, right_name in enumerate(versions):
+            comparison = expected[left_index][right_index]
+            left = objects[left_index]
+            right = objects[right_index]
+            assert compare_versions(left_name, right_name) == comparison
+            assert (left < right) == (comparison < 0)
+            assert (left > right) == (comparison > 0)
+            assert (left == right) == (comparison == 0)
+            if comparison == 0:
+                assert hash(left) == hash(right)
+
+
+def test_version_legacy_hash_consistency() -> None:
+    with Version.legacy_mode():
+        assert compare_versions("1.0.0", "1.0") > 0
+        assert Version("1.0.0") > Version("1.0")
+        assert Version("1.0-p1") < Version("1.0")
+        assert Version("1.0") == Version("01.0")
+        assert hash(Version("1.0")) == hash(Version("01.0"))
+        assert hash(PkgVersion("1.0", 0)) == hash(Version("1.0"))
