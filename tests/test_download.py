@@ -168,3 +168,15 @@ def test_fetch_using_curl_strategy(tmp_path: Path) -> None:
     archive = downloader.fetch(source.as_uri(), digest, hint="payload", using="curl")
     assert archive.read_bytes() == payload
     assert digest in archive.name
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="curl not installed")
+def test_fetch_homebrew_curl_strategy_alias(tmp_path: Path) -> None:
+    payload = b"homebrew curl alias"
+    source = tmp_path / "alias.bin"
+    source.write_bytes(payload)
+    digest = hashlib.sha256(payload).hexdigest()
+    archive = Downloader(tmp_path / "cache").fetch(
+        source.as_uri(), digest, hint="alias", using=":homebrew_curl"
+    )
+    assert archive.read_bytes() == payload

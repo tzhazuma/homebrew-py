@@ -181,7 +181,7 @@ class Downloader:
         using: Optional[str] = None,
     ) -> None:
         strategy = str(using or "").lstrip(":").lower()
-        if strategy == "curl":
+        if strategy in ("curl", "homebrew_curl"):
             self._curl_download(url, destination, headers)
             return
         if headers and urllib.parse.urlparse(url).scheme == "file":
