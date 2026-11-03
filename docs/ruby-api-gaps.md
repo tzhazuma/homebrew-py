@@ -6,7 +6,7 @@ claiming full parity with every file under `Library/Homebrew`.
 
 ## Current baseline
 
-- Full test suite: 786 passed, 5 skipped (after Utils::Curl completion)
+- Full test suite: 787 passed, 5 skipped (after Bottle specification helpers)
 - CI: Ubuntu 3.9 / 3.12 + macOS 3.12
 - Optional Ruby bridge remains opt-in; default parser behavior is unchanged.
 

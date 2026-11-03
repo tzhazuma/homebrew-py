@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-786 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+787 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -898,6 +898,11 @@ local remote, commits a change, and confirms the CLI updates it.
   `#build=` compatibility accessors; `specs` returns stable/head and
   `spec_syms` matches.
 
+## Bottle specification collection helpers
+
+- `PybrewBottleSpec` now supports `tags`, `each_tag`, `tag?`,
+  `find_matching_tag`, `specification_for`, `add`, and `eql?`.
+
 ## Complete Utils::Curl helper surface
 
 - Added the remaining curl check/download/headers/redirect/checksum/workaround
@@ -1451,9 +1456,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `1c96619` (complete Utils::Curl helpers)
-- CI run for `1c96619`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41562390511>
+- Latest feature commit: `9622bef` (Bottle specification helpers)
+- CI run for `9622bef`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41562783915>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
