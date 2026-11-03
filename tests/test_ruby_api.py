@@ -5829,3 +5829,29 @@ names = Utils::Bottles.resolve_formula_names("{bottle}")
         "true",
         "publishing without one anyway",
     ]
+
+
+def test_patch_apply_real_file_raw(tmp_path: Path) -> None:
+    build = tmp_path / "build"
+    build.mkdir()
+    (build / "hello.txt").write_text("old\n")
+    patch_file = tmp_path / "change.diff"
+    patch_file.write_text(
+        "--- a/hello.txt\n"
+        "+++ b/hello.txt\n"
+        "@@ -1 +1 @@\n"
+        "-old\n"
+        "+new\n"
+    )
+    keg = _run_raw_body(
+        tmp_path,
+        f"""
+patch = PybrewPatch.new
+patch.url("{patch_file}")
+patch.strip(:p1)
+patch.apply
+(prefix/"applied.txt").write File.read("hello.txt")
+""",
+        name="raw-body",
+    )
+    assert (keg / "applied.txt").read_text() == "new\n"

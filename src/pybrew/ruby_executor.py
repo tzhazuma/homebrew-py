@@ -8721,6 +8721,26 @@ class PybrewPatch
   end
 
   def apply(*_args)
+    source = @url.to_s
+    text = if File.file?(source)
+      File.read(source)
+    elsif File.file?(File.basename(source))
+      File.read(File.basename(source))
+    else
+      raise "Patch source not found: #{source}"
+    end
+    strip_value = @strip_level.nil? ? "p1" : @strip_level.to_s
+    strip_value = "p#{strip_value}" unless strip_value.start_with?("p")
+    Patch.ensure_targets_within!(text, strip: strip_value, base: Dir.pwd)
+    patch_binary = Utils.which("patch")
+    raise "patch executable not found" if patch_binary.nil?
+
+    output, status = Open3.capture2e(
+      patch_binary.to_s, "-g", "0", "-f", "-#{strip_value}",
+      stdin_data: text, chdir: Dir.pwd
+    )
+    raise "Patch failed: #{output}" unless status.success?
+
     nil
   end
 
