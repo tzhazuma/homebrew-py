@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-778 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+779 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -898,6 +898,14 @@ local remote, commits a change, and confirms the CLI updates it.
   `#build=` compatibility accessors; `specs` returns stable/head and
   `spec_syms` matches.
 
+## Ruby Service object shim
+
+- Added the `Service` Ruby class: naming/default plist, `run`/command,
+  keep-alive/root/run-at-load/launch-only-once, interval/cron parsing,
+  environment variables, path dirs, plist/systemd unit/timer rendering, and
+  `from_hash`.
+- Closed the remaining `service.rb` method-name gap in the shim.
+
 ## Upstream sync (2026-11-02)
 
 - Upstream exploratory PR Homebrew/brew#24362 remains closed (2026-10-28);
@@ -1408,9 +1416,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `cd8672f` (upstream ENV/Tab/installer sync)
-- CI run for `cd8672f`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41557969995>
+- Latest feature commit: `f818d9f` (Ruby Service object shim)
+- CI run for `f818d9f`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41558872302>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
