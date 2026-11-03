@@ -1730,10 +1730,39 @@ class CaskInstaller:
         """Resolve the bounded destination of a generic ``artifact`` stanza.
 
         Homebrew's generic artifact requires ``target:`` and is a "moved"
-        artifact.  pybrew resolves a relative target under the cask appdir and
-        accepts an absolute target only when it stays below appdir, library_root
-        or the prefix; anything else is rejected.
+        artifact resolved against a destination base ("dirmethod"-like).  pybrew
+        supports ``dirmethod:``/``base_dir:`` with ``appdir`` (default),
+        ``prefix`` or ``library_root``; a relative target resolves under that
+        base.  Absolute targets must stay below the selected base (or, without
+        an explicit base, below appdir/library_root/the prefix).  Any other
+        keyword (for example ``steps:``) is rejected explicitly.
         """
+
+        kwargs = artifact.kwargs if isinstance(artifact.kwargs, dict) else {}
+        supported = {"target", "dirmethod", "base_dir"}
+        unsupported = sorted(
+            str(key) for key in kwargs if str(key) not in supported
+        )
+        if unsupported:
+            raise CaskError(
+                f"{cask.token}: generic artifact options are not supported by "
+                f"pybrew: {', '.join(unsupported)} (only target/dirmethod/"
+                "base_dir are bounded)"
+            )
+        raw_base = kwargs.get("dirmethod") or kwargs.get("base_dir")
+        explicit_base = raw_base is not None
+        base_name = str(raw_base).lstrip(":") if explicit_base else "appdir"
+        bases = {
+            "appdir": self.appdir,
+            "prefix": self.config.prefix,
+            "library_root": self.library_root,
+        }
+        if base_name not in bases:
+            raise CaskError(
+                f"{cask.token}: unsupported generic artifact dirmethod "
+                f"{raw_base!r}; expected one of appdir, prefix, library_root"
+            )
+        base_dir = bases[base_name]
 
         target = artifact.target
         if target is None or not str(target).strip():
@@ -1743,8 +1772,12 @@ class CaskInstaller:
         expanded = Path(os.path.expanduser(str(target)))
         if expanded.is_absolute():
             candidate = Path(os.path.abspath(str(expanded)))
+            if explicit_base:
+                root_candidates = [base_dir]
+            else:
+                root_candidates = [self.appdir, self.library_root, self.config.prefix]
             roots: list[Path] = []
-            for root in (self.appdir, self.library_root, self.config.prefix):
+            for root in root_candidates:
                 try:
                     roots.append(Path(root).resolve())
                 except OSError:
@@ -1764,7 +1797,7 @@ class CaskInstaller:
         relative = _safe_artifact_target(
             str(target), source_name, cask.token
         )
-        return self.appdir / relative
+        return Path(base_dir) / relative
 
     def _install_manpage_artifact(
         self,

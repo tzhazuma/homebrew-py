@@ -3759,8 +3759,7 @@ module Sandbox
       when :sandbox_exec
         [executable, "-p", "(version 1)(allow default)", *argv]
       when :bwrap
-        [executable, "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
-         "--unshare-net", "--", *argv]
+        [executable, *bwrap_policy_args, "--", *argv]
       else
         [executable, *argv]
       end
@@ -3788,6 +3787,99 @@ module Sandbox
       nil
     end
 
+    def rule_collection_enabled?
+      ENV[SANDBOX_ENV].to_s == "1"
+    end
+
+    def rules
+      @rules ||= []
+    end
+
+    def reset_rules!
+      @rules = []
+      @applied_policy = nil
+      nil
+    end
+
+    def collect_rule!(kind, payload = nil)
+      unless rule_collection_enabled?
+        raise NotImplementedError,
+              "Sandbox rule collection requires PYBREW_SANDBOX=1; sandbox policy " \
+              "generation is disabled by default"
+      end
+      rules << { kind: kind.to_sym, payload: payload }
+      self
+    end
+
+    def rule_paths(payload)
+      Array(payload).flatten.compact.map(&:to_s)
+    end
+
+    def sandbox_escape(value)
+      value.to_s.gsub("\\", "\\\\").gsub("\"", "\\\"")
+    end
+
+    def applied_policy
+      @applied_policy
+    end
+
+    def sandbox_profile
+      lines = ["(version 1)", "(allow default)"]
+      rules.each do |rule|
+        kind = rule[:kind]
+        paths = rule_paths(rule[:payload])
+        case kind
+        when :raw
+          paths.each { |raw| lines << raw if raw.start_with?("(") }
+        when :allow_read
+          if paths.empty?
+            lines << "(allow file-read*)"
+          else
+            paths.each { |path| lines << "(allow file-read* (subpath \"#{sandbox_escape(path)}\"))" }
+          end
+        when :allow_write
+          if paths.empty?
+            lines << "(allow file-write*)"
+          else
+            paths.each { |path| lines << "(allow file-write* (subpath \"#{sandbox_escape(path)}\"))" }
+          end
+        when :deny_read
+          if paths.empty?
+            lines << "(deny file-read*)"
+          else
+            paths.each { |path| lines << "(deny file-read* (subpath \"#{sandbox_escape(path)}\"))" }
+          end
+        when :deny_write
+          if paths.empty?
+            lines << "(deny file-write*)"
+          else
+            paths.each { |path| lines << "(deny file-write* (subpath \"#{sandbox_escape(path)}\"))" }
+          end
+        when :allow_network
+          lines << "(allow network*)"
+        when :deny_network
+          lines << "(deny network*)"
+        when :allow_process_exec
+          lines << "(allow process-exec)"
+        end
+      end
+      lines.join("\n")
+    end
+
+    def bwrap_policy_args
+      args = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
+      write_paths = []
+      rules.each do |rule|
+        next unless rule[:kind] == :allow_write
+
+        write_paths.concat(rule_paths(rule[:payload]))
+      end
+      write_paths.uniq.each { |path| args << "--bind" << path << path }
+      network_allowed = rules.any? { |rule| rule[:kind] == :allow_network }
+      args << "--unshare-net" unless network_allowed
+      args
+    end
+
     def unsupported_isolation!(name)
       raise NotImplementedError,
             "Sandbox.#{name} is not implemented in the pybrew Ruby shim: " \
@@ -3795,8 +3887,8 @@ module Sandbox
             "(Sandbox.available? is #{available?})"
     end
 
-    def add_rule(*_args, **_kwargs)
-      unsupported_isolation!(:add_rule)
+    def add_rule(*args, **_kwargs)
+      collect_rule!(:raw, args)
     end
 
     def add_install_hook_rules(*_args, **_kwargs)
@@ -3804,63 +3896,73 @@ module Sandbox
     end
 
     def allow_cvs(*_args, **_kwargs)
-      unsupported_isolation!(:allow_cvs)
+      collect_rule!(:noop, :allow_cvs)
     end
 
     def allow_fossil(*_args, **_kwargs)
-      unsupported_isolation!(:allow_fossil)
+      collect_rule!(:noop, :allow_fossil)
     end
 
     def allow_network(*_args, **_kwargs)
-      unsupported_isolation!(:allow_network)
+      collect_rule!(:allow_network, :network)
     end
 
     def allow_process_exec(*_args, **_kwargs)
-      unsupported_isolation!(:allow_process_exec)
+      collect_rule!(:allow_process_exec, :process_exec)
     end
 
-    def allow_read(*_args, **_kwargs)
-      unsupported_isolation!(:allow_read)
+    def allow_read(*paths, **_kwargs)
+      collect_rule!(:allow_read, paths)
     end
 
-    def allow_read_if_exists(*_args, **_kwargs)
-      unsupported_isolation!(:allow_read_if_exists)
+    def allow_read_if_exists(*paths, **_kwargs)
+      collect_rule!(:allow_read, paths)
     end
 
-    def allow_write(*_args, **_kwargs)
-      unsupported_isolation!(:allow_write)
+    def allow_write(*paths, **_kwargs)
+      collect_rule!(:allow_write, paths)
     end
 
     def allow_write_cellar(*_args, **_kwargs)
-      unsupported_isolation!(:allow_write_cellar)
+      collect_rule!(:allow_write, HOMEBREW_CELLAR)
     end
 
     def allow_write_log(*_args, **_kwargs)
-      unsupported_isolation!(:allow_write_log)
+      collect_rule!(:allow_write, "#{HOMEBREW_PREFIX}/var/log")
     end
 
-    def allow_write_path(*_args, **_kwargs)
-      unsupported_isolation!(:allow_write_path)
+    def allow_write_path(*paths, **_kwargs)
+      collect_rule!(:allow_write, paths)
     end
 
-    def allow_write_path_if_exists(*_args, **_kwargs)
-      unsupported_isolation!(:allow_write_path_if_exists)
+    def allow_write_path_if_exists(*paths, **_kwargs)
+      collect_rule!(:allow_write, paths)
     end
 
     def allow_write_system_temp(*_args, **_kwargs)
-      unsupported_isolation!(:allow_write_system_temp)
+      collect_rule!(:allow_write, "/tmp")
     end
 
     def allow_write_temp_and_cache(*_args, **_kwargs)
-      unsupported_isolation!(:allow_write_temp_and_cache)
+      collect_rule!(:allow_write, ENV["TMPDIR"] || "/tmp")
     end
 
     def allow_write_xcode(*_args, **_kwargs)
-      unsupported_isolation!(:allow_write_xcode)
+      collect_rule!(:allow_write, "/Applications/Xcode.app")
     end
 
     def apply!(*_args, **_kwargs)
-      unsupported_isolation!(:apply!)
+      unless enabled?
+        raise NotImplementedError,
+              "Sandbox.apply! requires PYBREW_SANDBOX=1 and an available sandbox " \
+              "backend; the default remains disabled"
+      end
+      @applied_policy = if backend == :bwrap
+        { "backend" => "bwrap", "args" => bwrap_policy_args }
+      else
+        { "backend" => backend.to_s, "profile" => sandbox_profile }
+      end
+      true
     end
 
     def capture(*_args, **_kwargs)
@@ -3876,31 +3978,31 @@ module Sandbox
     end
 
     def deny_all_network(*_args, **_kwargs)
-      unsupported_isolation!(:deny_all_network)
+      collect_rule!(:deny_network, :network)
     end
 
-    def deny_read(*_args, **_kwargs)
-      unsupported_isolation!(:deny_read)
+    def deny_read(*paths, **_kwargs)
+      collect_rule!(:deny_read, paths)
     end
 
     def deny_read_home(*_args, **_kwargs)
-      unsupported_isolation!(:deny_read_home)
+      collect_rule!(:deny_read, ENV["HOME"])
     end
 
-    def deny_read_path(*_args, **_kwargs)
-      unsupported_isolation!(:deny_read_path)
+    def deny_read_path(*paths, **_kwargs)
+      collect_rule!(:deny_read, paths)
     end
 
-    def deny_write(*_args, **_kwargs)
-      unsupported_isolation!(:deny_write)
+    def deny_write(*paths, **_kwargs)
+      collect_rule!(:deny_write, paths)
     end
 
     def deny_write_homebrew_repository(*_args, **_kwargs)
-      unsupported_isolation!(:deny_write_homebrew_repository)
+      collect_rule!(:deny_write, HOMEBREW_REPOSITORY)
     end
 
-    def deny_write_path(*_args, **_kwargs)
-      unsupported_isolation!(:deny_write_path)
+    def deny_write_path(*paths, **_kwargs)
+      collect_rule!(:deny_write, paths)
     end
 
     def protect_homebrew_state(*_args, **_kwargs)
@@ -8512,6 +8614,8 @@ module Formulary
   end
 
   API_JSON_ENV = "PYBREW_FORMULA_API_JSON"
+  API_URL_ENV = "PYBREW_FORMULA_API_URL"
+  API_CURL_ENV = "PYBREW_FORMULA_API_CURL"
   TAPS_ENV = "PYBREW_TAPS"
 
   # Bounded local Homebrew API JSON support.  The file is expected to contain
@@ -8525,7 +8629,60 @@ module Formulary
   end
 
   def api_json_configured?
-    !ENV[API_JSON_ENV].to_s.strip.empty? || !api_json_path.nil?
+    !ENV[API_JSON_ENV].to_s.strip.empty? || !api_json_path.nil? || !api_json_url.nil?
+  end
+
+  def api_json_url
+    raw = ENV[API_URL_ENV].to_s.strip
+    return nil if raw.empty?
+    unless raw.start_with?("http://", "https://")
+      raise PybrewFormulaUnavailableError,
+            "invalid #{API_URL_ENV} #{raw.inspect}: only http/https URLs are supported"
+    end
+
+    raw
+  end
+
+  # Bounded remote API JSON transport.  Uses curl (or a fake transport via
+  # PYBREW_FORMULA_API_CURL) and validates the same struct shapes as local
+  # files.  No network happens unless PYBREW_FORMULA_API_URL is set.
+  def remote_api_json_entries
+    url = api_json_url
+    return nil if url.nil?
+
+    cached = (@remote_api_json_cache ||= {})
+    return cached[:entries] if cached[:url] == url
+
+    transport = ENV[API_CURL_ENV].to_s.strip
+    transport = "curl" if transport.empty?
+    begin
+      text = Utils.popen_read(transport, "-fsSL", "--max-time", "30", url, safe: true).to_s
+    rescue ScriptError, StandardError => error
+      raise PybrewFormulaUnavailableError,
+            "failed to fetch API JSON from #{url} using #{transport.inspect}: " \
+            "#{error.class}: #{error.message}"
+    end
+    if text.strip.empty?
+      raise PybrewFormulaUnavailableError,
+            "failed to fetch API JSON from #{url} using #{transport.inspect} " \
+            "(empty response); set #{API_CURL_ENV} to a test transport if needed"
+    end
+    begin
+      data = JSON.parse(text)
+    rescue ScriptError, StandardError => error
+      raise PybrewFormulaUnavailableError,
+            "malformed API JSON from #{url}: #{error.class}: #{error.message}"
+    end
+    entries = api_json_entries(data, url)
+    @remote_api_json_cache = { url: url, entries: entries }
+    entries
+  end
+
+  def load_api_entries!(entries)
+    loaded = entries.map do |entry|
+      load_formula_from_struct!(api_struct_name(entry), entry)
+    end
+    loaded.length == 1 ? loaded.first : loaded
   end
 
   def api_json_file_entries(file)
@@ -8589,44 +8746,59 @@ module Formulary
   # malformed files/structs.
   def load_formula_from_api!(source = nil, path: nil)
     file = nil
-    entries =
-      if source.is_a?(Hash) || source.is_a?(Array)
-        api_json_entries(source, path || "inline API JSON")
-      else
-        file = path
-        if file.nil? && (source.is_a?(String) || source.is_a?(Pathname))
-          file = source
-        end
-        file = api_json_path if file.nil?
-        file = Pathname.new(file.to_s) unless file.nil?
-        if file.nil? || !file.file?
-          raise PybrewFormulaUnavailableError,
-                "API JSON file not found: #{file.nil? ? "(none configured)" : file}; " \
-                "set #{API_JSON_ENV} to a local formula JSON file"
-        end
-        api_json_file_entries(file)
+    if source.is_a?(Hash) || source.is_a?(Array)
+      entries = api_json_entries(source, path || "inline API JSON")
+    else
+      file = path
+      if file.nil? && (source.is_a?(String) || source.is_a?(Pathname))
+        file = source
       end
-
-    loaded = entries.map do |entry|
-      entry_name = api_struct_name(entry)
-      load_formula_from_struct!(entry_name, entry)
+      file = api_json_path if file.nil?
+      if file.nil?
+        entries = remote_api_json_entries
+        if entries.nil?
+          raise PybrewFormulaUnavailableError,
+                "API JSON file not found: (none configured); set #{API_JSON_ENV} " \
+                "to a local formula JSON file or #{API_URL_ENV} to an http(s) URL"
+        end
+      else
+        file = Pathname.new(file.to_s) unless file.is_a?(Pathname)
+        if !file.file?
+          raise PybrewFormulaUnavailableError,
+                "API JSON file not found: #{file}; set #{API_JSON_ENV} to a local " \
+                "formula JSON file or #{API_URL_ENV} to an http(s) URL"
+        end
+        entries = api_json_file_entries(file)
+      end
     end
+
+    loaded = load_api_entries!(entries)
     if !file.nil? && file.file?
       @api_json_loaded = { path: file.to_s, mtime: File.mtime(file.to_s).to_f }
     end
-    loaded.length == 1 ? loaded.first : loaded
+    loaded
   end
 
   def ensure_api_json_loaded
     file = api_json_path
-    return nil if file.nil? || !file.file?
+    if !file.nil? && file.file?
+      mtime = File.mtime(file.to_s).to_f
+      loaded = @api_json_loaded
+      return nil if loaded && loaded[:path] == file.to_s && loaded[:mtime] == mtime
 
-    mtime = File.mtime(file.to_s).to_f
+      load_formula_from_api!(path: file)
+      @api_json_loaded = { path: file.to_s, mtime: mtime }
+      return nil
+    end
+
+    url = api_json_url
+    return nil if url.nil?
+
     loaded = @api_json_loaded
-    return nil if loaded && loaded[:path] == file.to_s && loaded[:mtime] == mtime
+    return nil if loaded && loaded[:url] == url
 
-    load_formula_from_api!(path: file)
-    @api_json_loaded = { path: file.to_s, mtime: mtime }
+    load_api_entries!(remote_api_json_entries)
+    @api_json_loaded = { url: url }
     nil
   end
 
@@ -9081,6 +9253,7 @@ module Formulary
     @api_cache = {}
     @api_json_cache = {}
     @api_json_loaded = nil
+    @remote_api_json_cache = nil
     nil
   end
 

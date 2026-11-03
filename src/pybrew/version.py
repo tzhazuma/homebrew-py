@@ -7,15 +7,19 @@ homebrew-core, plus a small natural-order comparison used by ``deps``/``list``.
 Token semantics are a bounded approximation of Homebrew's ``Version`` parser:
 numeric and letter tokens, ranked pre-release words (alpha < beta < pre < rc <
 p < post), and the ``PkgVersion`` revision suffix are supported.  Deviations
-are intentional and documented on :class:`Version`: most notably
-``Version("1.0.0") > Version("1.0")`` (Homebrew's null token compares equal to
-a numeric zero), composite tokens such as ``alpha5`` are compared as separate
-letter/numeric tokens, and only :class:`PkgVersion` has a revision.
+are intentional and documented on :class:`Version`: most notably the default
+comparison keeps ``Version("1.0.0") > Version("1.0")`` (Homebrew's null token
+compares equal to a numeric zero), composite tokens such as ``alpha5`` are
+compared as separate letter/numeric tokens, and only :class:`PkgVersion` has a
+revision.  The closer Homebrew null-token behavior is available opt-in via
+``compare_versions(..., missing_numeric_zero=True)`` and
+``Version.homebrew_compare``.
 """
 
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from functools import total_ordering
 
 _ARCHIVE_SUFFIXES = (
@@ -136,14 +140,120 @@ def _compare_text_tokens(left: str, right: str) -> int:
     return -1 if left < right else 1
 
 
-def compare_versions(left: str, right: str) -> int:
+@dataclass(frozen=True)
+class _VersionToken:
+    """One classified version token (numeric, pre-release word, or letter)."""
+
+    kind: str  # "numeric", "pre", or "letter"
+    value: object  # int for numeric tokens, lower-case str otherwise
+    rank: int | None = None  # pre-release rank for kind == "pre"
+    revision: int = 0  # alpha2 / beta10 / p1 revision number
+
+
+_TOKEN_PATTERN = re.compile(
+    r"(?P<numeric>\d+)"
+    r"|(?P<pre>preview|alpha|beta|post|pre|rc|p)(?P<revision>\d*)"
+    r"|(?P<letter>[A-Za-z]+)",
+    re.IGNORECASE,
+)
+
+
+def _version_tokens(version: str) -> list[_VersionToken]:
+    tokens: list[_VersionToken] = []
+    for match in _TOKEN_PATTERN.finditer(version):
+        if match.group("numeric") is not None:
+            tokens.append(_VersionToken("numeric", int(match.group("numeric"))))
+        elif match.group("pre") is not None:
+            word = match.group("pre").lower()
+            if word == "preview":
+                word = "pre"
+            tokens.append(
+                _VersionToken(
+                    "pre",
+                    word,
+                    _PRE_RELEASE_RANK[word],
+                    int(match.group("revision") or 0),
+                )
+            )
+        else:
+            tokens.append(_VersionToken("letter", match.group("letter").lower()))
+    return tokens
+
+
+def _homebrew_token_compare(left: _VersionToken, right: _VersionToken) -> int:
+    """Compare two Homebrew-style tokens; missing tokens are handled by caller."""
+
+    if left.kind == "numeric" and right.kind == "numeric":
+        return (left.value > right.value) - (left.value < right.value)
+    if left.kind == "numeric":
+        return 1  # numeric tokens sort after letters/pre-release words
+    if right.kind == "numeric":
+        return -1
+    if left.kind == "pre" and right.kind == "pre":
+        left_rank = left.rank if left.rank is not None else 99
+        right_rank = right.rank if right.rank is not None else 99
+        if left_rank != right_rank:
+            return -1 if left_rank < right_rank else 1
+        if left.value != right.value:
+            return -1 if str(left.value) < str(right.value) else 1
+        return (left.revision > right.revision) - (left.revision < right.revision)
+    return _compare_text_tokens(str(left.value), str(right.value))
+
+
+def _homebrew_compare_token_lists(left: list[_VersionToken], right: list[_VersionToken]) -> int:
+    """Homebrew-style comparison where a missing token is a null token.
+
+    A null token compares equal to numeric zero, below non-zero numerics,
+    below pre-release words (alpha/beta/pre/rc), and below patch/post/unknown
+    letters.  This is opt-in so callers relying on pybrew's historical
+    extra-numeric behavior keep it.
+    """
+
+    length = max(len(left), len(right))
+    for index in range(length):
+        left_token = left[index] if index < len(left) else None
+        right_token = right[index] if index < len(right) else None
+        if left_token is None and right_token is None:
+            continue
+        if left_token is None:
+            assert right_token is not None
+            if right_token.kind == "numeric":
+                return 0 if right_token.value == 0 else -1
+            if right_token.kind == "pre":
+                return 1 if right_token.rank is not None and right_token.rank <= 3 else -1
+            return -1
+        if right_token is None:
+            if left_token.kind == "numeric":
+                return 0 if left_token.value == 0 else 1
+            if left_token.kind == "pre":
+                return -1 if left_token.rank is not None and left_token.rank <= 3 else 1
+            return 1
+        comparison = _homebrew_token_compare(left_token, right_token)
+        if comparison:
+            return comparison
+    return 0
+
+
+def compare_versions(
+    left: str, right: str, *, missing_numeric_zero: bool = False
+) -> int:
     """Return -1/0/1 for natural ordering of two version strings.
 
-    Numeric segments compare numerically, letter segments compare
-    case-insensitively after numeric segments, and a trailing letter token
-    (for example ``1.0-beta``) sorts before the plain release while extra
-    numeric segments (``1.0.0`` vs ``1.0``) keep their historical ordering.
+    By default pybrew keeps its historical behavior: numeric segments compare
+    numerically, letter segments compare after numeric segments, trailing
+    letters are pre-release markers, and extra numeric segments are
+    significant (``1.0.0 > 1.0``) because existing callers/tests rely on it.
+
+    ``missing_numeric_zero=True`` selects the closer Homebrew token-class
+    behavior: a missing token is a null token, numeric zero compares equal to
+    it, and pre-release words sort before the release while ``p``/``post``
+    (and unknown letters) sort after it.
     """
+
+    if missing_numeric_zero:
+        left_tokens = _version_tokens(left)
+        right_tokens = _version_tokens(right)
+        return _homebrew_compare_token_lists(left_tokens, right_tokens)
 
     lt, rt = _tokens(left), _tokens(right)
     sentinel = object()
@@ -184,6 +294,10 @@ class Version:
       to a numeric zero;
     * ``revision`` is always 0 on ``Version`` and meaningful only on
       :class:`PkgVersion`.
+
+    Use :meth:`homebrew_compare` for the opt-in Homebrew null-token behavior
+    where a missing numeric segment compares equal to zero, pre-release words
+    sort before the release, and ``p``/``post``/unknown letters sort after it.
     """
 
     __slots__ = ("value",)
@@ -192,6 +306,11 @@ class Version:
         self.value = str(value)
 
     def __str__(self) -> str:  # pragma: no cover - trivial
+        return self.value
+
+    def to_s(self) -> str:
+        """String form (Ruby-compatible alias for ``str(version)``)."""
+
         return self.value
 
     def __repr__(self) -> str:  # pragma: no cover - trivial
@@ -208,6 +327,20 @@ class Version:
         """Alias for :attr:`segments` (Homebrew's token list)."""
 
         return self.segments
+
+    @property
+    def token_classes(self) -> list[str]:
+        """Classified tokens: ``numeric``, pre-release word, or ``letter``.
+
+        Composite pre-release tokens are one class (``1.0-alpha2`` ->
+        ``["numeric", "numeric", "alpha"]``); raw :attr:`segments` still keep
+        the numeric revision separately for String compatibility.
+        """
+
+        return [
+            str(token.value) if token.kind == "pre" else token.kind
+            for token in _version_tokens(self.value)
+        ]
 
     @property
     def pre_release_tokens(self) -> list[str]:
@@ -257,6 +390,20 @@ class Version:
     @property
     def major_minor_patch(self) -> "Version":
         return Version(".".join(str(token) for token in self.segments[:3]))
+
+    def homebrew_compare(self, other: object) -> int:
+        """Compare with Homebrew token classes (missing numeric equals zero).
+
+        This opts into the closer Homebrew semantics without changing the
+        default ``<=>``/``==`` behavior that existing pybrew callers rely on.
+        """
+
+        if isinstance(other, PkgVersion):
+            comparison = self.homebrew_compare(other.version)
+            if comparison:
+                return comparison
+            return 0 if other.revision == 0 else -1
+        return compare_versions(self.value, str(other), missing_numeric_zero=True)
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, Version):
@@ -323,6 +470,17 @@ class PkgVersion(Version):
     @property
     def pre_release(self) -> bool:
         return self._version.pre_release
+
+    @property
+    def token_classes(self) -> list[str]:
+        return self._version.token_classes
+
+    def homebrew_compare(self, other: object) -> int:
+        parsed = other if isinstance(other, PkgVersion) else PkgVersion.parse(str(other))
+        comparison = self._version.homebrew_compare(parsed.version)
+        if comparison:
+            return comparison
+        return (self._revision > parsed.revision) - (self._revision < parsed.revision)
 
     @property
     def major(self) -> int:

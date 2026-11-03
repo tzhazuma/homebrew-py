@@ -2749,9 +2749,29 @@ def test_livecheck_status_fetcher_error_is_error() -> None:
 # ---------------------------------------------------------------------------
 
 
+class _FakeHttpHeaders:
+    def __init__(self, values: dict[str, str] | None = None):
+        self.values = {
+            str(key).lower(): str(value)
+            for key, value in (values or {}).items()
+        }
+
+    def get(self, name: str, default: object = None) -> object:
+        return self.values.get(str(name).lower(), default)
+
+    def get_content_charset(self) -> str | None:
+        content_type = self.values.get("content-type", "")
+        if "charset=" not in content_type:
+            return None
+        return content_type.split("charset=", 1)[1].split(";", 1)[0].strip()
+
+
 class _FakeHttpResponse:
-    def __init__(self, payload: bytes):
+    def __init__(
+        self, payload: bytes, headers: dict[str, str] | None = None
+    ):
         self.payload = payload
+        self.headers = _FakeHttpHeaders(headers)
 
     def read(self, amount: int = -1) -> bytes:
         if amount is None or amount < 0:
@@ -2765,17 +2785,45 @@ class _FakeHttpResponse:
         return False
 
 
+class _FakeOpener:
+    def __init__(
+        self,
+        responses: list[object],
+        calls: list[object] | None = None,
+    ):
+        self.responses = list(responses)
+        self.requests = calls if calls is not None else []
+
+    def open(self, request: object, timeout: float | None = None):
+        self.requests.append(request)
+        response = self.responses.pop(0)
+        if isinstance(response, BaseException):
+            raise response
+        return response
+
+
+def _patch_livecheck_opener(
+    monkeypatch: pytest.MonkeyPatch,
+    responses: object,
+    calls: list[object] | None = None,
+) -> _FakeOpener:
+    if not isinstance(responses, list):
+        responses = [_FakeHttpResponse(responses)]
+    opener = _FakeOpener(responses, calls)
+    monkeypatch.setattr(
+        "pybrew.cask.urllib.request.build_opener",
+        lambda *_args, **_kwargs: opener,
+    )
+    return opener
+
+
+# Backwards-compatible alias used by the earlier transport tests.
 def _patch_urlopen(
     monkeypatch: pytest.MonkeyPatch,
     payload: bytes,
     calls: list[object] | None = None,
-) -> None:
-    def fake_urlopen(request: object, timeout: float | None = None):
-        if calls is not None:
-            calls.append(request)
-        return _FakeHttpResponse(payload)
-
-    monkeypatch.setattr("pybrew.cask.urllib.request.urlopen", fake_urlopen)
+) -> _FakeOpener:
+    return _patch_livecheck_opener(monkeypatch, payload, calls)
 
 
 def test_livecheck_http_fetcher_bounded(
@@ -2833,10 +2881,10 @@ def test_livecheck_status_offline_by_default_does_not_fetch(
 ) -> None:
     from pybrew.cask import Cask
 
-    def forbidden_urlopen(*_args: object, **_kwargs: object):
+    def forbidden_opener(*_args: object, **_kwargs: object):
         raise AssertionError("livecheck must not touch the network by default")
 
-    monkeypatch.setattr("pybrew.cask.urllib.request.urlopen", forbidden_urlopen)
+    monkeypatch.setattr("pybrew.cask.urllib.request.build_opener", forbidden_opener)
     cask = Cask(
         token="offline",
         version="1.0",
@@ -2854,10 +2902,10 @@ def test_livecheck_status_default_transport_error_is_reported(
 ) -> None:
     from pybrew.cask import Cask
 
-    def failing_urlopen(*_args: object, **_kwargs: object):
-        raise OSError("connection refused")
-
-    monkeypatch.setattr("pybrew.cask.urllib.request.urlopen", failing_urlopen)
+    _patch_urlopen(
+        monkeypatch,
+        [OSError("connection refused") for _ in range(3)],
+    )
     cask = Cask(
         token="failing",
         version="1.0",
@@ -2900,8 +2948,156 @@ def test_check_livecheck_online_passes_default_fetcher(
     result = cask.check_livecheck(online=True)
 
     assert result["executed"] is True
-    assert captured["fetcher"] is livecheck_http_fetcher
+    import functools
+
+    fetcher = captured["fetcher"]
+    assert isinstance(fetcher, functools.partial)
+    assert fetcher.func is livecheck_http_fetcher
+    assert fetcher.keywords["headers"] == {}
     assert captured["page"] is None
 
     cask.check_livecheck(online=False)
     assert captured["fetcher"] is None
+
+
+def test_livecheck_http_pipeline_gzip_and_charset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import gzip
+
+    from pybrew.cask import livecheck_http_fetcher
+
+    _patch_livecheck_opener(
+        monkeypatch,
+        [
+            _FakeHttpResponse(
+                gzip.compress("café page".encode("utf-8")),
+                {
+                    "Content-Encoding": "gzip",
+                    "Content-Type": "text/html; charset=utf-8",
+                },
+            )
+        ],
+    )
+    assert livecheck_http_fetcher("https://example.com/page") == "café page"
+
+    _patch_livecheck_opener(
+        monkeypatch,
+        [
+            _FakeHttpResponse(
+                "café".encode("latin-1"),
+                {"Content-Type": "text/plain; charset=iso-8859-1"},
+            )
+        ],
+    )
+    assert livecheck_http_fetcher("https://example.com/page") == "café"
+
+
+def test_livecheck_http_pipeline_retries_transient_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import urllib.error
+
+    from pybrew.cask import livecheck_http_fetcher
+
+    unavailable = urllib.error.HTTPError(
+        "https://example.com/page", 503, "unavailable", {}, None
+    )
+    opener = _patch_livecheck_opener(
+        monkeypatch,
+        [unavailable, OSError("connection reset"), _FakeHttpResponse(b"ok")],
+    )
+
+    assert (
+        livecheck_http_fetcher(
+            "https://example.com/page", retries=2, retry_delay=0
+        )
+        == "ok"
+    )
+    assert len(opener.requests) == 3
+
+
+def test_livecheck_http_pipeline_retry_exhausted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import livecheck_http_fetcher
+
+    opener = _patch_livecheck_opener(
+        monkeypatch, [OSError("down") for _ in range(3)]
+    )
+
+    with pytest.raises(OSError, match="down"):
+        livecheck_http_fetcher(
+            "https://example.com/page", retries=2, retry_delay=0
+        )
+    assert len(opener.requests) == 3
+
+
+def test_livecheck_http_pipeline_does_not_retry_permanent_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import urllib.error
+
+    from pybrew.cask import livecheck_http_fetcher
+
+    missing = urllib.error.HTTPError(
+        "https://example.com/page", 404, "not found", {}, None
+    )
+    opener = _patch_livecheck_opener(
+        monkeypatch, [missing, _FakeHttpResponse(b"should not be used")]
+    )
+
+    with pytest.raises(urllib.error.HTTPError):
+        livecheck_http_fetcher(
+            "https://example.com/page", retries=2, retry_delay=0
+        )
+    assert len(opener.requests) == 1
+
+
+def test_livecheck_http_pipeline_configurable_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import LIVECHECK_USER_AGENT, livecheck_http_fetcher
+
+    opener = _patch_livecheck_opener(monkeypatch, b"ok")
+
+    assert (
+        livecheck_http_fetcher(
+            "https://example.com/page", headers={"X-Test": "yes"}
+        )
+        == "ok"
+    )
+    request = opener.requests[0]
+    assert request.get_header("X-test") == "yes"
+    assert request.get_header("User-agent") == LIVECHECK_USER_AGENT
+
+
+def test_livecheck_redirect_handler_is_bounded() -> None:
+    from pybrew.cask import LIVECHECK_MAX_REDIRECTS, _BoundedRedirectHandler
+
+    assert _BoundedRedirectHandler.max_redirections == LIVECHECK_MAX_REDIRECTS
+    assert 0 < LIVECHECK_MAX_REDIRECTS <= 10
+
+
+def test_livecheck_status_online_uses_url_option_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import Cask
+
+    opener = _patch_livecheck_opener(monkeypatch, b"tool-2.0")
+    cask = Cask(
+        token="headered",
+        version="2.0",
+        url_options={"header": ["X-Test: yes"], "user_agent": "custom-agent"},
+        livecheck={
+            "url": "https://example.com/tool",
+            "regex": r"tool-(\d+(?:\.\d+)*)",
+        },
+    )
+
+    status = cask.livecheck_status(online=True)
+
+    assert status["status"] == "up_to_date"
+    request = opener.requests[0]
+    assert request.get_header("X-test") == "yes"
+    assert request.get_header("User-agent") == "custom-agent"

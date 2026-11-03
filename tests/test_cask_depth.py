@@ -1104,3 +1104,147 @@ def test_zap_symlinked_directory_itself_removes_only_the_link(
     assert removed == [link]
     assert not link.is_symlink()
     assert payload.read_text() == "keep"
+
+
+# ---------------------------------------------------------------------------
+# generic artifact dirmethod/base_dir resolution
+# ---------------------------------------------------------------------------
+
+
+def test_generic_artifact_dirmethod_prefix(cask_env: SimpleNamespace) -> None:
+    archive = cask_env.tmp_path / "Generic-1.0.zip"
+    digest = _make_zip(archive, {"notes.txt": b"prefix notes\n"})
+    _write_cask(
+        cask_env.tap,
+        "generic",
+        "1.0",
+        digest,
+        archive,
+        artifacts=(
+            '  artifact "notes.txt", target: "share/generic/notes.txt", '
+            'dirmethod: :prefix'
+        ),
+    )
+
+    cask_env.installer.install(cask_env.loader.load("generic"))
+    destination = cask_env.config.prefix / "share" / "generic" / "notes.txt"
+    assert destination.read_text() == "prefix notes\n"
+
+    cask_env.installer.uninstall("generic")
+    assert not destination.exists()
+
+
+def test_generic_artifact_dirmethod_library_root(
+    cask_env: SimpleNamespace,
+) -> None:
+    archive = cask_env.tmp_path / "Generic-1.0.zip"
+    digest = _make_zip(archive, {"notes.txt": b"library notes\n"})
+    _write_cask(
+        cask_env.tap,
+        "generic",
+        "1.0",
+        digest,
+        archive,
+        artifacts=(
+            '  artifact "notes.txt", target: "Payloads/notes.txt", '
+            'base_dir: "library_root"'
+        ),
+    )
+
+    cask_env.installer.install(cask_env.loader.load("generic"))
+    destination = cask_env.library_root / "Payloads" / "notes.txt"
+    assert destination.read_text() == "library notes\n"
+
+
+def test_generic_artifact_unknown_dirmethod_is_rejected(
+    cask_env: SimpleNamespace,
+) -> None:
+    archive = cask_env.tmp_path / "Generic-1.0.zip"
+    digest = _make_zip(archive, {"notes.txt": b"notes\n"})
+    _write_cask(
+        cask_env.tap,
+        "generic",
+        "1.0",
+        digest,
+        archive,
+        artifacts=(
+            '  artifact "notes.txt", target: "notes.txt", '
+            'dirmethod: :staged_path'
+        ),
+    )
+
+    with pytest.raises(CaskError, match="unsupported generic artifact dirmethod"):
+        cask_env.installer.install(cask_env.loader.load("generic"))
+
+
+def test_generic_artifact_unsupported_kwargs_are_rejected(
+    cask_env: SimpleNamespace,
+) -> None:
+    archive = cask_env.tmp_path / "Generic-1.0.zip"
+    digest = _make_zip(archive, {"notes.txt": b"notes\n"})
+    _write_cask(
+        cask_env.tap,
+        "generic",
+        "1.0",
+        digest,
+        archive,
+        artifacts=(
+            '  artifact "notes.txt", target: "notes.txt", '
+            'steps: ["move"]'
+        ),
+    )
+
+    with pytest.raises(CaskError, match="options are not supported"):
+        cask_env.installer.install(cask_env.loader.load("generic"))
+
+
+def test_generic_artifact_dirmethod_restricts_absolute_target(
+    cask_env: SimpleNamespace,
+) -> None:
+    archive = cask_env.tmp_path / "Generic-1.0.zip"
+    digest = _make_zip(archive, {"notes.txt": b"notes\n"})
+    outside_base = cask_env.library_root / "notes.txt"
+    _write_cask(
+        cask_env.tap,
+        "generic",
+        "1.0",
+        digest,
+        archive,
+        artifacts=(
+            f'  artifact "notes.txt", target: "{outside_base}", '
+            'dirmethod: :prefix'
+        ),
+    )
+
+    with pytest.raises(CaskError, match="outside install roots"):
+        cask_env.installer.install(cask_env.loader.load("generic"))
+
+
+# ---------------------------------------------------------------------------
+# suite receipt cleanup on upgrade
+# ---------------------------------------------------------------------------
+
+
+def test_upgrade_removes_suite_artifact(cask_env: SimpleNamespace) -> None:
+    archive = cask_env.tmp_path / "Suite-1.0.zip"
+    digest = _make_zip(
+        archive, {"Suite Folder/App1.app/Contents/Info.plist": b"<plist/>"}
+    )
+    _write_cask(
+        cask_env.tap,
+        "suite",
+        "1.0",
+        digest,
+        archive,
+        artifacts='  suite "Suite Folder", target: "Old Suite"',
+    )
+    cask_env.installer.install(cask_env.loader.load("suite"))
+    old_suite = cask_env.config.applications / "Old Suite"
+    assert old_suite.is_dir()
+
+    # 2.0 drops the suite entirely: the upgrade must clean the old directory.
+    _write_cask(cask_env.tap, "suite", "2.0", digest, archive, artifacts="")
+    result = cask_env.installer.upgrade(cask_env.loader.load("suite"))
+
+    assert result.version == "2.0"
+    assert not old_suite.exists()

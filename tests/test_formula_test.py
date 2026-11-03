@@ -2515,6 +2515,20 @@ def test_dsl_version_matches_python_token_semantics(tmp_path: Path) -> None:
   assert Version.new("1.0-post1") > Version.new("1.0-p1")
   assert_equal 0, Version.new("1.0") <=> PkgVersion.parse("1.0_0")
   refute_equal Version.new("1.0"), PkgVersion.parse("1.0_2")
+  assert_equal ["numeric", "numeric", "alpha"], Version.new("1.0-alpha2").token_classes
+  assert_equal ["numeric", "numeric", "p"], Version.new("1.0-p1").token_classes
+  assert_equal ["numeric", "numeric", "letter"], Version.new("1.0-foo").token_classes
+  assert_equal ["numeric", "numeric", "pre"], Version.new("1.0-preview").token_classes
+  assert_equal ["numeric", "numeric", "alpha"],
+               PkgVersion.parse("1.0-alpha_2").token_classes
+  assert_equal 0, Version.new("1.0").homebrew_compare("1.0.0")
+  assert Version.new("1.0").homebrew_compare("1.0.1") < 0
+  assert Version.new("1.0").homebrew_compare("1.0-alpha") > 0
+  assert Version.new("1.0").homebrew_compare("1.0-p1") < 0
+  assert Version.new("1.0").homebrew_compare("1.0-foo") < 0
+  assert Version.new("1.0").homebrew_compare(PkgVersion.parse("1.0_2")) < 0
+  assert PkgVersion.parse("1.0_2").homebrew_compare("1.0") > 0
+  assert_equal 0, PkgVersion.parse("1.0_2").homebrew_compare("1.0_2")
 end
 """
     formula, config = _installed_formula(tmp_path, source)

@@ -2,14 +2,19 @@
 
 from __future__ import annotations
 
+import codecs
 import datetime
+import functools
 import hashlib
 import os
 import platform
 import plistlib
 import re
+import time
+import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
@@ -268,6 +273,7 @@ class Cask:
         page: Optional[str | bytes] = None,
         timeout: Optional[float] = None,
         online: bool = False,
+        headers: Optional[dict[str, str]] = None,
     ) -> dict[str, Any]:
         """Bounded livecheck strategy check for CLI/caller use.
 
@@ -281,7 +287,10 @@ class Cask:
 
         effective_fetcher = fetcher
         if effective_fetcher is None and online:
-            effective_fetcher = livecheck_http_fetcher
+            effective_fetcher = functools.partial(
+                livecheck_http_fetcher,
+                headers=headers if headers is not None else self._livecheck_headers(),
+            )
         return execute_livecheck_strategy(
             self,
             fetcher=effective_fetcher,
@@ -317,6 +326,7 @@ class Cask:
         page: Optional[str | bytes] = None,
         timeout: Optional[float] = None,
         online: bool = False,
+        headers: Optional[dict[str, str]] = None,
     ) -> dict[str, Any]:
         """Run a bounded livecheck and compare it with the current version.
 
@@ -344,7 +354,10 @@ class Cask:
 
         effective_fetcher = fetcher
         if effective_fetcher is None and online:
-            effective_fetcher = livecheck_http_fetcher
+            effective_fetcher = functools.partial(
+                livecheck_http_fetcher,
+                headers=headers if headers is not None else self._livecheck_headers(),
+            )
 
         page_text: Optional[str] = None
         if page is not None:
@@ -451,6 +464,16 @@ class Cask:
             if isinstance(value, str) and value:
                 return value
         return self.url
+
+    def _livecheck_headers(self) -> dict[str, str]:
+        """Build request headers from the cask's ``url`` options (best effort)."""
+
+        try:
+            from .cask_installer import cask_request_headers
+
+            return cask_request_headers(self)
+        except Exception:  # pragma: no cover - avoids import-cycle edge cases
+            return {}
 
     def _app_candidates(self) -> list[Path]:
         prefix = Path(os.environ.get("HOMEBREW_PREFIX", "/usr/local"))
@@ -872,7 +895,82 @@ class Cask:
 #: Bounded defaults for the opt-in livecheck HTTP transport.
 LIVECHECK_HTTP_TIMEOUT = 30.0
 LIVECHECK_MAX_PAGE_BYTES = 5 * 1024 * 1024
+LIVECHECK_MAX_REDIRECTS = 5
+LIVECHECK_RETRIES = 2
+LIVECHECK_RETRY_DELAY = 0.25
 LIVECHECK_USER_AGENT = "pybrew-livecheck/0.1"
+
+#: HTTP statuses retried by the default livecheck transport.
+LIVECHECK_TRANSIENT_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
+
+
+class _BoundedRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Redirect handler capped at :data:`LIVECHECK_MAX_REDIRECTS` hops."""
+
+    max_redirections = LIVECHECK_MAX_REDIRECTS
+
+
+def _livecheck_http_header(response: Any, name: str) -> Optional[str]:
+    headers = getattr(response, "headers", None)
+    if headers is None:
+        return None
+    try:
+        value = headers.get(name)
+    except (AttributeError, TypeError):
+        return None
+    return None if value is None else str(value)
+
+
+def _livecheck_response_charset(response: Any) -> str:
+    headers = getattr(response, "headers", None)
+    if headers is not None:
+        getter = getattr(headers, "get_content_charset", None)
+        if callable(getter):
+            try:
+                charset = getter()
+            except Exception:  # pragma: no cover - exotic header objects
+                charset = None
+            if charset:
+                return str(charset)
+    content_type = _livecheck_http_header(response, "Content-Type") or ""
+    match = re.search(
+        r"charset\s*=\s*[\"']?([A-Za-z0-9._-]+)", content_type, re.IGNORECASE
+    )
+    return match.group(1) if match is not None else "utf-8"
+
+
+def _decode_livecheck_body(
+    body: bytes, content_encoding: Optional[str], charset: str, max_bytes: int
+) -> str:
+    """Best-effort content-encoding + charset decoding for livecheck pages."""
+
+    if content_encoding:
+        encoding = content_encoding.strip().lower()
+        decompressor: Optional[Any] = None
+        if encoding in ("gzip", "x-gzip"):
+            decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
+        elif encoding == "deflate":
+            decompressor = zlib.decompressobj()
+        if decompressor is not None:
+            try:
+                decoded = decompressor.decompress(body, max_bytes + 1)
+            except zlib.error:
+                decoded = None
+            if decoded is not None:
+                if len(decoded) > max_bytes:
+                    raise CaskError(
+                        f"livecheck page exceeds the {max_bytes}-byte limit "
+                        "after decompression"
+                    )
+                body = decoded
+    try:
+        codec_name = codecs.lookup(charset).name
+    except LookupError:
+        codec_name = "utf-8"
+    try:
+        return body.decode(codec_name, errors="replace")
+    except (LookupError, UnicodeError):  # pragma: no cover - codecs lookup done
+        return body.decode("utf-8", errors="replace")
 
 
 def livecheck_http_fetcher(
@@ -880,12 +978,19 @@ def livecheck_http_fetcher(
     *,
     timeout: float = LIVECHECK_HTTP_TIMEOUT,
     max_bytes: int = LIVECHECK_MAX_PAGE_BYTES,
+    headers: Optional[dict[str, str]] = None,
+    retries: int = LIVECHECK_RETRIES,
+    retry_delay: float = LIVECHECK_RETRY_DELAY,
+    opener: Optional[Any] = None,
 ) -> str:
     """Bounded default HTTP transport for ``pybrew livecheck --online``.
 
-    Only ``http``/``https`` URLs are accepted and the response is capped.  The
-    helper only runs when a caller explicitly passes ``online=True`` or a
-    custom fetcher to :meth:`Cask.livecheck_status`; default calls stay offline.
+    Only ``http``/``https`` URLs are accepted.  Redirects are followed through
+    :class:`_BoundedRedirectHandler`; transient failures (connection errors,
+    timeouts, 408/425/429/5xx) are retried a bounded number of times.  The
+    response is capped and content-encoding/charset are decoded best-effort.
+    The helper only runs when a caller explicitly passes ``online=True`` or a
+    custom fetcher; default calls stay offline.
     """
 
     parsed = urllib.parse.urlparse(url)
@@ -893,16 +998,55 @@ def livecheck_http_fetcher(
         raise CaskError(
             f"unsupported livecheck URL scheme: {parsed.scheme or '(none)'}"
         )
-    request = urllib.request.Request(
-        url, headers={"User-Agent": LIVECHECK_USER_AGENT}
+
+    request_headers = {"User-Agent": LIVECHECK_USER_AGENT}
+    if headers:
+        for key, value in headers.items():
+            request_headers[str(key)] = str(value)
+    request = urllib.request.Request(url, headers=request_headers)
+    effective_opener = (
+        opener if opener is not None
+        else urllib.request.build_opener(_BoundedRedirectHandler())
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        data = response.read(max_bytes + 1)
-    if len(data) > max_bytes:
+
+    attempts = max(0, int(retries)) + 1
+    body: Optional[bytes] = None
+    content_encoding: Optional[str] = None
+    charset = "utf-8"
+    last_error: Optional[BaseException] = None
+    for attempt in range(attempts):
+        try:
+            with effective_opener.open(request, timeout=timeout) as response:
+                body = response.read(max_bytes + 1)
+                content_encoding = _livecheck_http_header(
+                    response, "Content-Encoding"
+                )
+                charset = _livecheck_response_charset(response)
+            break
+        except urllib.error.HTTPError as error:
+            last_error = error
+            if (
+                error.code not in LIVECHECK_TRANSIENT_STATUSES
+                or attempt + 1 >= attempts
+            ):
+                raise
+        except (urllib.error.URLError, TimeoutError, OSError) as error:
+            last_error = error
+            if attempt + 1 >= attempts:
+                raise
+        if retry_delay > 0:
+            time.sleep(retry_delay * (attempt + 1))
+    if body is None:
+        if last_error is not None:
+            raise last_error
+        raise CaskError("livecheck HTTP request did not produce a response")
+    if len(body) > max_bytes:
         raise CaskError(
             f"livecheck page exceeds the {max_bytes}-byte limit"
         )
-    return data.decode("utf-8", errors="replace")
+    return _decode_livecheck_body(
+        body, content_encoding, charset, max_bytes
+    )
 
 
 def _normalize_livecheck_candidates(value: Any) -> list[str]:

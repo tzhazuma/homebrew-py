@@ -7032,3 +7032,156 @@ after = [(opt/"keg-alias-old").symlink?, (linked/"keg-alias-old").symlink?,
         "false,false,false,false",
         "false",
     ]
+
+
+def test_sandbox_rule_collection_and_profile_generation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    fake_sandbox_exec = tmp_path / "sandbox-exec"
+    fake_sandbox_exec.write_text("#!/bin/sh\nexit 0\n")
+    fake_sandbox_exec.chmod(0o755)
+    fake_bwrap = tmp_path / "bwrap"
+    fake_bwrap.write_text("#!/bin/sh\nexit 0\n")
+    fake_bwrap.chmod(0o755)
+    formula = _formula(
+        "ruby-sandbox-rules",
+        "1.0",
+        (
+            '  ENV["PYBREW_SANDBOX"] = "1"\n'
+            '  ENV["PYBREW_SANDBOX_PATH"] = "' + str(fake_sandbox_exec) + '"\n'
+            '  disabled_like = begin\n'
+            '    saved = ENV.delete("PYBREW_SANDBOX")\n'
+            '    Sandbox.allow_read("/tmp/x")\n'
+            '    "none"\n'
+            '  rescue NotImplementedError\n'
+            '    "default-disabled"\n'
+            '  ensure\n'
+            '    ENV["PYBREW_SANDBOX"] = "1"\n'
+            '  end\n'
+            '  Sandbox.allow_read("/tmp/allowed")\n'
+            '  Sandbox.allow_write("/tmp/out")\n'
+            '  Sandbox.allow_network\n'
+            '  Sandbox.deny_read("/secret")\n'
+            '  Sandbox.deny_write("/System")\n'
+            '  Sandbox.add_rule("(allow process-exec)")\n'
+            '  kinds = Sandbox.rules.map { |rule| rule[:kind].to_s }.join(",")\n'
+            '  profile = Sandbox.sandbox_profile\n'
+            '  applied = Sandbox.apply!\n'
+            '  stored_profile = Sandbox.applied_policy["profile"].to_s\n'
+            '  ENV["PYBREW_SANDBOX_PATH"] = "' + str(fake_bwrap) + '"\n'
+            '  Sandbox.reset_rules!\n'
+            '  Sandbox.allow_write("/tmp/out")\n'
+            '  bwrap_args = Sandbox.bwrap_policy_args.join(",")\n'
+            '  applied_bwrap = Sandbox.apply!\n'
+            '  applied_bwrap_args = Sandbox.applied_policy["args"].join(",")\n'
+            '  ENV.delete("PYBREW_SANDBOX")\n'
+            '  disabled_apply = begin\n'
+            '    Sandbox.apply!\n'
+            '    "none"\n'
+            '  rescue NotImplementedError\n'
+            '    "default-disabled"\n'
+            '  end\n'
+            '  (prefix/"sandbox-rules.txt").write [\n'
+            '    disabled_like, kinds,\n'
+            '    profile.include?("(subpath \\"/tmp/allowed\\")").to_s,\n'
+            '    profile.include?("(deny file-read* (subpath \\"/secret\\"))").to_s,\n'
+            '    profile.include?("(allow network*)").to_s,\n'
+            '    profile.include?("(allow process-exec)").to_s,\n'
+            '    applied.to_s, stored_profile.include?("(version 1)").to_s,\n'
+            '    bwrap_args.include?("--bind,/tmp/out,/tmp/out").to_s,\n'
+            '    bwrap_args.include?("--unshare-net").to_s,\n'
+            '    applied_bwrap.to_s,\n'
+            '    applied_bwrap_args.include?("--bind,/tmp/out,/tmp/out").to_s,\n'
+            '    disabled_apply\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "sandbox-rules.txt").read_text().splitlines() == [
+        "default-disabled",
+        "allow_read,allow_write,allow_network,deny_read,deny_write,raw",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "default-disabled",
+    ]
+
+
+def test_formulary_remote_api_json_fake_curl(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    good_curl = tmp_path / "good-curl"
+    good_curl.write_text(
+        "#!/bin/sh\n"
+        "printf '%s' '{\"formulae\":[{\"name\":\"remote-one\",\"full_name\":\"homebrew/core/remote-one\","
+        "\"desc\":\"remote formula\",\"homepage\":\"https://example.com/remote-one\","
+        "\"version\":\"2.0\",\"license\":\"MIT\"}]}'\n"
+    )
+    good_curl.chmod(0o755)
+    bad_curl = tmp_path / "bad-curl"
+    bad_curl.write_text("#!/bin/sh\nprintf '%s' 'not json'\n")
+    bad_curl.chmod(0o755)
+    failing_curl = tmp_path / "failing-curl"
+    failing_curl.write_text("#!/bin/sh\nexit 1\n")
+    failing_curl.chmod(0o755)
+    monkeypatch.setenv("PYBREW_FORMULA_API_URL", "https://api.example.test/formula.jws.json")
+    monkeypatch.setenv("PYBREW_FORMULA_API_CURL", str(good_curl))
+    formula = _formula(
+        "ruby-remote-api",
+        "1.0",
+        (
+            '  good_curl = ENV["PYBREW_FORMULA_API_CURL"]\n'
+            '  loaded = Formulary.load_formula_from_api!\n'
+            '  loaded_class = loaded.is_a?(Array) ? loaded.first : loaded\n'
+            '  factory = Formulary.factory("remote-one", from: :api)\n'
+            '  cached = Formulary.formula_class_get_from_api("remote-one")\n'
+            '  inline = Formulary.load_formula_from_api!({\n'
+            '    "name" => "inline-remote", "desc" => "inline desc", "version" => "1.0"\n'
+            '  })\n'
+            '  ENV["PYBREW_FORMULA_API_CURL"] = "' + str(bad_curl) + '"\n'
+            '  Formulary.clear_cache\n'
+            '  malformed = begin\n'
+            '    Formulary.load_formula_from_api!\n'
+            '    "none"\n'
+            '  rescue => error\n'
+            '    error.class.name + "|" + error.message.include?("malformed API JSON from").to_s\n'
+            '  end\n'
+            '  ENV["PYBREW_FORMULA_API_CURL"] = "' + str(failing_curl) + '"\n'
+            '  Formulary.clear_cache\n'
+            '  fetch_failed = begin\n'
+            '    Formulary.load_formula_from_api!\n'
+            '    "none"\n'
+            '  rescue => error\n'
+            '    error.class.name + "|" + error.message.include?("failed to fetch").to_s\n'
+            '  end\n'
+            '  ENV["PYBREW_FORMULA_API_CURL"] = good_curl\n'
+            '  Formulary.clear_cache\n'
+            '  factory_after_clear = Formulary.factory("remote-one", from: :api)\n'
+            '  (prefix/"remote-api.txt").write [\n'
+            '    loaded_class.is_a?(Class).to_s, loaded_class.loaded_desc,\n'
+            '    factory.equal?(cached).to_s, cached.loaded_version,\n'
+            '    inline.loaded_desc, malformed, fetch_failed,\n'
+            '    factory_after_clear.loaded_version\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "remote-api.txt").read_text().splitlines() == [
+        "true",
+        "remote formula",
+        "true",
+        "2.0",
+        "inline desc",
+        "PybrewFormulaUnavailableError|true",
+        "PybrewFormulaUnavailableError|true",
+        "2.0",
+    ]

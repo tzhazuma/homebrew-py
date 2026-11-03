@@ -287,7 +287,8 @@ def build_parser() -> argparse.ArgumentParser:
     linkage_cmd = subparsers.add_parser(
         "linkage", parents=[common], help="check an installed keg's dynamic linkage"
     )
-    linkage_cmd.add_argument("formula")
+    linkage_cmd.add_argument("formula", nargs="?")
+    linkage_cmd.add_argument("--all", action="store_true", help="check every installed keg")
     linkage_cmd.add_argument("--json", action="store_true")
     config = subparsers.add_parser("config", parents=[common], help="show pybrew configuration")
     config.add_argument("--json", action="store_true")
@@ -1332,18 +1333,36 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 def cmd_linkage(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     loader = _loader(config)
-    formula = _load_formula(args.formula, loader, use_api=getattr(args, "api", False))
     installer = Installer(config, loader)
     try:
-        report = installer.linkage_diagnostic(formula.name)
+        if getattr(args, "all", False):
+            formula = None
+            if getattr(args, "formula", None):
+                formula = _load_formula(
+                    args.formula, loader, use_api=getattr(args, "api", False)
+                )
+            report = installer.linkage_report(formula, all_formulae=True)
+            ok = not report.has_errors
+            text = report.format()
+            label = formula.name if formula is not None else "all installed kegs"
+        else:
+            if not getattr(args, "formula", None):
+                print("Error: linkage requires a formula or --all", file=sys.stderr)
+                return 1
+            formula = _load_formula(
+                args.formula, loader, use_api=getattr(args, "api", False)
+            )
+            report = installer.linkage_report(formula)
+            ok = not report.has_errors
+            text = report.format()
+            label = formula.name
     except PybrewError as error:
         print(f"Error: {error}", file=sys.stderr)
         return 1
-    ok = report == "linkage OK"
     if getattr(args, "json", False):
-        print(json.dumps({"formula": formula.name, "ok": ok, "report": report}, indent=2))
+        print(json.dumps({"formula": label, "ok": ok, "report": text}, indent=2))
     else:
-        print(report)
+        print(text)
     return 0 if ok else 1
 
 

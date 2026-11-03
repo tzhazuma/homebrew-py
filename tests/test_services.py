@@ -13,6 +13,7 @@ from pybrew.models import Formula
 from pybrew.paths import Config
 from pybrew.ruby_parser import parse_formula_source
 from pybrew.services import (
+    SERVICE_PATH_MODE_ENV,
     LaunchctlRunner,
     ServiceError,
     ServiceManager,
@@ -44,6 +45,8 @@ end
 def _config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Config:
     monkeypatch.setenv("PYBREW_SERVICE_DIR", str(tmp_path / "agents"))
     monkeypatch.setenv("PYBREW_SERVICE_BACKEND", "launchd")
+    monkeypatch.delenv("HOMEBREW_USER_CONFIG_HOME", raising=False)
+    monkeypatch.delenv(SERVICE_PATH_MODE_ENV, raising=False)
     config = Config.default(prefix=tmp_path / "prefix", taps=[], cache=tmp_path / "cache")
     config.ensure()
     return config
@@ -863,4 +866,107 @@ def test_service_manager_render_wrappers(
     assert payload["ProgramArguments"] == spec.run
     unit = manager.to_systemd_unit(formula)
     assert "[Service]" in unit
+
+
+# ---------------------------------------------------------------------------
+# working_dir / root_dir / input_path / log rendering edges
+# ---------------------------------------------------------------------------
+
+
+def test_plist_and_unit_render_root_and_input_paths_with_home_expansion(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    manager = ServiceManager(config)
+    formula = _formula()
+    spec = ServiceSpec(
+        run=["/opt/svc/bin/svc"],
+        root_dir="~/root",
+        input_path="~/stdin",
+        log_path="~/out.log",
+        error_log_path="~/err.log",
+    )
+
+    payload = manager.plist_payload(formula, spec)
+    assert payload["WorkingDirectory"] == str(home / "root")
+    assert payload["RootDirectory"] == str(home / "root")
+    assert payload["StandardInPath"] == str(home / "stdin")
+    assert payload["StandardOutPath"] == str(home / "out.log")
+    assert payload["StandardErrorPath"] == str(home / "err.log")
+
+    unit = manager.unit_text(formula, spec)
+    assert f"RootDirectory={home / 'root'}" in unit
+    assert f"StandardInput=file:{home / 'stdin'}" in unit
+    assert f"WorkingDirectory={home / 'root'}" in unit
+    assert f"StandardOutput=append:{home / 'out.log'}" in unit
+    assert f"StandardError=append:{home / 'err.log'}" in unit
+
+
+def test_working_dir_takes_precedence_over_root_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    manager = ServiceManager(config)
+    formula = _formula()
+    spec = ServiceSpec(
+        run=["/opt/svc/bin/svc"],
+        working_dir="~/work",
+        root_dir="~/root",
+    )
+
+    payload = manager.plist_payload(formula, spec)
+    assert payload["WorkingDirectory"] == str(home / "work")
+    assert payload["RootDirectory"] == str(home / "root")
+
+    unit = manager.unit_text(formula, spec)
+    assert f"WorkingDirectory={home / 'work'}" in unit
+    assert f"RootDirectory={home / 'root'}" in unit
+
+
+def test_default_log_paths_when_service_paths_are_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    manager = ServiceManager(config)
+    formula = _formula()
+    spec = ServiceSpec(run=["/opt/svc/bin/svc"])
+    default_log = str(config.prefix / "var" / "log" / "svc.log")
+
+    payload = manager.plist_payload(formula, spec)
+    assert payload["StandardOutPath"] == default_log
+    assert payload["StandardErrorPath"] == default_log
+    assert "WorkingDirectory" not in payload
+    assert "RootDirectory" not in payload
+    assert "StandardInPath" not in payload
+
+    unit = manager.unit_text(formula, spec)
+    assert f"StandardOutput=append:{default_log}" in unit
+    assert f"StandardError=append:{default_log}" in unit
+    assert "WorkingDirectory=" not in unit
+    assert "RootDirectory=" not in unit
+    assert "StandardInput=" not in unit
+
+
+def test_only_one_custom_log_path_keeps_the_other_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    manager = ServiceManager(config)
+    formula = _formula()
+    default_log = str(config.prefix / "var" / "log" / "svc.log")
+    spec = ServiceSpec(run=["/opt/svc/bin/svc"], log_path="~/custom.out")
+
+    payload = manager.plist_payload(formula, spec)
+    assert payload["StandardOutPath"] == str(home / "custom.out")
+    assert payload["StandardErrorPath"] == default_log
+
+    unit = manager.unit_text(formula, spec)
+    assert f"StandardOutput=append:{home / 'custom.out'}" in unit
+    assert f"StandardError=append:{default_log}" in unit
     assert f"ExecStart={shlex.join(spec.run)}" in unit

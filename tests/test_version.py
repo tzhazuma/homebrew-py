@@ -98,3 +98,43 @@ def test_version_prerelease_and_token_semantics() -> None:
     assert PkgVersion.parse("1.0-alpha_2").pre_release_tokens == ["alpha"]
     assert Version("1.0") == PkgVersion("1.0", 0)
     assert Version("1.0") != PkgVersion("1.0", 2)
+
+
+def test_version_token_classes_and_homebrew_missing_zero() -> None:
+    assert Version("1.0-alpha2").token_classes == ["numeric", "numeric", "alpha"]
+    assert Version("1.0-p1").token_classes == ["numeric", "numeric", "p"]
+    assert Version("1.0-foo").token_classes == ["numeric", "numeric", "letter"]
+    assert Version("1.0-preview").token_classes == ["numeric", "numeric", "pre"]
+    assert PkgVersion.parse("1.0-alpha_2").token_classes == [
+        "numeric",
+        "numeric",
+        "alpha",
+    ]
+
+    assert compare_versions("1.0", "1.0.0", missing_numeric_zero=True) == 0
+    assert compare_versions("1.0", "1.0.1", missing_numeric_zero=True) < 0
+    assert compare_versions("1.0", "1.0-alpha", missing_numeric_zero=True) > 0
+    assert compare_versions("1.0", "1.0-p1", missing_numeric_zero=True) < 0
+    assert compare_versions("1.0", "1.0-foo", missing_numeric_zero=True) < 0
+    assert compare_versions("1.0.0", "1.0") > 0  # legacy default preserved
+
+    assert Version("1.0").homebrew_compare("1.0.0") == 0
+    assert Version("1.0").homebrew_compare("1.0.1") < 0
+    assert Version("1.0").homebrew_compare("1.0-alpha") > 0
+    assert Version("1.0").homebrew_compare("1.0-p1") < 0
+    assert Version("1.0").homebrew_compare("1.0-foo") < 0
+    assert Version("1.0").homebrew_compare(PkgVersion("1.0", 2)) < 0
+    assert PkgVersion("1.0", 2).homebrew_compare("1.0") > 0
+    assert PkgVersion("1.0", 2).homebrew_compare("1.0_2") == 0
+
+
+def test_version_string_and_hash_contract() -> None:
+    version = Version("1.2.3")
+
+    assert str(version) == "1.2.3"
+    assert version.to_s() == "1.2.3"
+    assert version == "1.2.3"
+    assert hash(version) == hash("1.2.3")
+    assert hash(Version("1.2.3")) == hash(Version("1.2.3"))
+    assert Version("1.0") == Version("1.0")
+    assert Version("1.0") != Version("1.0.0")

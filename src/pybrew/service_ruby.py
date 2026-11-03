@@ -46,6 +46,21 @@ When the configuration needed for Homebrew paths is unavailable (``config`` is
 helpers fall back to pybrew's literal-parser paths (the formula ``opt``
 prefix); with no configuration at all they resolve to empty paths.
 
+``PYBREW_SERVICE_PATH_MODE`` opts both service parsers into the same path
+mode: ``homebrew`` makes the literal parser use Homebrew's formula paths and
+``pybrew``/``literal``/``legacy`` makes this evaluator match the literal
+parser (including its reduced ``std_service_path_env``).  With the variable
+unset the literal parser keeps pybrew's paths and this evaluator keeps
+Homebrew's paths, so existing behaviour is preserved.
+
+User environment overrides are read from
+``$HOMEBREW_USER_CONFIG_HOME/services/<formula>.env`` (or an explicit
+``user_config_home`` argument) with bounded Homebrew semantics: files for root
+services and world- or group-writable files are skipped, comments/blank/invalid
+lines are ignored, and the remaining ``KEY=value`` pairs override the
+formula-declared environment.  The overrides reach both ``ServiceSpec`` and the
+rendered plist/unit; no service manager is invoked.
+
 Host platform checks can be simulated with ``PYBREW_TARGET_OS`` and
 ``PYBREW_TARGET_ARCH`` (the same overrides used by the opt-in cask evaluator).
 
@@ -70,13 +85,24 @@ from typing import Any, Optional
 
 from .models import Formula
 from .paths import Config
-from .services import ServiceError, ServiceSpec, _apply_service_directive
+from .services import (
+    ServiceError,
+    ServiceSpec,
+    _apply_service_directive,
+    service_path_mode,
+    service_paths,
+    std_service_path_env_value,
+)
 
 #: Environment variable that opts a caller into arbitrary-Ruby service parsing.
 ALLOW_ENV = "PYBREW_ALLOW_SERVICE_RUBY"
 
 #: Environment variable overriding the Ruby interpreter used for evaluation.
 RUBY_ENV = "PYBREW_RUBY"
+
+#: Homebrew's user configuration directory; service env overrides live in its
+#: ``services/<formula>.env`` subdirectory.  Also injectable per evaluation.
+USER_CONFIG_HOME_ENV = "HOMEBREW_USER_CONFIG_HOME"
 
 #: System Ruby on macOS (also present on most Linux distributions).
 DEFAULT_RUBY = "/usr/bin/ruby"
@@ -122,7 +148,10 @@ def service_ruby_enabled() -> bool:
 
 
 def evaluate_service_source(
-    raw: str, formula: Formula, config: Config
+    raw: str,
+    formula: Formula,
+    config: Config,
+    user_config_home: Optional[Path] = None,
 ) -> ServiceSpec:
     """Evaluate arbitrary Ruby service source and return a :class:`ServiceSpec`.
 
@@ -132,19 +161,32 @@ def evaluate_service_source(
     ``PYBREW_ALLOW_SERVICE_RUBY=1``; otherwise a
     :class:`pybrew.services.ServiceError` explains how to enable the evaluator.
 
-    Any Ruby failure is reported as :class:`ServiceError` with the Ruby stderr
-    and, when available, the failing source line.
+    ``user_config_home`` overrides ``HOMEBREW_USER_CONFIG_HOME`` for one call;
+    when it (or the environment variable) is set, a bounded
+    ``services/<formula>.env`` override file is merged into the effective
+    service environment (Homebrew semantics: user values win, untrusted files
+    are skipped).  Ruby failures, including a missing interpreter, are reported
+    as :class:`ServiceError` with the Ruby stderr and, when available, the
+    failing source line.
     """
 
     _require_enabled()
     if not isinstance(raw, str):
         raise ServiceError("service source must be a string")
     source = _normalise_source(raw)
-    data = _evaluate(source, formula, config)
-    return _spec_from_result(data, formula)
+    user_environment = _read_user_service_env(formula, user_config_home)
+    mode = service_path_mode("homebrew")
+    paths = service_paths(formula, config, mode)
+    std_env = std_service_path_env_value(config, mode)
+    data = _evaluate(source, formula, paths, user_environment, std_env)
+    return _spec_from_result(data, formula, user_environment)
 
 
-def evaluate_service_block(formula: Formula, config: Config) -> ServiceSpec:
+def evaluate_service_block(
+    formula: Formula,
+    config: Config,
+    user_config_home: Optional[Path] = None,
+) -> ServiceSpec:
     """Evaluate ``formula``'s captured service block with Ruby."""
 
     _require_enabled()
@@ -155,7 +197,7 @@ def evaluate_service_block(formula: Formula, config: Config) -> ServiceSpec:
     )
     if not raw:
         raise ServiceError(f"{formula.name} does not define a service")
-    return evaluate_service_source(raw, formula, config)
+    return evaluate_service_source(raw, formula, config, user_config_home)
 
 
 # ---------------------------------------------------------------------------
@@ -224,176 +266,105 @@ def _normalise_source(raw: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# user service environment overrides
+# ---------------------------------------------------------------------------
+
+
+def _user_config_home(user_config_home: Optional[Path]) -> Optional[Path]:
+    """Resolve the user config directory from the argument or Homebrew's env."""
+
+    raw: Any = user_config_home
+    if raw is None:
+        raw = os.environ.get(USER_CONFIG_HOME_ENV)
+    if raw is None:
+        return None
+    text = os.path.expanduser(os.fspath(raw))
+    if not text:
+        return None
+    return Path(text)
+
+
+def _read_user_service_env(
+    formula: Formula,
+    user_config_home: Optional[Path] = None,
+    euid: Optional[int] = None,
+) -> dict[str, str]:
+    """Read Homebrew's ``services/<formula>.env`` user override file.
+
+    This is a bounded implementation of Homebrew's ``Service`` behavior: the
+    file is skipped for root services and for world- or group-writable files,
+    blank/comment lines are ignored, invalid lines are ignored, and remaining
+    ``KEY=value`` pairs override the formula-declared environment.
+    """
+
+    base = _user_config_home(user_config_home)
+    if base is None:
+        return {}
+    name = str(formula.name or "")
+    if (
+        not name
+        or name in (".", "..")
+        or "/" in name
+        or "\\" in name
+        or "\x00" in name
+    ):
+        return {}
+    try:
+        effective_uid = os.geteuid() if euid is None else euid
+    except AttributeError:  # pragma: no cover - non-POSIX hosts
+        effective_uid = -1
+    if effective_uid == 0:
+        # Homebrew refuses user env overrides for root services.
+        return {}
+    path = base / "services" / f"{name}.env"
+    try:
+        if not path.is_file():
+            return {}
+        mode = path.stat().st_mode
+    except OSError:
+        return {}
+    if mode & 0o002 or mode & 0o020:
+        return {}
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    overrides: dict[str, str] = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        overrides[key] = value.strip()
+    return overrides
+
+
+# ---------------------------------------------------------------------------
 # path map handed to the Ruby shim
 # ---------------------------------------------------------------------------
 
 
-#: Path helper names exposed to the Ruby service DSL.
-_PATH_KEYS = (
-    "prefix",
-    "opt_prefix",
-    "opt_bin",
-    "bin",
-    "sbin",
-    "lib",
-    "include",
-    "share",
-    "etc",
-    "libexec",
-    "var",
-)
+def _path_mode() -> str:
+    """Return the Ruby evaluator's path mode (Homebrew unless overridden)."""
 
-
-def _opt_prefix(formula: Formula, config: Any, prefix: Path) -> Path:
-    """Return the stable ``opt`` prefix for ``formula``.
-
-    Uses the configured ``opt_path`` when available and otherwise derives the
-    conventional ``<prefix>/opt/<name>`` location.
-    """
-
-    resolver = getattr(config, "opt_path", None)
-    if callable(resolver):
-        try:
-            return Path(resolver(formula.name))
-        except (AttributeError, TypeError, ValueError, OSError):
-            pass
-    return prefix / "opt" / formula.name
-
-
-def _pkg_version(formula: Formula) -> str:
-    """Return Homebrew's ``Formula#pkg_version`` for the keg path."""
-
-    value = getattr(formula, "pkg_version", None)
-    if value:
-        return str(value)
-    return str(getattr(formula, "version", None) or "HEAD")
-
-
-def _keg_prefix(formula: Formula, config: Any, prefix: Path) -> Path:
-    """Return the versioned keg path (Homebrew's ``Formula#prefix``)."""
-
-    resolver = getattr(config, "keg_path", None)
-    if callable(resolver):
-        try:
-            return Path(resolver(formula.name, _pkg_version(formula)))
-        except (AttributeError, TypeError, ValueError, OSError):
-            pass
-    return prefix / "Cellar" / formula.name / _pkg_version(formula)
-
-
-def _homebrew_path_map(formula: Formula, config: Any) -> dict[str, str]:
-    """Return Homebrew ``Formula`` path helpers for the Ruby service DSL.
-
-    This mirrors Homebrew rather than pybrew's literal parser:
-    ``bin``/``sbin``/``lib``/``include``/``share``/``libexec`` are keg
-    subdirectories, ``etc``/``var`` live under ``HOMEBREW_PREFIX``,
-    ``opt_prefix``/``opt_bin`` are the stable ``opt`` paths and ``prefix``
-    follows ``Formula#prefix`` (the ``opt_prefix`` once the keg exists and is
-    opt-linked, the versioned keg path otherwise).
-    """
-
-    prefix = Path(config.prefix)
-    opt_prefix = _opt_prefix(formula, config, prefix)
-    keg = _keg_prefix(formula, config, prefix)
-    install_prefix = keg
-    # Homebrew's Formula#prefix returns opt_prefix when the keg exists and is
-    # opt-linked; bounded here to that filesystem check, with no Keg object.
-    try:
-        if (
-            keg.is_dir()
-            and opt_prefix.is_symlink()
-            and opt_prefix.resolve() == keg.resolve()
-        ):
-            install_prefix = opt_prefix
-    except (OSError, RuntimeError):
-        # Missing/broken/looping links simply mean "not opt-linked".
-        install_prefix = keg
-    mapping = {
-        "prefix": install_prefix,
-        "opt_prefix": opt_prefix,
-        "opt_bin": opt_prefix / "bin",
-        "bin": install_prefix / "bin",
-        "sbin": install_prefix / "sbin",
-        "lib": install_prefix / "lib",
-        "include": install_prefix / "include",
-        "share": install_prefix / "share",
-        "libexec": install_prefix / "libexec",
-        "etc": prefix / "etc",
-        "var": prefix / "var",
-    }
-    return {name: str(mapping[name]) for name in _PATH_KEYS}
-
-
-def _literal_path_map(formula: Formula, config: Any) -> dict[str, str]:
-    """Return pybrew's literal-parser paths (the fallback map).
-
-    The default literal parser resolves ``bin``/``lib``/``etc`` under the
-    formula ``opt`` prefix and only ``prefix``/``var`` against the global
-    prefix; keep those semantics when Homebrew paths are unavailable.
-    """
-
-    prefix = Path(config.prefix)
-    opt_prefix = _opt_prefix(formula, config, prefix)
-    mapping = {
-        "prefix": prefix,
-        "opt_prefix": opt_prefix,
-        "opt_bin": opt_prefix / "bin",
-        "bin": opt_prefix / "bin",
-        "sbin": opt_prefix / "sbin",
-        "lib": opt_prefix / "lib",
-        "include": opt_prefix / "include",
-        "share": opt_prefix / "share",
-        "etc": opt_prefix / "etc",
-        "libexec": opt_prefix / "libexec",
-        "var": prefix / "var",
-    }
-    return {name: str(mapping[name]) for name in _PATH_KEYS}
+    return service_path_mode("homebrew")
 
 
 def _path_map(formula: Formula, config: Any) -> dict[str, str]:
-    """Return the path map handed to the Ruby shim.
+    """Return the path map handed to the Ruby shim for the active mode."""
 
-    Homebrew formula paths are preferred.  When the configuration needed for
-    them is unavailable (``config`` is ``None`` or has no ``prefix``) the
-    evaluator falls back to the literal parser's paths, and with no
-    configuration at all the helpers resolve to empty paths so evaluation can
-    still describe non-path directives.
-    """
-
-    if getattr(config, "prefix", None) is not None:
-        try:
-            return _homebrew_path_map(formula, config)
-        except (AttributeError, TypeError, ValueError, OSError):
-            pass
-    try:
-        return _literal_path_map(formula, config)
-    except (AttributeError, TypeError, ValueError, OSError):
-        return {name: "" for name in _PATH_KEYS}
+    return service_paths(formula, config, _path_mode())
 
 
 def _std_service_path_env(config: Any) -> str:
-    """Return Homebrew's ``std_service_path_env`` value.
+    """Return ``std_service_path_env`` for the evaluator's active path mode."""
 
-    Homebrew exposes the full search path as a ``String`` so formulae can pass
-    it to ``environment_variables PATH: std_service_path_env``.  The default
-    literal parser keeps its reduced ``<prefix>/bin`` value.
-    """
-
-    prefix = getattr(config, "prefix", None)
-    if prefix is None:
-        return ""
-    prefix = Path(prefix)
-    return ":".join(
-        str(path)
-        for path in (
-            prefix / "bin",
-            prefix / "sbin",
-            "/usr/bin",
-            "/bin",
-            "/usr/sbin",
-            "/sbin",
-        )
-    )
+    return std_service_path_env_value(config, _path_mode())
 
 
 # ---------------------------------------------------------------------------
@@ -444,7 +415,13 @@ def _failure_message(
     return heading + "\n" + "\n".join(details[1:] + [tail])
 
 
-def _evaluate(source: str, formula: Formula, config: Config) -> dict[str, Any]:
+def _evaluate(
+    source: str,
+    formula: Formula,
+    paths: dict[str, str],
+    user_environment: dict[str, str],
+    std_service_path_env: str,
+) -> dict[str, Any]:
     label = formula.name
     ruby = _ruby_binary()
     filename = f"{label}-service.rb"
@@ -460,9 +437,10 @@ def _evaluate(source: str, formula: Formula, config: Config) -> dict[str, Any]:
                 "version": formula.version or "HEAD",
             },
             "output": str(output_path),
-            "paths": _path_map(formula, config),
+            "paths": paths,
             "platform": _target_os(),
-            "std_service_path_env": _std_service_path_env(config),
+            "std_service_path_env": std_service_path_env,
+            "user_environment": user_environment,
         }
         script_path.write_text(_render_script(source, payload), encoding="utf-8")
         try:
@@ -525,11 +503,17 @@ def _evaluate(source: str, formula: Formula, config: Config) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def _spec_from_result(data: dict[str, Any], formula: Formula) -> ServiceSpec:
+def _spec_from_result(
+    data: dict[str, Any],
+    formula: Formula,
+    user_environment: Optional[dict[str, str]] = None,
+) -> ServiceSpec:
     """Convert the shim's JSON payload into a validated :class:`ServiceSpec`.
 
     The same helpers as the default literal parser normalise every field, so an
     invalid value fails with the same :class:`ServiceError` in both modes.
+    Homebrew user env overrides are applied last so they win over the values
+    declared in the service block (they also reach the rendered plist/unit).
     """
 
     spec = ServiceSpec()
@@ -543,6 +527,9 @@ def _spec_from_result(data: dict[str, Any], formula: Formula) -> ServiceSpec:
             _apply_service_directive(spec, name, [value])
         except ServiceError as error:
             raise ServiceError(f"{formula.name}: {error}") from error
+    if user_environment:
+        for key, value in user_environment.items():
+            spec.environment_variables[str(key)] = str(value)
     warnings = data.get("warnings")
     if isinstance(warnings, list):
         spec.warnings = [str(warning) for warning in warnings]
@@ -796,7 +783,7 @@ class PybrewServiceDSL
   end
 
   def manual_command
-    variables = (@data["environment_variables"] || {}).reject do |key, _value|
+    variables = effective_environment_variables.reject do |key, _value|
       key.to_s == "PATH"
     end
     parts = variables.map { |key, value| "#{key}=\"#{value}\"" }
@@ -869,11 +856,15 @@ class PybrewServiceDSL
     ].compact.uniq
   end
 
-  # Bounded Homebrew parity: the user-config env file
-  # (``HOMEBREW_USER_CONFIG_HOME/services/<formula>.env``) is not read by the
-  # evaluator, so this is just the formula-declared environment.
+  # Bounded Homebrew parity: the formula-declared environment merged with the
+  # user override file read by the Python side
+  # (``HOMEBREW_USER_CONFIG_HOME/services/<formula>.env``); user values win.
   def effective_environment_variables
-    (@data["environment_variables"] || {}).dup
+    environment = (@data["environment_variables"] || {}).dup
+    (@config["user_environment"] || {}).each do |key, value|
+      environment[key.to_s] = value.to_s
+    end
+    environment
   end
 
   def default_cron_values

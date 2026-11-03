@@ -12,7 +12,6 @@ import io
 import json
 import os
 import struct
-import sys
 import tarfile
 from pathlib import Path
 
@@ -425,17 +424,34 @@ def _direct_installer(tmp_path: Path) -> Installer:
     return Installer(config, FormulaLoader([]))
 
 
-def _synthetic_elf(*needed: str) -> bytes:
+def _synthetic_elf(
+    *needed: str,
+    rpath: "str | None" = None,
+    runpath: "str | None" = None,
+    extended_phnum: bool = False,
+) -> bytes:
     required = needed or ("libmissing.so",)
     strings = bytearray(b"\0")
-    offsets: list[int] = []
+    needed_offsets: list[int] = []
     for name in required:
-        offsets.append(len(strings))
+        needed_offsets.append(len(strings))
         strings.extend(name.encode("utf-8") + b"\0")
+    rpath_offset: "int | None" = None
+    if rpath is not None:
+        rpath_offset = len(strings)
+        strings.extend(rpath.encode("utf-8") + b"\0")
+    runpath_offset: "int | None" = None
+    if runpath is not None:
+        runpath_offset = len(strings)
+        strings.extend(runpath.encode("utf-8") + b"\0")
     strtab_offset = 0x200
     base_address = 0x400000
     dynamic_offset = 0x100
-    dynamic = [(1, offset) for offset in offsets]
+    dynamic = [(1, offset) for offset in needed_offsets]
+    if rpath_offset is not None:
+        dynamic.append((15, rpath_offset))
+    if runpath_offset is not None:
+        dynamic.append((29, runpath_offset))
     dynamic.extend(
         [
             (5, base_address + strtab_offset),
@@ -444,7 +460,9 @@ def _synthetic_elf(*needed: str) -> bytes:
         ]
     )
     dynamic_size = len(dynamic) * 16
-    data = bytearray(0x300)
+    section_offset = 0x300 if extended_phnum else 0
+    data_size = 0x340 if extended_phnum else 0x300
+    data = bytearray(data_size)
     struct.pack_into("<4sBBBBB7x", data, 0, b"\x7fELF", 2, 1, 1, 0, 0)
     struct.pack_into(
         "<HHIQQQIHHHHHH",
@@ -455,13 +473,13 @@ def _synthetic_elf(*needed: str) -> bytes:
         1,
         0,
         64,
-        0,
+        section_offset,
         0,
         64,
         56,
-        2,
-        0,
-        0,
+        0xFFFF if extended_phnum else 2,
+        64 if extended_phnum else 0,
+        1 if extended_phnum else 0,
         0,
     )
     struct.pack_into(
@@ -483,16 +501,26 @@ def _synthetic_elf(*needed: str) -> bytes:
     for index, (tag, value) in enumerate(dynamic):
         struct.pack_into("<qQ", data, dynamic_offset + index * 16, tag, value)
     data[strtab_offset : strtab_offset + len(strings)] = strings
+    if extended_phnum:
+        # Section header zero's sh_info carries the real PN_XNUM phnum.
+        struct.pack_into("<I", data, section_offset + 44, 2)
     return bytes(data)
 
 
 def _synthetic_macho(
-    loads: list[str], rpaths: list[str] | None = None, *, weak: bool = False
+    loads: list[str],
+    rpaths: "list[str] | None" = None,
+    *,
+    weak: bool = False,
+    command_ids: "list[int] | None" = None,
 ) -> bytes:
     rpaths = rpaths or []
+    if command_ids is None:
+        command_ids = [0x80000018 if weak else 0xC] * len(loads)
+    if len(command_ids) != len(loads):
+        raise ValueError("command_ids must match loads")
     commands: list[bytes] = []
-    command_id = 0x80000018 if weak else 0xC
-    for load in loads:
+    for load, command_id in zip(loads, command_ids):
         raw = load.encode("utf-8") + b"\0"
         commands.append(
             struct.pack("<IIIIII", command_id, 24 + len(raw), 24, 2, 0x10000, 0x10000)
@@ -518,6 +546,42 @@ def _synthetic_macho(
         )
         + b"".join(commands)
     )
+
+
+def _synthetic_fat_macho(slices: "list[bytes]", *, fat64: bool = False) -> bytes:
+    magic = 0xCAFEBABF if fat64 else 0xCAFEBABE
+    arch_size = 32 if fat64 else 20
+    header = bytearray(struct.pack(">II", magic, len(slices)))
+    offset = 8 + len(slices) * arch_size
+    rows: list[bytes] = []
+    payload = bytearray()
+    for slice_data in slices:
+        padding = (-offset) % 8
+        payload.extend(b"\0" * padding)
+        offset += padding
+        if fat64:
+            row = struct.pack(
+                ">iiQQII",
+                0x0100000C,
+                0,
+                offset,
+                len(slice_data),
+                3,
+                0,
+            )
+        else:
+            row = struct.pack(
+                ">iiIII",
+                0x0100000C,
+                0,
+                offset,
+                len(slice_data),
+                3,
+            )
+        rows.append(row)
+        payload.extend(slice_data)
+        offset += len(slice_data)
+    return bytes(header) + b"".join(rows) + bytes(payload)
 
 
 class _MemoryLoader:
@@ -753,9 +817,6 @@ def test_check_linkage_ignores_weak_macho_reference(tmp_path: Path) -> None:
     assert report.issues == []
 
 
-@pytest.mark.skipif(
-    sys.platform != "darwin", reason="macOS dyld shared-cache references"
-)
 def test_check_linkage_accepts_macos_shared_cache_reference(
     tmp_path: Path,
 ) -> None:
@@ -1251,3 +1312,201 @@ def test_remove_keg_refuses_symlinked_keg(tmp_path: Path) -> None:
     with pytest.raises(PybrewError, match="symlinked keg"):
         Cellar(config).remove_keg(link)
     assert (outside / "keep.txt").read_text() == "keep"
+
+
+def test_check_linkage_reports_corrupt_and_unsupported_elf(tmp_path: Path) -> None:
+    keg = tmp_path / "keg"
+    (keg / "bin").mkdir(parents=True)
+    (keg / "bin" / "corrupt").write_bytes(b"\x7fELF" + b"\0" * 20)
+    unsupported = bytearray(_synthetic_elf("libmissing.so"))
+    # ELF64 e_phnum is at offset 56; zero means no program headers (object file).
+    struct.pack_into("<H", unsupported, 56, 0)
+    (keg / "bin" / "object").write_bytes(bytes(unsupported))
+
+    report = check_linkage(keg)
+
+    assert report.checked == 0
+    assert report.issues == []
+    assert [problem.path for problem in report.corrupt] == ["bin/corrupt"]
+    assert [problem.path for problem in report.unsupported] == ["bin/object"]
+    assert report.skipped == 2
+    assert "corrupt" in report.format()
+    assert "unsupported" in report.format()
+    assert report.has_errors is True
+
+
+def test_check_linkage_parses_extended_elf_phnum(tmp_path: Path) -> None:
+    keg = tmp_path / "keg"
+    (keg / "bin").mkdir(parents=True)
+    (keg / "bin" / "tool").write_bytes(
+        _synthetic_elf("libmissing.so", extended_phnum=True)
+    )
+
+    report = check_linkage(keg)
+
+    assert report.checked == 1
+    assert report.corrupt == []
+    assert report.unsupported == []
+    assert [issue.reference for issue in report.issues] == ["libmissing.so"]
+
+
+def test_check_linkage_resolves_elf_origin_runpath(tmp_path: Path) -> None:
+    keg = tmp_path / "keg"
+    (keg / "bin").mkdir(parents=True)
+    (keg / "vendor" / "lib").mkdir(parents=True)
+    (keg / "vendor" / "lib" / "libhidden.so").write_bytes(b"library")
+    (keg / "bin" / "tool").write_bytes(
+        _synthetic_elf(
+            "libhidden.so",
+            rpath="$ORIGIN/../vendor/lib",
+            runpath="${ORIGIN}/../vendor/lib",
+        )
+    )
+
+    report = check_linkage(keg)
+
+    assert report.checked == 1
+    assert report.issues == []
+
+    (keg / "vendor" / "lib" / "libhidden.so").unlink()
+    assert [
+        issue.reference for issue in check_linkage(keg).issues
+    ] == ["libhidden.so"]
+
+
+def test_check_linkage_parses_fat_macho_slices_and_rpaths(tmp_path: Path) -> None:
+    keg = tmp_path / "keg"
+    (keg / "bin").mkdir(parents=True)
+    (keg / "lib").mkdir()
+    (keg / "lib" / "libpresent.dylib").write_bytes(b"library")
+    slice_one = _synthetic_macho(
+        ["@rpath/libmissing.dylib"], ["@loader_path/../lib"]
+    )
+    slice_two = _synthetic_macho(
+        ["/usr/lib/libSystem.B.dylib", "@rpath/libpresent.dylib"],
+        ["@executable_path/../lib"],
+    )
+    (keg / "bin" / "tool").write_bytes(
+        _synthetic_fat_macho([slice_one, slice_two])
+    )
+
+    report = check_linkage(keg)
+
+    assert report.checked == 1
+    assert report.corrupt == []
+    assert [issue.reference for issue in report.issues] == [
+        "@rpath/libmissing.dylib"
+    ]
+
+
+def test_check_linkage_parses_fat64_macho(tmp_path: Path) -> None:
+    keg = tmp_path / "keg"
+    (keg / "bin").mkdir(parents=True)
+    (keg / "bin" / "tool").write_bytes(
+        _synthetic_fat_macho(
+            [_synthetic_macho(["@rpath/libmissing.dylib"])], fat64=True
+        )
+    )
+
+    report = check_linkage(keg)
+
+    assert report.checked == 1
+    assert report.corrupt == []
+    assert [issue.reference for issue in report.issues] == [
+        "@rpath/libmissing.dylib"
+    ]
+
+
+def test_check_linkage_handles_reexport_upward_and_weak_macho(
+    tmp_path: Path,
+) -> None:
+    keg = tmp_path / "keg"
+    (keg / "bin").mkdir(parents=True)
+    (keg / "bin" / "tool").write_bytes(
+        _synthetic_macho(
+            [
+                "@rpath/libreexport.dylib",
+                "@rpath/libupward.dylib",
+                "@rpath/libweak.dylib",
+            ],
+            command_ids=[0x8000001F, 0x80000023, 0x80000018],
+        )
+    )
+
+    report = check_linkage(keg)
+
+    assert report.checked == 1
+    assert [issue.reference for issue in report.issues] == [
+        "@rpath/libreexport.dylib",
+        "@rpath/libupward.dylib",
+    ]
+
+
+def test_check_linkage_reports_corrupt_fat_macho(tmp_path: Path) -> None:
+    keg = tmp_path / "keg"
+    (keg / "bin").mkdir(parents=True)
+    bad = struct.pack(">II", 0xCAFEBABE, 1) + struct.pack(
+        ">iiIII", 0x0100000C, 0, 0x1000, 0x20, 3
+    )
+    (keg / "bin" / "fat").write_bytes(bad)
+
+    report = check_linkage(keg)
+
+    assert report.checked == 0
+    assert report.issues == []
+    assert len(report.corrupt) == 1
+    assert report.corrupt[0].path == "bin/fat"
+
+
+def test_linkage_report_all_formulae_scans_installed_kegs(
+    tmp_path: Path,
+) -> None:
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    broken = config.keg_path("alpha", "1.0")
+    (broken / "bin").mkdir(parents=True)
+    (broken / "bin" / "tool").write_bytes(_synthetic_elf("libmissing.so"))
+    clean = config.keg_path("beta", "2.0")
+    (clean / "bin").mkdir(parents=True)
+    (clean / "lib").mkdir()
+    (clean / "bin" / "tool").write_bytes(_synthetic_elf("libpresent.so"))
+    (clean / "lib" / "libpresent.so").write_bytes(b"library")
+    installer = Installer(config, FormulaLoader([]))
+
+    report = installer.linkage_report(all_formulae=True)
+
+    assert report.checked == 2
+    assert [issue.reference for issue in report.issues] == [
+        "libmissing.so"
+    ]
+    assert report.issues[0].keg == str(broken)
+    assert installer.linkage_report("beta", all_formulae=True).issues == []
+    assert "libmissing.so" in installer.linkage_diagnostic(all_formulae=True)
+
+    with pytest.raises(PybrewError, match="not installed"):
+        installer.linkage_report("missing", all_formulae=True)
+    with pytest.raises(PybrewError, match="formula is required"):
+        installer.linkage_report()
+
+
+def test_fat_macho_keeps_valid_slice_when_another_is_corrupt(
+    tmp_path: Path,
+) -> None:
+    keg = tmp_path / "keg"
+    (keg / "bin").mkdir(parents=True)
+    good = _synthetic_macho(["@rpath/libmissing.dylib"])
+    (keg / "bin" / "tool").write_bytes(
+        _synthetic_fat_macho([good, b"JUNK" * 4])
+    )
+
+    report = check_linkage(keg)
+
+    assert report.checked == 1
+    assert [issue.reference for issue in report.issues] == [
+        "@rpath/libmissing.dylib"
+    ]
+    assert len(report.corrupt) == 1
+    assert "slice 1" in report.corrupt[0].detail
+    assert report.skipped == 1

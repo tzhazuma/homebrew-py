@@ -181,3 +181,12 @@ def test_livecheck_command_offline_page(run_cli, tmp_path: Path) -> None:
     payload = json.loads(proc.stdout)
     assert payload["status"] == "outdated"
     assert payload["latest_version"] == "2.0"
+
+
+def test_linkage_all_after_install(run_cli, sample) -> None:
+    assert run_cli("install", "hello", bottle_tag=sample.tag).returncode == 0
+    proc = run_cli("linkage", "--all", "--json")
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["formula"] == "all installed kegs"
+    assert payload["ok"] is True

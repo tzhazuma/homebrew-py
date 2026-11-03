@@ -4,6 +4,11 @@ Formulae declare a ``service do ... end`` block.  pybrew parses that block into
 a :class:`ServiceSpec`, renders a launchd plist (or systemd unit) and drives the
 service manager.  The runner is injectable so tests never touch the real
 launchd.
+
+The literal parser keeps pybrew's formula-opt-prefix paths and the opt-in Ruby
+evaluator in :mod:`pybrew.service_ruby` uses Homebrew's formula paths.  Set
+``PYBREW_SERVICE_PATH_MODE=homebrew`` or ``=pybrew`` to make both parsers use
+the same path semantics (see :func:`service_path_mode`).
 """
 
 from __future__ import annotations
@@ -48,6 +53,180 @@ RUN_TYPES = ("immediate", "interval", "cron")
 
 #: Socket protocols understood by launchd's ``Sockets`` dictionary.
 SOCKET_TYPES = ("tcp", "udp")
+
+#: Environment variable selecting the path semantics used by service blocks.
+#: ``homebrew`` uses Homebrew's formula paths, ``pybrew``/``literal``/``legacy``
+#: keeps pybrew's literal-parser paths and anything else keeps each parser's
+#: default (literal parser: pybrew, opt-in Ruby evaluator: homebrew).
+SERVICE_PATH_MODE_ENV = "PYBREW_SERVICE_PATH_MODE"
+
+#: Path helper names exposed to service blocks (literal parser and Ruby shim).
+SERVICE_PATH_KEYS = (
+    "prefix",
+    "opt_prefix",
+    "opt_bin",
+    "bin",
+    "sbin",
+    "lib",
+    "include",
+    "share",
+    "etc",
+    "libexec",
+    "var",
+)
+
+
+def service_path_mode(default: str = "pybrew") -> str:
+    """Return the requested service path mode (``homebrew`` or ``pybrew``).
+
+    ``PYBREW_SERVICE_PATH_MODE`` opts both service parsers into the same path
+    semantics.  Unknown or unset values keep the caller's ``default`` so the
+    literal parser (pybrew) and Ruby evaluator (homebrew) remain compatible.
+    """
+
+    raw = os.environ.get(SERVICE_PATH_MODE_ENV, "").strip().lower()
+    if raw in ("homebrew", "brew"):
+        return "homebrew"
+    if raw in ("pybrew", "literal", "legacy"):
+        return "pybrew"
+    return default
+
+
+def _service_opt_prefix(formula: Formula, config: Any, prefix: Path) -> Path:
+    """Return the stable ``opt`` prefix for ``formula``."""
+
+    resolver = getattr(config, "opt_path", None)
+    if callable(resolver):
+        try:
+            return Path(resolver(formula.name))
+        except (AttributeError, TypeError, ValueError, OSError):
+            pass
+    return prefix / "opt" / formula.name
+
+
+def _service_pkg_version(formula: Formula) -> str:
+    """Return Homebrew's ``Formula#pkg_version`` used in keg paths."""
+
+    value = getattr(formula, "pkg_version", None)
+    if value:
+        return str(value)
+    return str(getattr(formula, "version", None) or "HEAD")
+
+
+def _service_keg_prefix(formula: Formula, config: Any, prefix: Path) -> Path:
+    """Return the versioned keg path (Homebrew's ``Formula#prefix``)."""
+
+    resolver = getattr(config, "keg_path", None)
+    if callable(resolver):
+        try:
+            return Path(resolver(formula.name, _service_pkg_version(formula)))
+        except (AttributeError, TypeError, ValueError, OSError):
+            pass
+    return prefix / "Cellar" / formula.name / _service_pkg_version(formula)
+
+
+def homebrew_service_paths(formula: Formula, config: Any) -> dict[str, str]:
+    """Return Homebrew ``Formula`` path helpers for service blocks.
+
+    ``bin``/``sbin``/``lib``/``include``/``share``/``libexec`` are keg
+    subdirectories, ``etc``/``var`` live under ``HOMEBREW_PREFIX``,
+    ``opt_prefix``/``opt_bin`` are the stable ``opt`` paths and ``prefix``
+    follows ``Formula#prefix`` (``opt_prefix`` once the keg exists and is
+    opt-linked, the versioned keg path otherwise).
+    """
+
+    prefix = Path(config.prefix)
+    opt_prefix = _service_opt_prefix(formula, config, prefix)
+    keg = _service_keg_prefix(formula, config, prefix)
+    install_prefix = keg
+    try:
+        if (
+            keg.is_dir()
+            and opt_prefix.is_symlink()
+            and opt_prefix.resolve() == keg.resolve()
+        ):
+            install_prefix = opt_prefix
+    except (OSError, RuntimeError):
+        # Missing/broken/looping links simply mean "not opt-linked".
+        install_prefix = keg
+    mapping = {
+        "prefix": install_prefix,
+        "opt_prefix": opt_prefix,
+        "opt_bin": opt_prefix / "bin",
+        "bin": install_prefix / "bin",
+        "sbin": install_prefix / "sbin",
+        "lib": install_prefix / "lib",
+        "include": install_prefix / "include",
+        "share": install_prefix / "share",
+        "libexec": install_prefix / "libexec",
+        "etc": prefix / "etc",
+        "var": prefix / "var",
+    }
+    return {name: str(mapping[name]) for name in SERVICE_PATH_KEYS}
+
+
+def literal_service_paths(formula: Formula, config: Any) -> dict[str, str]:
+    """Return pybrew's literal-parser service paths (``bin`` under ``opt``)."""
+
+    prefix = Path(config.prefix)
+    opt_prefix = _service_opt_prefix(formula, config, prefix)
+    mapping = {
+        "prefix": prefix,
+        "opt_prefix": opt_prefix,
+        "opt_bin": opt_prefix / "bin",
+        "bin": opt_prefix / "bin",
+        "sbin": opt_prefix / "sbin",
+        "lib": opt_prefix / "lib",
+        "include": opt_prefix / "include",
+        "share": opt_prefix / "share",
+        "etc": opt_prefix / "etc",
+        "libexec": opt_prefix / "libexec",
+        "var": prefix / "var",
+    }
+    return {name: str(mapping[name]) for name in SERVICE_PATH_KEYS}
+
+
+def service_paths(
+    formula: Formula, config: Any, mode: str = "pybrew"
+) -> dict[str, str]:
+    """Return the service path map for ``mode`` with safe fallbacks."""
+
+    if mode == "homebrew":
+        try:
+            return homebrew_service_paths(formula, config)
+        except (AttributeError, TypeError, ValueError, OSError):
+            pass
+    try:
+        return literal_service_paths(formula, config)
+    except (AttributeError, TypeError, ValueError, OSError):
+        # No configuration at all: keep evaluation working with empty paths.
+        return {name: "" for name in SERVICE_PATH_KEYS}
+
+
+def std_service_path_env_value(config: Any, mode: str = "pybrew") -> str:
+    """Return ``std_service_path_env`` for ``mode``.
+
+    Homebrew exposes the full search path as a ``String``; pybrew's literal
+    parser keeps its reduced ``<prefix>/bin`` value.
+    """
+
+    prefix = getattr(config, "prefix", None)
+    if prefix is None:
+        return ""
+    prefix = Path(prefix)
+    if mode == "homebrew":
+        return ":".join(
+            str(path)
+            for path in (
+                prefix / "bin",
+                prefix / "sbin",
+                "/usr/bin",
+                "/bin",
+                "/usr/sbin",
+                "/sbin",
+            )
+        )
+    return str(prefix / "bin")
 
 
 @dataclass
@@ -189,6 +368,10 @@ class _ServiceValueParser:
         self.pos = 0
         self.formula = formula
         self.config = config
+        # The literal parser defaults to pybrew's paths; set
+        # PYBREW_SERVICE_PATH_MODE=homebrew to align it with the Ruby evaluator.
+        self.path_mode = service_path_mode("pybrew")
+        self._path_map_cache: Optional[dict[str, str]] = None
 
     def peek(self, offset: int = 0) -> Token:
         index = self.pos + offset
@@ -268,8 +451,17 @@ class _ServiceValueParser:
         self.advance()
         return str(token.value)
 
+    def path_map(self) -> dict[str, str]:
+        """Return (and cache) the path helper map for the active mode."""
+
+        if self._path_map_cache is None:
+            self._path_map_cache = service_paths(
+                self.formula, self.config, self.path_mode
+            )
+        return self._path_map_cache
+
     def _resolve_identifier(self, name: str) -> Any:
-        if name in ("opt_bin", "opt_prefix", "bin", "sbin", "lib", "include", "share", "etc", "var", "prefix", "libexec"):
+        if name in SERVICE_PATH_KEYS:
             path = self._base_path(name)
             if self.peek().kind == "punct" and self.peek().value == "/" and self.peek(1).kind == "str":
                 self.advance()
@@ -277,35 +469,24 @@ class _ServiceValueParser:
                 return str(path / part)
             return str(path)
         if name == "std_service_path_env":
-            return str(self.config.prefix / "bin")
+            return std_service_path_env_value(self.config, self.path_mode)
         raise ServiceError(f"unsupported service value {name!r}")
 
     def _base_path(self, name: str) -> Path:
-        mapping = {
-            "opt_bin": self.config.opt_path(self.formula.name) / "bin",
-            "opt_prefix": self.config.opt_path(self.formula.name),
-            "bin": self.config.opt_path(self.formula.name) / "bin",
-            "sbin": self.config.opt_path(self.formula.name) / "sbin",
-            "lib": self.config.opt_path(self.formula.name) / "lib",
-            "include": self.config.opt_path(self.formula.name) / "include",
-            "share": self.config.opt_path(self.formula.name) / "share",
-            "etc": self.config.opt_path(self.formula.name) / "etc",
-            "libexec": self.config.opt_path(self.formula.name) / "libexec",
-            "var": self.config.prefix / "var",
-            "prefix": self.config.prefix,
-        }
-        return mapping[name]
+        return Path(self.path_map()[name])
 
     def _interpolate(self, template: str) -> str:
+        paths = self.path_map()
+
         def replace(match: Any) -> str:
             expression = match.group(1).strip()
             mapping = {
                 "version": self.formula.version or "HEAD",
-                "prefix": str(self.config.prefix),
-                "opt_prefix": str(self.config.opt_path(self.formula.name)),
-                "opt_bin": str(self.config.opt_path(self.formula.name) / "bin"),
-                "var": str(self.config.prefix / "var"),
-                "etc": str(self.config.opt_path(self.formula.name) / "etc"),
+                "prefix": paths["prefix"],
+                "opt_prefix": paths["opt_prefix"],
+                "opt_bin": paths["opt_bin"],
+                "var": paths["var"],
+                "etc": paths["etc"],
                 "version.major_minor": ".".join((self.formula.version or "0").split(".")[:2]),
             }
             if expression in mapping:
@@ -693,6 +874,19 @@ class LaunchctlRunner:
             self.run(["unload", "-w", str(plist)])
 
 
+def _expand_service_path(value: Optional[str]) -> Optional[str]:
+    """Expand ``~`` in a service path the way Homebrew's renderers do.
+
+    Homebrew uses ``File.expand_path`` here.  pybrew keeps relative paths as
+    written (bounded) and only resolves the home-directory shorthand so tests
+    and user supplied paths do not depend on the process working directory.
+    """
+
+    if not value:
+        return value
+    return os.path.expanduser(str(value))
+
+
 def _launchd_keep_alive(spec: ServiceSpec) -> Any:
     """Return the launchd ``KeepAlive`` value (``None`` means omit the key)."""
 
@@ -833,8 +1027,15 @@ class ServiceManager:
     def unit_text(self, formula: Formula, spec: ServiceSpec) -> str:
         log_dir = self.config.prefix / "var" / "log"
         log_dir.mkdir(parents=True, exist_ok=True)
-        stdout_path = spec.log_path or str(log_dir / f"{formula.name}.log")
-        stderr_path = spec.error_log_path or str(log_dir / f"{formula.name}.log")
+        stdout_path = _expand_service_path(spec.log_path) or str(
+            log_dir / f"{formula.name}.log"
+        )
+        stderr_path = _expand_service_path(spec.error_log_path) or str(
+            log_dir / f"{formula.name}.log"
+        )
+        working_dir = _expand_service_path(spec.working_dir)
+        root_dir = _expand_service_path(spec.root_dir)
+        input_path = _expand_service_path(spec.input_path)
         lines = [
             "[Unit]",
             f"Description={formula.name} (pybrew)",
@@ -850,16 +1051,16 @@ class ServiceManager:
             lines.append(f"RestartSec={restart_delay}")
         if spec.stop_timeout is not None:
             lines.append(f"TimeoutStopSec={spec.stop_timeout}")
-        if spec.root_dir:
-            lines.append(f"RootDirectory={spec.root_dir}")
-        if spec.input_path:
-            lines.append(f"StandardInput=file:{spec.input_path}")
+        if root_dir:
+            lines.append(f"RootDirectory={root_dir}")
+        if input_path:
+            lines.append(f"StandardInput=file:{input_path}")
         lines += [
             f"StandardOutput=append:{stdout_path}",
             f"StandardError=append:{stderr_path}",
         ]
-        if spec.working_dir or spec.root_dir:
-            lines.append(f"WorkingDirectory={spec.working_dir or spec.root_dir}")
+        if working_dir or root_dir:
+            lines.append(f"WorkingDirectory={working_dir or root_dir}")
         if spec.nice is not None:
             lines.append(f"Nice={spec.nice}")
         for key, value in spec.environment_variables.items():
@@ -932,8 +1133,15 @@ class ServiceManager:
         label = self.label(formula, spec)
         log_dir = self.config.prefix / "var" / "log"
         log_dir.mkdir(parents=True, exist_ok=True)
-        stdout_path = spec.log_path or str(log_dir / f"{formula.name}.log")
-        stderr_path = spec.error_log_path or str(log_dir / f"{formula.name}.log")
+        stdout_path = _expand_service_path(spec.log_path) or str(
+            log_dir / f"{formula.name}.log"
+        )
+        stderr_path = _expand_service_path(spec.error_log_path) or str(
+            log_dir / f"{formula.name}.log"
+        )
+        working_dir = _expand_service_path(spec.working_dir)
+        root_dir = _expand_service_path(spec.root_dir)
+        input_path = _expand_service_path(spec.input_path)
         payload: dict[str, Any] = {
             "Label": label,
             "ProgramArguments": spec.run,
@@ -941,10 +1149,14 @@ class ServiceManager:
             "StandardOutPath": stdout_path,
             "StandardErrorPath": stderr_path,
         }
-        if spec.working_dir or spec.root_dir:
-            payload["WorkingDirectory"] = spec.working_dir or spec.root_dir
-        if spec.input_path:
-            payload["StandardInPath"] = spec.input_path
+        if working_dir or root_dir:
+            payload["WorkingDirectory"] = working_dir or root_dir
+        # Homebrew emits RootDirectory for launchd as well; keep that bounded
+        # parity while retaining pybrew's root_dir-as-working-dir fallback.
+        if root_dir:
+            payload["RootDirectory"] = root_dir
+        if input_path:
+            payload["StandardInPath"] = input_path
         if spec.stop_timeout is not None:
             payload["ExitTimeOut"] = spec.stop_timeout
         if spec.nice is not None:

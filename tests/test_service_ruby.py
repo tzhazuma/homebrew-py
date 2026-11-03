@@ -22,14 +22,18 @@ from pybrew.ruby_parser import parse_formula_source
 from pybrew.service_ruby import (
     ALLOW_ENV,
     RUBY_ENV,
+    USER_CONFIG_HOME_ENV,
+    _read_user_service_env,
     evaluate_service_block,
     evaluate_service_source,
     service_ruby_enabled,
 )
 from pybrew.services import (
+    SERVICE_PATH_MODE_ENV,
     ServiceError,
     ServiceManager,
     parse_service_block,
+    service_path_mode,
 )
 
 _RUBY = os.environ.get(RUBY_ENV) or "/usr/bin/ruby"
@@ -46,9 +50,18 @@ def allow_ruby(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(ALLOW_ENV, "1")
 
 
+@pytest.fixture
+def non_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the effective uid so user env files are read even in root CI."""
+
+    monkeypatch.setattr(os, "geteuid", lambda: 1000, raising=False)
+
+
 def _config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Config:
     monkeypatch.setenv("PYBREW_SERVICE_DIR", str(tmp_path / "agents"))
     monkeypatch.setenv("PYBREW_SERVICE_BACKEND", "launchd")
+    monkeypatch.delenv(USER_CONFIG_HOME_ENV, raising=False)
+    monkeypatch.delenv(SERVICE_PATH_MODE_ENV, raising=False)
     config = Config.default(prefix=tmp_path / "prefix", taps=[], cache=tmp_path / "cache")
     config.ensure()
     return config
@@ -982,6 +995,294 @@ def test_working_and_log_paths_render_from_evaluated_spec(
     assert f"WorkingDirectory={spec.working_dir}" in unit
     assert f"StandardOutput=append:{spec.log_path}" in unit
     assert f"StandardError=append:{spec.error_log_path}" in unit
+
+
+# ---------------------------------------------------------------------------
+# Homebrew user service environment overrides
+# ---------------------------------------------------------------------------
+
+
+def _write_user_env(
+    home: Path, name: str, text: str, mode: int = 0o600
+) -> Path:
+    directory = home / "services"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{name}.env"
+    path.write_text(textwrap.dedent(text).strip() + "\n", encoding="utf-8")
+    path.chmod(mode)
+    return path
+
+
+@requires_ruby
+def test_user_service_env_overrides_formula_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    allow_ruby: None,
+    non_root: None,
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    user_home = tmp_path / "user-config"
+    _write_user_env(
+        user_home,
+        "svc",
+        """
+        # user overrides
+        FOO=override
+        BAR=value=with=equals
+
+        NOT A PAIR
+        SPACED =  trimmed
+        """,
+    )
+    monkeypatch.setenv(USER_CONFIG_HOME_ENV, str(user_home))
+
+    spec = evaluate_service_source(
+        _body(
+            '''
+            environment_variables FOO: "formula", BAZ: "keep",
+                                  PATH: std_service_path_env
+            frobnicate "x"
+            '''
+        ),
+        _formula(),
+        config,
+    )
+
+    # User values win; new variables are added; PATH keeps the formula value
+    # because the env file does not override it.
+    assert spec.environment_variables == {
+        "FOO": "override",
+        "BAZ": "keep",
+        "PATH": _homebrew_std_service_path_env(config),
+        "BAR": "value=with=equals",
+        "SPACED": "trimmed",
+    }
+    # Unknown directive warnings keep their usual surface.
+    assert spec.warnings == ["unsupported service directive `frobnicate`"]
+
+
+@requires_ruby
+def test_user_service_env_injectable_path_argument(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    allow_ruby: None,
+    non_root: None,
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    user_home = tmp_path / "explicit-config"
+    _write_user_env(user_home, "svc", "FOO=custom\n")
+    assert os.environ.get(USER_CONFIG_HOME_ENV) is None
+
+    spec = evaluate_service_block(
+        _formula_with_service('environment_variables FOO: "formula"'),
+        config,
+        user_config_home=user_home,
+    )
+
+    assert spec.environment_variables["FOO"] == "custom"
+
+
+def test_user_service_env_bounded_parse_and_security(
+    tmp_path: Path,
+    non_root: None,
+) -> None:
+    formula = _formula()
+    user_home = tmp_path / "config"
+    env_path = _write_user_env(user_home, "svc", "FOO=bar\n")
+
+    assert _read_user_service_env(formula, user_home) == {"FOO": "bar"}
+    # Root services never read user overrides.
+    assert _read_user_service_env(formula, user_home, euid=0) == {}
+    # Group-writable and world-writable files are skipped.
+    env_path.chmod(0o664)
+    assert _read_user_service_env(formula, user_home) == {}
+    env_path.chmod(0o666)
+    assert _read_user_service_env(formula, user_home) == {}
+    env_path.chmod(0o600)
+    assert _read_user_service_env(formula, user_home) == {"FOO": "bar"}
+    # Missing directories/files and unset configuration are harmless.
+    assert _read_user_service_env(formula, tmp_path / "missing") == {}
+    assert _read_user_service_env(formula, None) == {}
+    # Formula names are used as a single file name, never as a path.
+    traversal = type("FormulaLike", (), {"name": "../escape"})()
+    assert _read_user_service_env(traversal, user_home) == {}
+
+
+@requires_ruby
+def test_user_service_env_reaches_effective_helpers_and_to_plist(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    allow_ruby: None,
+    non_root: None,
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    user_home = tmp_path / "user-config"
+    _write_user_env(user_home, "svc", "FOO=override\nPATH=/custom/bin\n")
+    monkeypatch.setenv(USER_CONFIG_HOME_ENV, str(user_home))
+
+    spec = evaluate_service_source(
+        _body(
+            '''
+            environment_variables FOO: "formula", KEEP: "yes",
+                                  PATH: std_service_path_env
+            run [effective_environment_variables["FOO"],
+                 effective_environment_variables["KEEP"],
+                 effective_environment_variables["PATH"],
+                 to_plist["EnvironmentVariables"]["FOO"],
+                 manual_command]
+            '''
+        ),
+        _formula(),
+        config,
+    )
+
+    assert spec.run == [
+        "override",
+        "yes",
+        "/custom/bin",
+        "override",
+        'FOO="override" KEEP="yes"',
+    ]
+
+
+@requires_ruby
+def test_user_service_env_renders_through_manager(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    allow_ruby: None,
+    non_root: None,
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    user_home = tmp_path / "user-config"
+    _write_user_env(user_home, "svc", "FOO=override\n")
+    monkeypatch.setenv(USER_CONFIG_HOME_ENV, str(user_home))
+    formula = _formula_with_service(
+        '''
+        run [opt_bin/"svc"]
+        environment_variables FOO: "formula"
+        '''
+    )
+
+    manager = ServiceManager(config)
+    spec = manager.spec_for(formula)
+    payload = manager.plist_payload(formula, spec)
+
+    assert spec.environment_variables["FOO"] == "override"
+    assert payload["EnvironmentVariables"]["FOO"] == "override"
+    assert 'Environment="FOO=override"' in manager.unit_text(formula, spec)
+
+
+# ---------------------------------------------------------------------------
+# literal parser / Ruby evaluator path-mode reconciliation
+# ---------------------------------------------------------------------------
+
+
+def test_service_path_mode_aliases_and_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(SERVICE_PATH_MODE_ENV, raising=False)
+    assert service_path_mode("pybrew") == "pybrew"
+    assert service_path_mode("homebrew") == "homebrew"
+
+    for value in ("homebrew", "brew", " HomeBrew "):
+        monkeypatch.setenv(SERVICE_PATH_MODE_ENV, value)
+        assert service_path_mode("pybrew") == "homebrew"
+
+    for value in ("pybrew", "literal", "legacy"):
+        monkeypatch.setenv(SERVICE_PATH_MODE_ENV, value)
+        assert service_path_mode("homebrew") == "pybrew"
+
+    monkeypatch.setenv(SERVICE_PATH_MODE_ENV, "bogus")
+    assert service_path_mode("pybrew") == "pybrew"
+    assert service_path_mode("homebrew") == "homebrew"
+
+
+def test_path_mode_homebrew_applies_to_literal_parser(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    monkeypatch.setenv(SERVICE_PATH_MODE_ENV, "homebrew")
+    formula = _formula_with_service(
+        """
+        run [opt_bin/"svc", bin/"svc", lib/"libsvc", etc/"svc.conf",
+             var/"v", prefix/"p"]
+        log_path "#{etc}/svc.log"
+        environment_variables PATH: std_service_path_env
+        """
+    )
+
+    spec = parse_service_block(formula, config)
+
+    opt_prefix = config.opt_path("svc")
+    keg = _keg_prefix(config, formula)
+    assert spec.run == [
+        str(opt_prefix / "bin" / "svc"),
+        str(keg / "bin" / "svc"),
+        str(keg / "lib" / "libsvc"),
+        str(config.prefix / "etc" / "svc.conf"),
+        str(config.prefix / "var" / "v"),
+        str(keg / "p"),
+    ]
+    # Interpolation uses the same mode-selected path map.
+    assert spec.log_path == str(config.prefix / "etc" / "svc.log")
+    assert spec.environment_variables["PATH"] == _homebrew_std_service_path_env(
+        config
+    )
+
+
+def test_path_mode_pybrew_leaves_literal_parser_unchanged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    monkeypatch.setenv(SERVICE_PATH_MODE_ENV, "pybrew")
+    formula = _formula_with_service(
+        """
+        run [opt_bin/"svc", bin/"svc", lib/"libsvc", etc/"svc.conf"]
+        environment_variables PATH: std_service_path_env
+        """
+    )
+
+    spec = parse_service_block(formula, config)
+
+    opt_prefix = config.opt_path("svc")
+    assert spec.run == [
+        str(opt_prefix / "bin" / "svc"),
+        str(opt_prefix / "bin" / "svc"),
+        str(opt_prefix / "lib" / "libsvc"),
+        str(opt_prefix / "etc" / "svc.conf"),
+    ]
+    assert spec.environment_variables["PATH"] == str(config.prefix / "bin")
+
+
+@requires_ruby
+def test_path_mode_pybrew_applies_to_ruby_evaluator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allow_ruby: None
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    monkeypatch.setenv(SERVICE_PATH_MODE_ENV, "pybrew")
+    spec = evaluate_service_source(
+        _body(
+            '''
+            environment_variables BIN: bin, LIB: lib, ETC: etc, VAR: var,
+                                  PREFIX: prefix, OPT_BIN: opt_bin,
+                                  PATH: std_service_path_env
+            '''
+        ),
+        _formula(),
+        config,
+    )
+
+    opt_prefix = config.opt_path("svc")
+    assert spec.environment_variables == {
+        "BIN": str(opt_prefix / "bin"),
+        "LIB": str(opt_prefix / "lib"),
+        "ETC": str(opt_prefix / "etc"),
+        "VAR": str(config.prefix / "var"),
+        "PREFIX": str(config.prefix),
+        "OPT_BIN": str(opt_prefix / "bin"),
+        # pybrew mode keeps the literal parser's reduced value.
+        "PATH": str(config.prefix / "bin"),
+    }
 
 
 # ---------------------------------------------------------------------------

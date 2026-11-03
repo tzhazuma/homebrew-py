@@ -192,8 +192,9 @@ class FormulaTestContext
 
   # Lightweight, String-compatible formula version (Homebrew's ``Version``).
   # Mirrors the Python ``pybrew.version.Version`` token comparison, including
-  # the intentional deviation that an extra numeric segment is significant
-  # (``1.2.3 < 1.2.3.0``; Homebrew treats it as equal).
+  # the intentional default deviation that an extra numeric segment is
+  # significant (``1.2.3 < 1.2.3.0``; Homebrew treats it as equal).  The
+  # closer Homebrew null-token behavior is available via ``homebrew_compare``.
   class Version < String
     include Comparable
 
@@ -202,6 +203,8 @@ class FormulaTestContext
       "alpha" => 0, "beta" => 1, "pre" => 2, "preview" => 2,
       "rc" => 3, "p" => 4, "post" => 5,
     }.freeze
+
+    TOKEN_PATTERN = /(\d+)|(preview|alpha|beta|post|pre|rc|p)(\d*)|([A-Za-z]+)/i
 
     def initialize(value)
       super(value.to_s)
@@ -216,6 +219,13 @@ class FormulaTestContext
 
     def tokens
       segments
+    end
+
+    # Classified tokens: "numeric", a pre-release word, or "letter".
+    def token_classes
+      version_tokens.map do |token|
+        token[:kind] == :pre ? token[:value] : token[:kind].to_s
+      end
     end
 
     def major
@@ -252,6 +262,28 @@ class FormulaTestContext
       0
     end
 
+    # Homebrew-style comparison where a missing token is a null token:
+    # numeric zero compares equal to it, pre-release words sort before it,
+    # and p/post/unknown letters sort after it.  The default <=> keeps the
+    # historical pybrew extra-numeric behavior for compatibility.
+    def homebrew_compare(other)
+      other = self.class.new(other.to_s) unless other.is_a?(Version)
+      if other.is_a?(PkgVersion) && !is_a?(PkgVersion)
+        comparison = homebrew_compare(other.version)
+        return comparison unless comparison.zero?
+
+        return other.revision.zero? ? 0 : -1
+      end
+      left = version_tokens
+      right = other.send(:version_tokens)
+      length = [left.length, right.length].max
+      length.times do |index|
+        comparison = homebrew_token_compare(left[index], right[index])
+        return comparison unless comparison.zero?
+      end
+      0
+    end
+
     def <=>(other)
       other = self.class.new(other.to_s) unless other.is_a?(Version)
       if other.is_a?(PkgVersion) && !is_a?(PkgVersion)
@@ -280,6 +312,64 @@ class FormulaTestContext
     end
 
     private
+
+    def version_tokens
+      to_s.scan(TOKEN_PATTERN).map do |numeric, pre, revision, letter|
+        if numeric
+          { kind: :numeric, value: numeric.to_i, rank: nil, revision: 0 }
+        elsif pre
+          word = pre.downcase
+          word = "pre" if word == "preview"
+          {
+            kind: :pre,
+            value: word,
+            rank: PRE_RELEASE_RANKS[word],
+            revision: revision.to_i,
+          }
+        else
+          { kind: :letter, value: letter.downcase, rank: nil, revision: 0 }
+        end
+      end
+    end
+
+    def homebrew_token_compare(left, right)
+      return 0 if left.nil? && right.nil?
+
+      if left.nil?
+        if right[:kind] == :numeric
+          return right[:value].zero? ? 0 : -1
+        elsif right[:kind] == :pre
+          return right[:rank] <= 3 ? 1 : -1
+        end
+        return -1
+      end
+      if right.nil?
+        if left[:kind] == :numeric
+          return left[:value].zero? ? 0 : 1
+        elsif left[:kind] == :pre
+          return left[:rank] <= 3 ? -1 : 1
+        end
+        return 1
+      end
+
+      if left[:kind] == :numeric && right[:kind] == :numeric
+        left[:value] <=> right[:value]
+      elsif left[:kind] == :numeric
+        1
+      elsif right[:kind] == :numeric
+        -1
+      elsif left[:kind] == :pre && right[:kind] == :pre
+        comparison = left[:rank] <=> right[:rank]
+        return comparison unless comparison.zero?
+
+        comparison = left[:value] <=> right[:value]
+        return comparison unless comparison.zero?
+
+        left[:revision] <=> right[:revision]
+      else
+        left[:value].to_s <=> right[:value].to_s
+      end
+    end
 
     def segment_at(index)
       segment = segments[index]
@@ -324,6 +414,18 @@ class FormulaTestContext
 
     def segments
       @version.segments
+    end
+
+    def token_classes
+      @version.token_classes
+    end
+
+    def homebrew_compare(other)
+      other = PkgVersion.parse(other.to_s) unless other.is_a?(PkgVersion)
+      comparison = @version.homebrew_compare(other.version)
+      return comparison unless comparison.zero?
+
+      @revision <=> other.revision
     end
 
     def major

@@ -814,6 +814,17 @@ _MACHO_MAGICS: dict[bytes, tuple[str, bool]] = {
     b"\xfe\xed\xfa\xce": (">", False),
 }
 
+# Universal/fat Mach-O containers.  The second item marks the 64-bit fat_arch_64
+# layout; the endianness describes the fat header itself (slices carry their own
+# magic).
+_FAT_MAGICS: dict[bytes, tuple[str, bool]] = {
+    b"\xca\xfe\xba\xbe": (">", False),
+    b"\xbe\xba\xfe\xca": ("<", False),
+    b"\xca\xfe\xba\xbf": (">", True),
+    b"\xbf\xba\xfe\xca": ("<", True),
+}
+_MACHO_FAT_ARCH_MAX = 32
+
 _LC_LOAD_DYLIB = 0xC
 _LC_LOAD_WEAK_DYLIB = 0x80000018
 _LC_REEXPORT_DYLIB = 0x8000001F
@@ -849,6 +860,15 @@ class LinkageError(PybrewError):
     """An opt-in linkage scan found dangling dynamic-library references."""
 
 
+class _LinkageParseError(Exception):
+    """Internal parse failure carrying a user-facing problem kind."""
+
+    def __init__(self, kind: str, detail: str):
+        super().__init__(detail)
+        self.kind = kind
+        self.detail = detail
+
+
 @dataclass(frozen=True)
 class LinkageIssue:
     """One unresolved dynamic-library reference."""
@@ -857,113 +877,292 @@ class LinkageIssue:
     reference: str
     kind: str
     reason: str = "missing"
+    keg: Optional[str] = None
+
+
+@dataclass(frozen=True)
+class LinkageProblem:
+    """A binary that could not be checked (unsupported or corrupt)."""
+
+    path: str
+    kind: str
+    detail: str
 
 
 @dataclass
 class LinkageReport:
-    """Result of :func:`check_linkage`."""
+    """Result of :func:`check_linkage`.
+
+    ``unsupported`` and ``corrupt`` are reported separately instead of being
+    silently skipped; ``skipped`` counts those problems for compatibility with
+    older callers.
+    """
 
     checked: int = 0
     skipped: int = 0
     issues: list[LinkageIssue] = field(default_factory=list)
+    unsupported: list[LinkageProblem] = field(default_factory=list)
+    corrupt: list[LinkageProblem] = field(default_factory=list)
 
     @property
     def dangling(self) -> list[LinkageIssue]:
         return self.issues
 
+    @property
+    def problems(self) -> list[LinkageProblem]:
+        return [*self.unsupported, *self.corrupt]
+
+    @property
+    def has_errors(self) -> bool:
+        return bool(self.issues or self.corrupt)
+
+    def add_problem(self, path: str, kind: str, detail: str) -> None:
+        problem = LinkageProblem(path=path, kind=kind, detail=detail)
+        if kind == "unsupported":
+            self.unsupported.append(problem)
+        else:
+            self.corrupt.append(problem)
+        # Preserve the old aggregate counter without hiding the detail.
+        self.skipped += 1
+
+    def merge(self, other: "LinkageReport") -> "LinkageReport":
+        self.checked += other.checked
+        self.skipped += other.skipped
+        self.issues.extend(other.issues)
+        self.unsupported.extend(other.unsupported)
+        self.corrupt.extend(other.corrupt)
+        return self
+
     def format(self) -> str:
-        if not self.issues:
+        if not self.issues and not self.unsupported and not self.corrupt:
             return "linkage OK"
-        lines = [
-            f"{len(self.issues)} dangling dynamic library reference(s) found:"
-        ]
-        for issue in self.issues[:20]:
+        lines: list[str] = []
+        if self.issues:
             lines.append(
-                f"  {issue.path}: {issue.reference} ({issue.kind}, {issue.reason})"
+                f"{len(self.issues)} dangling dynamic library reference(s) found:"
             )
-        if len(self.issues) > 20:
-            lines.append(f"  ... and {len(self.issues) - 20} more")
+            for issue in self.issues[:20]:
+                keg = f" in {issue.keg}" if issue.keg else ""
+                lines.append(
+                    f"  {issue.path}{keg}: {issue.reference} "
+                    f"({issue.kind}, {issue.reason})"
+                )
+            if len(self.issues) > 20:
+                lines.append(f"  ... and {len(self.issues) - 20} more")
+        for label, problems in (
+            ("unsupported", self.unsupported),
+            ("corrupt", self.corrupt),
+        ):
+            if not problems:
+                continue
+            lines.append(f"{len(problems)} {label} binary/binary slice(s):")
+            for problem in problems[:10]:
+                lines.append(f"  {problem.path}: {problem.detail}")
+            if len(problems) > 10:
+                lines.append(f"  ... and {len(problems) - 10} more")
         return "\n".join(lines)
 
 
-def _macho_dynamic_references(
-    data: bytes,
-) -> Optional[tuple[list[tuple[str, bool]], list[str]]]:
-    """Return ``(dylib_loads, rpaths)`` for a thin Mach-O binary.
+@dataclass(frozen=True)
+class _MachoImage:
+    loads: tuple[tuple[str, bool], ...]
+    rpaths: tuple[str, ...]
 
-    ``dylib_loads`` preserves weak-library information so the checker can skip
-    weak references (they are allowed to be missing).  Malformed input returns
-    ``None`` and is reported as skipped rather than dangling.
-    """
+
+def _parse_macho_thin(data: bytes) -> _MachoImage:
+    """Parse one thin Mach-O slice, raising a typed problem on corruption."""
 
     info = _MACHO_MAGICS.get(data[:4])
     if info is None:
-        return None
+        raise _LinkageParseError(
+            "corrupt", f"unknown Mach-O magic {data[:4]!r}"
+        )
     endian, is_64 = info
     header_size = 32 if is_64 else 28
     if len(data) < header_size:
-        return None
+        raise _LinkageParseError("corrupt", "truncated Mach-O header")
     ncmds = struct.unpack_from(endian + "I", data, 16)[0]
+    if ncmds > 100_000:
+        raise _LinkageParseError(
+            "corrupt", f"implausible Mach-O load-command count {ncmds}"
+        )
     offset = header_size
     loads: list[tuple[str, bool]] = []
     rpaths: list[str] = []
     for _ in range(ncmds):
         if offset + 8 > len(data):
-            return None
+            raise _LinkageParseError("corrupt", "truncated Mach-O load command")
         command, cmdsize = struct.unpack_from(endian + "II", data, offset)
         if cmdsize < 8 or offset + cmdsize > len(data):
-            return None
+            raise _LinkageParseError(
+                "corrupt", f"invalid Mach-O load command size {cmdsize}"
+            )
         if command in _MACHO_DYLIB_COMMANDS:
+            if cmdsize < 24:
+                raise _LinkageParseError(
+                    "corrupt", "truncated Mach-O dylib command"
+                )
             name_offset = struct.unpack_from(endian + "I", data, offset + 8)[0]
             if not 8 <= name_offset < cmdsize:
-                return None
+                raise _LinkageParseError(
+                    "corrupt", "invalid Mach-O dylib name offset"
+                )
             raw = data[offset + name_offset : offset + cmdsize]
             name = raw.split(b"\0", 1)[0].decode("utf-8", "replace")
             if name:
                 loads.append((name, command == _LC_LOAD_WEAK_DYLIB))
         elif command == _LC_RPATH:
+            if cmdsize < 12:
+                raise _LinkageParseError(
+                    "corrupt", "truncated Mach-O rpath command"
+                )
             path_offset = struct.unpack_from(endian + "I", data, offset + 8)[0]
             if not 8 <= path_offset < cmdsize:
-                return None
+                raise _LinkageParseError(
+                    "corrupt", "invalid Mach-O rpath offset"
+                )
             raw = data[offset + path_offset : offset + cmdsize]
             name = raw.split(b"\0", 1)[0].decode("utf-8", "replace")
             if name:
                 rpaths.append(name)
         offset += cmdsize
-    return loads, rpaths
+    return _MachoImage(loads=tuple(loads), rpaths=tuple(rpaths))
 
 
-def _elf_dynamic_references(data: bytes) -> Optional[tuple[list[str], list[str]]]:
-    """Return ``(needed, rpaths)`` from an ELF file's dynamic section.
+def _macho_images(data: bytes) -> tuple[list[_MachoImage], list[str]]:
+    """Return thin Mach-O images and per-slice corruption details.
 
-    No external tools are required.  Malformed/unsupported ELF files return
-    ``None`` so they are skipped instead of producing false positives.
+    Fat/universal containers are split into slices and each slice is parsed
+    independently, so one corrupt architecture does not hide the others.
     """
 
-    if len(data) < 52 or data[:4] != ELF_MAGIC:
-        return None
+    if data[:4] in _MACHO_MAGICS:
+        return [_parse_macho_thin(data)], []
+    info = _FAT_MAGICS.get(data[:4])
+    if info is None:
+        raise _LinkageParseError(
+            "unsupported", f"unknown Mach-O container magic {data[:4]!r}"
+        )
+    endian, is_64 = info
+    if len(data) < 8:
+        raise _LinkageParseError("corrupt", "truncated fat Mach-O header")
+    nfat = struct.unpack_from(endian + "I", data, 4)[0]
+    if nfat == 0:
+        raise _LinkageParseError("corrupt", "fat Mach-O has no slices")
+    if nfat > _MACHO_FAT_ARCH_MAX:
+        # cafebabe is also the Java class-file magic; avoid reporting normal
+        # class files as corrupt Mach-O binaries.
+        raise _LinkageParseError(
+            "unsupported", f"implausible fat Mach-O slice count {nfat}"
+        )
+    arch_size = 32 if is_64 else 20
+    if 8 + nfat * arch_size > len(data):
+        raise _LinkageParseError("corrupt", "truncated fat Mach-O arch table")
+    images: list[_MachoImage] = []
+    errors: list[str] = []
+    for index in range(nfat):
+        offset = 8 + index * arch_size
+        if is_64:
+            _cputype, _cpusubtype, slice_offset, slice_size, _align, _reserved = (
+                struct.unpack_from(endian + "iiQQII", data, offset)
+            )
+        else:
+            _cputype, _cpusubtype, slice_offset, slice_size, _align = (
+                struct.unpack_from(endian + "iiIII", data, offset)
+            )
+        if slice_offset < 8 or slice_offset + slice_size > len(data):
+            errors.append(f"slice {index}: invalid offset/size")
+            continue
+        try:
+            images.append(
+                _parse_macho_thin(data[slice_offset : slice_offset + slice_size])
+            )
+        except _LinkageParseError as error:
+            errors.append(f"slice {index}: {error.detail}")
+    if not images:
+        detail = "; ".join(errors) or "no valid Mach-O slices"
+        raise _LinkageParseError("corrupt", detail)
+    return images, errors
+
+
+def _elf_extended_phnum(
+    data: bytes, endian: str, is_64: bool, e_shoff: int, e_shentsize: int
+) -> int:
+    """Read the real program-header count for ``PN_XNUM`` (extended phnum)."""
+
+    section_size = 64 if is_64 else 40
+    info_offset = 44 if is_64 else 28
+    if not e_shoff or e_shentsize < section_size:
+        raise _LinkageParseError(
+            "corrupt", "ELF extended phnum has no usable section header"
+        )
+    if e_shoff + info_offset + 4 > len(data):
+        raise _LinkageParseError(
+            "corrupt", "ELF extended phnum section header is truncated"
+        )
+    count = struct.unpack_from(endian + "I", data, e_shoff + info_offset)[0]
+    if count == 0:
+        raise _LinkageParseError(
+            "corrupt", "ELF extended phnum resolves to zero"
+        )
+    return count
+
+
+def _elf_dynamic_references(data: bytes) -> tuple[list[str], list[str]]:
+    """Return ``(needed, rpaths)`` from an ELF dynamic section.
+
+    Extended program-header counts (``PN_XNUM``), corrupt headers and
+    unsupported ELF classes are surfaced as typed :class:`_LinkageParseError`
+    values rather than silently skipped.
+    """
+
+    if data[:4] != ELF_MAGIC:
+        raise _LinkageParseError("unsupported", "not an ELF binary")
+    if len(data) < 52:
+        raise _LinkageParseError("corrupt", "truncated ELF header")
     elf_class = data[4]
     elf_data = data[5]
     if elf_class not in (1, 2) or elf_data not in (1, 2):
-        return None
+        raise _LinkageParseError(
+            "unsupported",
+            f"unsupported ELF class/data {elf_class}/{elf_data}",
+        )
     endian = "<" if elf_data == 1 else ">"
     is_64 = elf_class == 2
     if is_64:
         if len(data) < 64:
-            return None
+            raise _LinkageParseError("corrupt", "truncated ELF64 header")
         e_phoff = struct.unpack_from(endian + "Q", data, 32)[0]
         e_phentsize = struct.unpack_from(endian + "H", data, 54)[0]
         e_phnum = struct.unpack_from(endian + "H", data, 56)[0]
+        e_shoff = struct.unpack_from(endian + "Q", data, 40)[0]
+        e_shentsize = struct.unpack_from(endian + "H", data, 58)[0]
         program_header_size = 56
     else:
+        if len(data) < 52:
+            raise _LinkageParseError("corrupt", "truncated ELF32 header")
         e_phoff = struct.unpack_from(endian + "I", data, 28)[0]
         e_phentsize = struct.unpack_from(endian + "H", data, 42)[0]
         e_phnum = struct.unpack_from(endian + "H", data, 44)[0]
+        e_shoff = struct.unpack_from(endian + "I", data, 32)[0]
+        e_shentsize = struct.unpack_from(endian + "H", data, 46)[0]
         program_header_size = 32
-    if not e_phoff or not e_phnum or e_phentsize < program_header_size:
-        return None
+    if e_phnum == 0:
+        raise _LinkageParseError(
+            "unsupported", "ELF has no program headers (object/relocatable?)"
+        )
+    if e_phnum == 0xFFFF:
+        e_phnum = _elf_extended_phnum(
+            data, endian, is_64, e_shoff, e_shentsize
+        )
+    if not e_phoff:
+        raise _LinkageParseError("corrupt", "ELF has no program-header offset")
+    if e_phentsize < program_header_size:
+        raise _LinkageParseError(
+            "corrupt", f"ELF program header size {e_phentsize} is too small"
+        )
     if e_phoff + e_phnum * e_phentsize > len(data):
-        return None
+        raise _LinkageParseError("corrupt", "ELF program-header table is truncated")
 
     load_segments: list[tuple[int, int, int]] = []
     dynamic: Optional[tuple[int, int]] = None
@@ -980,10 +1179,11 @@ def _elf_dynamic_references(data: bytes) -> Optional[tuple[list[str], list[str]]
             p_filesz = struct.unpack_from(endian + "I", data, offset + 16)[0]
         if p_type == _PT_LOAD:
             load_segments.append((p_vaddr, p_offset, p_filesz))
-        elif p_type == _PT_DYNAMIC:
+        elif p_type == _PT_DYNAMIC and dynamic is None:
             dynamic = (p_offset, p_filesz)
     if dynamic is None:
-        return None
+        # Valid static executables simply have no dynamic linkage.
+        return [], []
 
     needed_offsets: list[int] = []
     rpath_offsets: list[int] = []
@@ -991,7 +1191,9 @@ def _elf_dynamic_references(data: bytes) -> Optional[tuple[list[str], list[str]]
     strtab_size = 0
     entry_size = 16 if is_64 else 8
     offset, dynamic_size = dynamic
-    end = min(offset + dynamic_size, len(data))
+    if offset + dynamic_size > len(data):
+        raise _LinkageParseError("corrupt", "ELF dynamic segment is truncated")
+    end = offset + dynamic_size
     while offset + entry_size <= end:
         if is_64:
             tag, value = struct.unpack_from(endian + "qQ", data, offset)
@@ -1008,26 +1210,38 @@ def _elf_dynamic_references(data: bytes) -> Optional[tuple[list[str], list[str]]
         elif tag in (_DT_RPATH, _DT_RUNPATH):
             rpath_offsets.append(value)
         offset += entry_size
+    if not needed_offsets and not rpath_offsets:
+        return [], []
     if strtab_address is None:
-        return None
+        raise _LinkageParseError(
+            "corrupt", "ELF dynamic section has no DT_STRTAB"
+        )
 
     strtab_offset: Optional[int] = None
     for p_vaddr, p_offset, p_filesz in load_segments:
         if p_vaddr <= strtab_address < p_vaddr + p_filesz:
             strtab_offset = p_offset + (strtab_address - p_vaddr)
             break
-    if strtab_offset is None:
-        return None
+    if strtab_offset is None or strtab_offset >= len(data):
+        raise _LinkageParseError(
+            "corrupt", "ELF DT_STRTAB is outside the loaded image"
+        )
 
-    def read_string(relative: int) -> Optional[str]:
+    def read_string(relative: int) -> str:
         if relative < 0 or (strtab_size and relative >= strtab_size):
-            return None
+            raise _LinkageParseError(
+                "corrupt", "ELF dynamic string offset is out of range"
+            )
         start = strtab_offset + relative
         if start < 0 or start >= len(data):
-            return None
+            raise _LinkageParseError(
+                "corrupt", "ELF dynamic string offset is outside the file"
+            )
         stop = data.find(b"\0", start)
         if stop < 0:
-            return None
+            raise _LinkageParseError(
+                "corrupt", "ELF dynamic string is not NUL-terminated"
+            )
         return data[start:stop].decode("utf-8", "replace")
 
     needed: list[str] = []
@@ -1078,6 +1292,23 @@ def _default_library_paths(
     return paths
 
 
+def _expand_rpath(
+    raw: str, binary: Path, keg: Path, config: Optional[Config]
+) -> Path:
+    """Expand @loader_path/@executable_path/$ORIGIN in an LC_RPATH/ELF entry."""
+
+    value = (
+        raw.replace("${ORIGIN}", str(binary.parent))
+        .replace("$ORIGIN", str(binary.parent))
+        .replace("@loader_path", str(binary.parent))
+        .replace("@executable_path", str(binary.parent))
+    )
+    candidate = Path(value)
+    if not candidate.is_absolute():
+        candidate = binary.parent / candidate
+    return candidate
+
+
 def _candidate_references(
     reference: str,
     binary: Path,
@@ -1092,12 +1323,21 @@ def _candidate_references(
     if reference.startswith("@rpath/"):
         tail = reference[len("@rpath/") :]
     elif reference.startswith("@loader_path/"):
-        tail = reference[len("@loader_path/") :]
-        yield binary.parent / tail
+        yield binary.parent / reference[len("@loader_path/") :]
         return
     elif reference.startswith("@executable_path/"):
         tail = reference[len("@executable_path/") :]
-        yield binary.parent / tail
+        roots = [binary.parent, keg / "bin", keg]
+        if config is not None:
+            roots.extend([config.prefix / "bin", config.prefix])
+        for root in roots:
+            yield root / tail
+        return
+    elif reference.startswith("$ORIGIN/"):
+        yield binary.parent / reference[len("$ORIGIN/") :]
+        return
+    elif reference.startswith("${ORIGIN}/"):
+        yield binary.parent / reference[len("${ORIGIN}/") :]
         return
     elif reference.startswith("/"):
         yield Path(reference)
@@ -1107,13 +1347,8 @@ def _candidate_references(
 
     search_dirs: list[Path] = []
     for raw in rpaths:
-        value = raw.replace("$ORIGIN", str(binary.parent))
-        value = value.replace("@loader_path", str(binary.parent))
-        value = value.replace("@executable_path", str(binary.parent))
-        candidate = Path(value)
-        if not candidate.is_absolute():
-            candidate = binary.parent / candidate
-        search_dirs.append(candidate)
+        if raw:
+            search_dirs.append(_expand_rpath(raw, binary, keg, config))
     search_dirs.extend(_default_library_paths(keg, binary, config))
     search_dirs.extend(Path(path) for path in extra_search_paths)
 
@@ -1126,9 +1361,10 @@ def _candidate_references(
 
 
 def _is_macos_system_reference(reference: str) -> bool:
-    # Modern macOS resolves these through the dyld shared cache, so checking
-    # the filesystem would produce false positives on every normal binary.
-    return sys.platform == "darwin" and reference.startswith(_MACHO_SYSTEM_PREFIXES)
+    # These are supplied by the macOS dyld shared cache rather than ordinary
+    # files.  The check is intentionally independent of the scanning host so a
+    # synthetic macOS binary can be inspected on Linux CI too.
+    return reference.startswith(_MACHO_SYSTEM_PREFIXES)
 
 
 def _reference_exists(
@@ -1138,8 +1374,10 @@ def _reference_exists(
     config: Optional[Config],
     rpaths: Iterable[str],
     extra_search_paths: Iterable[Path],
+    *,
+    macho: bool = False,
 ) -> bool:
-    if _is_macos_system_reference(reference):
+    if macho and _is_macos_system_reference(reference):
         return True
     for candidate in _candidate_references(
         reference, binary, keg, config, rpaths, extra_search_paths
@@ -1159,11 +1397,16 @@ def check_linkage(
 ) -> LinkageReport:
     """Scan a keg for dangling Mach-O dylib / ELF DT_NEEDED references.
 
-    This is read-only and intentionally tolerant: files that are not binary or
-    that cannot be parsed are counted as ``skipped`` rather than reported.
-    Weak Mach-O libraries are ignored, system search paths (``/usr/lib`` etc.)
-    and the keg/prefix ``lib`` directories are honoured, and callers may pass
-    extra search roots for dependencies installed outside the prefix.
+    This is read-only.  Fat/universal Mach-O slices are parsed independently,
+    all four dylib load-command kinds are honoured, and ELF extended program
+    header counts are supported.  Files that look like Mach-O/ELF but are
+    unsupported or corrupt are recorded in ``report.unsupported`` /
+    ``report.corrupt`` instead of being silently skipped.
+
+    Weak Mach-O libraries are ignored; macOS dyld shared-cache paths, keg/prefix
+    lib directories, RPATH/RUNPATH entries (including @loader_path,
+    @executable_path and $ORIGIN), Linux multiarch directories and optional
+    extra search roots are honoured.
     """
 
     keg = Path(keg)
@@ -1181,20 +1424,27 @@ def check_linkage(
                     magic = handle.read(4)
             except OSError:
                 continue
-            if magic != ELF_MAGIC and magic not in _MACHO_MAGICS:
+            if (
+                magic != ELF_MAGIC
+                and magic not in _MACHO_MAGICS
+                and magic not in _FAT_MAGICS
+            ):
                 continue
+            relative = _relative_to_keg(path, keg)
             try:
                 data = path.read_bytes()
-            except OSError:
+            except OSError as error:
+                report.add_problem(
+                    relative, "corrupt", f"cannot read binary: {error}"
+                )
                 continue
             if magic == ELF_MAGIC:
-                parsed = _elf_dynamic_references(data)
-                if parsed is None:
-                    report.skipped += 1
+                try:
+                    needed, rpaths = _elf_dynamic_references(data)
+                except _LinkageParseError as error:
+                    report.add_problem(relative, error.kind, error.detail)
                     continue
-                needed, rpaths = parsed
                 report.checked += 1
-                relative = _relative_to_keg(path, keg)
                 for reference in dict.fromkeys(needed):
                     if reference in _ELF_VIRTUAL_LIBRARIES:
                         continue
@@ -1202,25 +1452,50 @@ def check_linkage(
                         reference, path, keg, config, rpaths, extra
                     ):
                         report.issues.append(
-                            LinkageIssue(relative, reference, "elf")
+                            LinkageIssue(
+                                relative,
+                                reference,
+                                "elf",
+                                keg=str(keg),
+                            )
                         )
-            elif magic in _MACHO_MAGICS:
-                parsed_macho = _macho_dynamic_references(data)
-                if parsed_macho is None:
-                    report.skipped += 1
-                    continue
-                loads, rpaths = parsed_macho
-                report.checked += 1
-                relative = _relative_to_keg(path, keg)
-                for reference, weak in loads:
+                continue
+            # Mach-O thin or universal/fat container.
+            try:
+                images, slice_errors = _macho_images(data)
+            except _LinkageParseError as error:
+                report.add_problem(relative, error.kind, error.detail)
+                continue
+            for detail in slice_errors:
+                report.add_problem(relative, "corrupt", detail)
+            report.checked += 1
+            missing: set[tuple[str, tuple[str, ...]]] = set()
+            for image in images:
+                for reference, weak in image.loads:
                     if weak:
                         continue
-                    if not _reference_exists(
-                        reference, path, keg, config, rpaths, extra
+                    if _reference_exists(
+                        reference,
+                        path,
+                        keg,
+                        config,
+                        image.rpaths,
+                        extra,
+                        macho=True,
                     ):
-                        report.issues.append(
-                            LinkageIssue(relative, reference, "macho")
+                        continue
+                    key = (reference, image.rpaths)
+                    if key in missing:
+                        continue
+                    missing.add(key)
+                    report.issues.append(
+                        LinkageIssue(
+                            relative,
+                            reference,
+                            "macho",
+                            keg=str(keg),
                         )
+                    )
     return report
 
 
@@ -1243,7 +1518,9 @@ def _linkage_check_requested(options: InstallOptions) -> bool:
 
 
 def _raise_for_linkage(keg: Path, report: LinkageReport) -> None:
-    if report.issues:
+    # Corrupt binaries are actionable; unsupported files (e.g. a stray object
+    # file) remain diagnostic-only so the opt-in install check stays usable.
+    if report.has_errors:
         raise LinkageError(f"{keg}: {report.format()}")
 
 
@@ -1605,33 +1882,68 @@ class Installer:
     # -- linkage diagnostics ---------------------------------------------
     def linkage_report(
         self,
-        formula: "str | Formula",
+        formula: "str | Formula | None" = None,
         version: Optional[str] = None,
         extra_search_paths: Iterable[Path] = (),
+        *,
+        all_formulae: bool = False,
     ) -> LinkageReport:
-        """Return the linkage report for an installed formula's keg.
+        """Return a linkage report for one formula or all installed formulae.
 
-        This is the formula-level diagnostic path: the same :func:`check_linkage`
-        used by the opt-in install check, but callable on a committed keg
-        without reinstalling.  A missing formula raises ``PybrewError``.
+        This is the diagnostic path: the same :func:`check_linkage` used by the
+        opt-in install check, but callable on committed kegs without
+        reinstalling.  With ``all_formulae=True`` the report merges every
+        installed keg (optionally filtered by ``formula``/``version``), making
+        a CLI-friendly all-installed scan possible without special casing in
+        the CLI.
         """
 
+        extra = list(extra_search_paths)
+        if all_formulae:
+            installed = self.cellar.installed()
+            if formula is not None:
+                name = (
+                    formula.name if isinstance(formula, Formula) else str(formula)
+                )
+                if name not in installed:
+                    raise PybrewError(f"{name} is not installed")
+                names = [name]
+            else:
+                names = sorted(installed)
+            merged = LinkageReport()
+            for name in names:
+                for installed_version in installed.get(name, []):
+                    if version is not None and installed_version != version:
+                        continue
+                    keg = self.cellar.keg(name, installed_version)
+                    if keg is None:
+                        continue
+                    merged.merge(check_linkage(keg, self.config, extra))
+            return merged
+
+        if formula is None:
+            raise PybrewError("formula is required unless all_formulae=True")
         name = formula.name if isinstance(formula, Formula) else str(formula)
         keg = self.cellar.keg(name, version)
         if keg is None:
             raise PybrewError(f"{name} is not installed")
-        return check_linkage(keg, self.config, extra_search_paths)
+        return check_linkage(keg, self.config, extra)
 
     def linkage_diagnostic(
         self,
-        formula: "str | Formula",
+        formula: "str | Formula | None" = None,
         version: Optional[str] = None,
         extra_search_paths: Iterable[Path] = (),
+        *,
+        all_formulae: bool = False,
     ) -> str:
-        """Human-readable linkage diagnostic for an installed formula."""
+        """Human-readable linkage diagnostic for one or all installed formulae."""
 
         return self.linkage_report(
-            formula, version, extra_search_paths
+            formula,
+            version,
+            extra_search_paths,
+            all_formulae=all_formulae,
         ).format()
 
 
