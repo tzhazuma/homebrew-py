@@ -194,7 +194,9 @@ class FormulaTestContext
   # Mirrors the Python ``pybrew.version.Version`` token comparison, including
   # the intentional default deviation that an extra numeric segment is
   # significant (``1.2.3 < 1.2.3.0``; Homebrew treats it as equal).  The
-  # closer Homebrew null-token behavior is available via ``homebrew_compare``.
+  # closer Homebrew null-token behavior is available via ``homebrew_compare``,
+  # ``Version.homebrew = true``, or ``PYBREW_VERSION_HOMEBREW=1`` (in that
+  # mode 1.0 == 1.0.0 and hashes are canonical).
   class Version < String
     include Comparable
 
@@ -205,6 +207,28 @@ class FormulaTestContext
     }.freeze
 
     TOKEN_PATTERN = /(\d+)|(preview|alpha|beta|post|pre|rc|p)(\d*)|([A-Za-z]+)/i
+
+    class << self
+      # Class-level opt-in for Homebrew null-token comparison.  The
+      # PYBREW_VERSION_HOMEBREW environment variable overrides this.
+      attr_accessor :homebrew
+
+      def homebrew_enabled?
+        raw = ENV["PYBREW_VERSION_HOMEBREW"].to_s.strip.downcase
+        return true if %w[1 true yes on].include?(raw)
+        return false if %w[0 false no off].include?(raw)
+
+        homebrew == true
+      end
+
+      def with_homebrew(enabled = true)
+        previous = homebrew
+        self.homebrew = enabled
+        yield
+      ensure
+        self.homebrew = previous
+      end
+    end
 
     def initialize(value)
       super(value.to_s)
@@ -284,13 +308,28 @@ class FormulaTestContext
       0
     end
 
+    def hash
+      return [homebrew_hash_key, 0].hash if self.class.homebrew_enabled?
+
+      super
+    end
+
+    # String defines == before Comparable in the ancestor chain for a String
+    # subclass, so override it explicitly to use the mode-aware <=>.
+    def ==(other)
+      comparison = self <=> other
+      !comparison.nil? && comparison.zero?
+    end
+    alias eql? ==
+
     def <=>(other)
+      return homebrew_compare(other) if self.class.homebrew_enabled?
+
       other = self.class.new(other.to_s) unless other.is_a?(Version)
       if other.is_a?(PkgVersion) && !is_a?(PkgVersion)
-        comparison = self <=> other.version
-        return comparison unless comparison.zero?
-
-        return other.revision.zero? ? 0 : -1
+        # Compare the revision-bearing string form so a plain Version that
+        # already carries ``_N`` matches the equivalent PkgVersion.
+        return self <=> Version.new(other.to_s)
       end
       left = segments
       right = other.segments
@@ -312,6 +351,14 @@ class FormulaTestContext
     end
 
     private
+
+    def homebrew_hash_key
+      key = version_tokens.map do |token|
+        [token[:kind], token[:value], token[:revision]]
+      end
+      key.pop while !key.empty? && key.last[0] == :numeric && key.last[1].zero?
+      key
+    end
 
     def version_tokens
       to_s.scan(TOKEN_PATTERN).map do |numeric, pre, revision, letter|
@@ -414,6 +461,14 @@ class FormulaTestContext
 
     def segments
       @version.segments
+    end
+
+    def hash
+      if self.class.homebrew_enabled?
+        return [@version.send(:homebrew_hash_key), @revision].hash
+      end
+
+      super
     end
 
     def token_classes

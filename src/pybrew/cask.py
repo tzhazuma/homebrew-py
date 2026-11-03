@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import codecs
 import datetime
+import email.utils
 import functools
 import hashlib
 import os
@@ -903,11 +904,91 @@ LIVECHECK_USER_AGENT = "pybrew-livecheck/0.1"
 #: HTTP statuses retried by the default livecheck transport.
 LIVECHECK_TRANSIENT_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
 
+#: Retry policy bounds for the default livecheck transport.
+LIVECHECK_MAX_RETRY_AFTER = 10.0
+LIVECHECK_MAX_TOTAL_RETRY_SECONDS = 10.0
+LIVECHECK_JITTER = 0.2
+
+#: Headers stripped when a redirect crosses origins (scheme/host/port).
+LIVECHECK_SENSITIVE_HEADERS = frozenset(
+    {"authorization", "cookie", "cookie2", "proxy-authorization"}
+)
+
 
 class _BoundedRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Redirect handler capped at :data:`LIVECHECK_MAX_REDIRECTS` hops."""
+    """Redirect handler with bounded hops and cross-origin header stripping."""
 
     max_redirections = LIVECHECK_MAX_REDIRECTS
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new_request = super().redirect_request(
+            req, fp, code, msg, headers, newurl
+        )
+        if new_request is None:
+            return None
+        old = urllib.parse.urlsplit(req.full_url)
+        new = urllib.parse.urlsplit(new_request.full_url)
+        if (old.scheme, old.hostname, old.port) != (
+            new.scheme,
+            new.hostname,
+            new.port,
+        ):
+            for header in LIVECHECK_SENSITIVE_HEADERS:
+                new_request.remove_header(header.capitalize())
+        return new_request
+
+
+def _livecheck_retry_after(error: Any) -> Optional[float]:
+    """Return a bounded Retry-After delay in seconds, if the error has one."""
+
+    headers = getattr(error, "headers", None)
+    if headers is None:
+        return None
+    try:
+        value = headers.get("Retry-After")
+    except (AttributeError, TypeError):
+        return None
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        seconds = float(text)
+    except ValueError:
+        try:
+            parsed = email.utils.parsedate_to_datetime(text)
+        except (TypeError, ValueError):
+            return None
+        if parsed is None:
+            return None
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if parsed.tzinfo is None:
+            now = now.replace(tzinfo=None)
+        seconds = (parsed - now).total_seconds()
+    return max(0.0, min(seconds, LIVECHECK_MAX_RETRY_AFTER))
+
+
+def _livecheck_retry_delay(
+    error: Optional[BaseException],
+    attempt: int,
+    retry_delay: float,
+    jitter: float,
+) -> float:
+    """Delay before the next attempt: Retry-After wins over jittered backoff."""
+
+    if error is not None:
+        retry_after = _livecheck_retry_after(error)
+        if retry_after is not None:
+            return retry_after
+    if retry_delay <= 0:
+        return 0.0
+    delay = retry_delay * (attempt + 1)
+    if jitter > 0:
+        import random
+
+        delay += random.uniform(0.0, retry_delay * min(jitter, 1.0))
+    return delay
 
 
 def _livecheck_http_header(response: Any, name: str) -> Optional[str]:
@@ -939,6 +1020,35 @@ def _livecheck_response_charset(response: Any) -> str:
     return match.group(1) if match is not None else "utf-8"
 
 
+def _brotli_decompress(body: bytes, max_bytes: int) -> bytes:
+    """Decode a brotli body when an optional decoder is installed."""
+
+    brotli_module: Optional[Any] = None
+    for module_name in ("brotli", "brotlicffi"):
+        try:
+            module = __import__(module_name)
+        except ImportError:
+            continue
+        if hasattr(module, "decompress"):
+            brotli_module = module
+            break
+    if brotli_module is None:
+        raise CaskError(
+            "brotli content-encoding is not supported: install the optional "
+            "'brotli' or 'brotlicffi' package"
+        )
+    try:
+        decoded = brotli_module.decompress(body)
+    except Exception as error:
+        raise CaskError(f"invalid brotli livecheck page: {error}") from error
+    if len(decoded) > max_bytes:
+        raise CaskError(
+            f"livecheck page exceeds the {max_bytes}-byte limit "
+            "after brotli decompression"
+        )
+    return decoded
+
+
 def _decode_livecheck_body(
     body: bytes, content_encoding: Optional[str], charset: str, max_bytes: int
 ) -> str:
@@ -951,6 +1061,12 @@ def _decode_livecheck_body(
             decompressor = zlib.decompressobj(16 + zlib.MAX_WBITS)
         elif encoding == "deflate":
             decompressor = zlib.decompressobj()
+        elif encoding == "br":
+            body = _brotli_decompress(body, max_bytes)
+        elif encoding not in ("identity", ""):
+            raise CaskError(
+                f"unsupported livecheck content-encoding: {encoding}"
+            )
         if decompressor is not None:
             try:
                 decoded = decompressor.decompress(body, max_bytes + 1)
@@ -981,6 +1097,8 @@ def livecheck_http_fetcher(
     headers: Optional[dict[str, str]] = None,
     retries: int = LIVECHECK_RETRIES,
     retry_delay: float = LIVECHECK_RETRY_DELAY,
+    jitter: float = LIVECHECK_JITTER,
+    max_total_retry_seconds: float = LIVECHECK_MAX_TOTAL_RETRY_SECONDS,
     opener: Optional[Any] = None,
 ) -> str:
     """Bounded default HTTP transport for ``pybrew livecheck --online``.
@@ -1014,6 +1132,7 @@ def livecheck_http_fetcher(
     content_encoding: Optional[str] = None
     charset = "utf-8"
     last_error: Optional[BaseException] = None
+    total_delay = 0.0
     for attempt in range(attempts):
         try:
             with effective_opener.open(request, timeout=timeout) as response:
@@ -1030,12 +1149,22 @@ def livecheck_http_fetcher(
                 or attempt + 1 >= attempts
             ):
                 raise
+            delay = _livecheck_retry_delay(
+                error, attempt, retry_delay, jitter
+            )
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             last_error = error
             if attempt + 1 >= attempts:
                 raise
-        if retry_delay > 0:
-            time.sleep(retry_delay * (attempt + 1))
+            delay = _livecheck_retry_delay(
+                None, attempt, retry_delay, jitter
+            )
+        # Bounded circuit: never sleep/retry past the total retry budget.
+        if total_delay + delay > max_total_retry_seconds:
+            raise last_error
+        total_delay += delay
+        if delay > 0:
+            time.sleep(delay)
     if body is None:
         if last_error is not None:
             raise last_error

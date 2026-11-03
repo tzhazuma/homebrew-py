@@ -12,15 +12,19 @@ comparison keeps ``Version("1.0.0") > Version("1.0")`` (Homebrew's null token
 compares equal to a numeric zero), composite tokens such as ``alpha5`` are
 compared as separate letter/numeric tokens, and only :class:`PkgVersion` has a
 revision.  The closer Homebrew null-token behavior is available opt-in via
-``compare_versions(..., missing_numeric_zero=True)`` and
-``Version.homebrew_compare``.
+``compare_versions(..., missing_numeric_zero=True)``/``Version.homebrew_compare``
+or globally via ``PYBREW_VERSION_HOMEBREW=1`` and ``Version.homebrew = True``
+(in that mode ``1.0 == 1.0.0`` and hashes are canonical).
 """
 
 from __future__ import annotations
 
+import os
 import re
+from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import total_ordering
+from typing import Optional
 
 _ARCHIVE_SUFFIXES = (
     ".tar.gz",
@@ -234,8 +238,26 @@ def _homebrew_compare_token_lists(left: list[_VersionToken], right: list[_Versio
     return 0
 
 
+_HOMEBREW_TRUTHY = {"1", "true", "yes", "on"}
+_HOMEBREW_FALSEY = {"0", "false", "no", "off"}
+
+
+def _homebrew_mode_enabled() -> bool:
+    """Whether Homebrew null-token comparison is enabled by env/class flag."""
+
+    raw = os.environ.get("PYBREW_VERSION_HOMEBREW", "").strip().lower()
+    if raw in _HOMEBREW_TRUTHY:
+        return True
+    if raw in _HOMEBREW_FALSEY:
+        return False
+    return bool(getattr(Version, "homebrew", False))
+
+
 def compare_versions(
-    left: str, right: str, *, missing_numeric_zero: bool = False
+    left: str,
+    right: str,
+    *,
+    missing_numeric_zero: Optional[bool] = None,
 ) -> int:
     """Return -1/0/1 for natural ordering of two version strings.
 
@@ -247,9 +269,13 @@ def compare_versions(
     ``missing_numeric_zero=True`` selects the closer Homebrew token-class
     behavior: a missing token is a null token, numeric zero compares equal to
     it, and pre-release words sort before the release while ``p``/``post``
-    (and unknown letters) sort after it.
+    (and unknown letters) sort after it.  Passing ``None`` (the default) uses
+    the mode selected by ``PYBREW_VERSION_HOMEBREW=1`` or
+    ``Version.homebrew = True``; passing ``False`` always keeps legacy order.
     """
 
+    if missing_numeric_zero is None:
+        missing_numeric_zero = _homebrew_mode_enabled()
     if missing_numeric_zero:
         left_tokens = _version_tokens(left)
         right_tokens = _version_tokens(right)
@@ -298,12 +324,32 @@ class Version:
     Use :meth:`homebrew_compare` for the opt-in Homebrew null-token behavior
     where a missing numeric segment compares equal to zero, pre-release words
     sort before the release, and ``p``/``post``/unknown letters sort after it.
+    The same behavior can be enabled globally with ``Version.homebrew = True``
+    or ``PYBREW_VERSION_HOMEBREW=1``; in that mode ``1.0 == 1.0.0`` and hashes
+    are canonical.  Configure the mode before using versions as dict/set keys,
+    because the hash function follows the active mode.
     """
 
     __slots__ = ("value",)
 
+    #: Class-level opt-in for Homebrew null-token comparison.  The environment
+    #: variable ``PYBREW_VERSION_HOMEBREW=1`` overrides this.
+    homebrew: bool = False
+
     def __init__(self, value: str):
         self.value = str(value)
+
+    @classmethod
+    @contextmanager
+    def homebrew_mode(cls, enabled: bool = True):
+        """Temporarily enable/disable Homebrew null-token comparison."""
+
+        previous = cls.homebrew
+        cls.homebrew = enabled
+        try:
+            yield cls
+        finally:
+            cls.homebrew = previous
 
     def __str__(self) -> str:  # pragma: no cover - trivial
         return self.value
@@ -419,7 +465,19 @@ class Version:
             return compare_versions(self.value, other) < 0
         return NotImplemented
 
-    def __hash__(self) -> int:  # pragma: no cover - trivial
+    def _homebrew_hash_key(self) -> tuple:
+        tokens = _version_tokens(self.value)
+        while tokens and tokens[-1].kind == "numeric" and tokens[-1].value == 0:
+            tokens.pop()
+        return tuple(
+            (token.kind, token.value, token.revision) for token in tokens
+        )
+
+    def __hash__(self) -> int:
+        # The default keeps the String-compatible hash; the opt-in mode uses a
+        # canonical key so homebrew-equal versions (1.0/1.0.0) hash equally.
+        if _homebrew_mode_enabled():
+            return hash((self._homebrew_hash_key(), 0))
         return hash(self.value)
 
 
@@ -532,5 +590,7 @@ class PkgVersion(Version):
             return self < PkgVersion.parse(other)
         return NotImplemented
 
-    def __hash__(self) -> int:  # pragma: no cover - trivial
-        return hash(str(self))
+    def __hash__(self) -> int:
+        if _homebrew_mode_enabled():
+            return hash((self._version._homebrew_hash_key(), self._revision))
+        return hash(self.value)

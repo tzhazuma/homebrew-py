@@ -641,6 +641,7 @@ class PybrewChecksumMismatch < RuntimeError; end
 class PybrewFormulaUnavailableError < RuntimeError; end
 class PybrewFormulaUnreadableError < PybrewFormulaUnavailableError; end
 class PybrewFormulaClassUnavailableError < PybrewFormulaUnavailableError; end
+class PybrewGitHubGraphqlError < RuntimeError; end
 
 class PybrewVersion < String
   def major
@@ -9926,6 +9927,7 @@ module Utils
   # script, so no network access is required).  Write operations fail loudly.
   module GitHub
     API_URL = "https://api.github.com"
+    GRAPHQL_URL = "https://api.github.com/graphql"
     CURL_ENV = "PYBREW_GITHUB_CURL"
     TOKEN_ENV = "PYBREW_GITHUB_TOKEN"
 
@@ -9976,6 +9978,12 @@ module Utils
     end
 
     def repository(user, repo)
+      begin
+        graphql_result = graphql_repository(user, repo)
+        return graphql_result unless graphql_result.nil?
+      rescue ScriptError, StandardError
+        nil
+      end
       get_json(url_to("repos", user, repo))
     end
 
@@ -10078,6 +10086,15 @@ module Utils
     def fetch_pull_requests(name, tap_remote_repo, state: nil, version: nil)
       return [] if tap_remote_repo.nil? || tap_remote_repo.to_s.empty?
 
+      begin
+        graphql_result = graphql_fetch_pull_requests(
+          name, tap_remote_repo, state: state, version: version
+        )
+        return graphql_result unless graphql_result.nil?
+      rescue ScriptError, StandardError
+        nil
+      end
+
       regex = pull_request_title_regex(name, version)
       qualifiers = { repo: tap_remote_repo.to_s, type: "pr", in: "title" }
       qualifiers[:state] = state unless state.nil?
@@ -10097,14 +10114,32 @@ module Utils
     end
 
     def pull_request_commits(user, repo, pull_request, per_page: MAX_PER_PAGE)
+      begin
+        graphql_result = graphql_pull_request_commits(user, repo, pull_request)
+        return graphql_result unless graphql_result.nil?
+      rescue ScriptError, StandardError
+        nil
+      end
       get_json("#{url_to("repos", user, repo, "pulls", pull_request, "commits")}?per_page=#{per_page}")
     end
 
     def pull_request_labels(user, repo, pull_request)
+      begin
+        graphql_result = graphql_pull_request_labels(user, repo, pull_request)
+        return graphql_result unless graphql_result.nil?
+      rescue ScriptError, StandardError
+        nil
+      end
       get_json(url_to("repos", user, repo, "pulls", pull_request, "labels"))
     end
 
     def get_pull_request_changed_files(tap_remote_repo, pull_request)
+      begin
+        graphql_result = graphql_pull_request_changed_files(tap_remote_repo, pull_request)
+        return graphql_result unless graphql_result.nil?
+      rescue ScriptError, StandardError
+        nil
+      end
       get_json(url_to("repos", tap_remote_repo, "pulls", pull_request, "files"))
     end
 
@@ -10113,6 +10148,12 @@ module Utils
     end
 
     def members_by_team(org, team)
+      begin
+        graphql_result = graphql_members_by_team(org, team)
+        return graphql_result unless graphql_result.nil?
+      rescue ScriptError, StandardError
+        nil
+      end
       get_json(url_to("orgs", org, "teams", team, "members"))
     end
 
@@ -10131,6 +10172,12 @@ module Utils
     end
 
     def sponsorship_tiers(user)
+      begin
+        graphql_result = graphql_sponsorship_tiers(user)
+        return graphql_result unless graphql_result.nil?
+      rescue ScriptError, StandardError
+        nil
+      end
       data = get_json(url_to("users", user, "sponsors", "tiers"))
       data.is_a?(Hash) ? Array(data["items"] || data["tiers"]) : Array(data)
     end
@@ -10156,6 +10203,14 @@ module Utils
     end
 
     def repository_approved_reviews(user, repo, pull_request, commit: nil)
+      begin
+        graphql_result = graphql_repository_approved_reviews(
+          user, repo, pull_request, commit: commit
+        )
+        return graphql_result unless graphql_result.nil?
+      rescue ScriptError, StandardError
+        nil
+      end
       data = get_json(url_to("repos", user, repo, "pulls", pull_request, "reviews"))
       reviews = data.is_a?(Hash) ? Array(data["items"] || data["reviews"]) : Array(data)
       result = []
@@ -10192,6 +10247,222 @@ module Utils
       search_issues_items("is:pr", repo: repo).length > 0
     rescue ScriptError, StandardError
       false
+    end
+
+    def graphql(query, variables = {})
+      payload = JSON.generate(
+        "query" => query.to_s,
+        "variables" => variables.nil? ? {} : variables
+      )
+      command = [curl_executable, "-sS", "-L", "-X", "POST",
+                 "-H", "Accept: application/json",
+                 "-H", "Content-Type: application/json"]
+      token_value = token
+      command += ["-H", "Authorization: bearer #{token_value}"] unless token_value.to_s.empty?
+      command += ["--data", payload, GRAPHQL_URL]
+      output = Utils.popen_read(*command, safe: true).to_s
+      begin
+        JSON.parse(output)
+      rescue ScriptError, StandardError => error
+        raise PybrewGitHubGraphqlError,
+              "malformed GraphQL JSON from #{GRAPHQL_URL}: #{error.class}: #{error.message}"
+      end
+    rescue PybrewGitHubGraphqlError
+      raise
+    rescue ScriptError, StandardError => error
+      raise PybrewGitHubGraphqlError,
+            "GitHub GraphQL transport failed: #{error.class}: #{error.message}"
+    end
+
+    def graphql_data(query, variables = {})
+      response = graphql(query, variables)
+      unless response.is_a?(Hash)
+        raise PybrewGitHubGraphqlError, "GitHub GraphQL response was not a JSON object"
+      end
+      errors = response["errors"]
+      unless errors.nil? || Array(errors).empty?
+        messages = Array(errors).map do |error|
+          error.is_a?(Hash) ? (error["message"] || error["type"] || error.inspect) : error.to_s
+        end
+        raise PybrewGitHubGraphqlError, "GitHub GraphQL error: #{messages.join("; ")}"
+      end
+      data = response["data"]
+      unless data.is_a?(Hash) && !data.empty?
+        raise PybrewGitHubGraphqlError, "GitHub GraphQL response contained no data"
+      end
+      data
+    end
+
+    def graphql_repository(user, repo)
+      data = graphql_data(<<~GRAPHQL, { "owner" => user.to_s, "name" => repo.to_s })
+        query($owner: String!, $name: String!) {
+          repository(owner: $owner, name: $name) {
+            name description homepageUrl isPrivate
+            licenseInfo { spdxId }
+            defaultBranchRef { name }
+            stargazerCount forkCount
+          }
+        }
+      GRAPHQL
+      raw = data["repository"]
+      return nil if raw.nil?
+
+      license = raw["licenseInfo"].is_a?(Hash) ? raw["licenseInfo"] : {}
+      {
+        "full_name" => "#{user}/#{repo}",
+        "name" => raw["name"],
+        "description" => raw["description"],
+        "homepage" => raw["homepageUrl"],
+        "private" => !!raw["isPrivate"],
+        "license" => { "spdx_id" => license["spdxId"] },
+        "default_branch" => raw.dig("defaultBranchRef", "name"),
+        "stargazers_count" => raw["stargazerCount"],
+        "forks_count" => raw["forkCount"],
+      }
+    end
+
+    def graphql_fetch_pull_requests(name, tap_remote_repo, state: nil, version: nil)
+      return [] if tap_remote_repo.nil? || tap_remote_repo.to_s.empty?
+
+      owner, repo = tap_remote_repo.to_s.split("/", 2)
+      return [] if owner.nil? || repo.nil?
+
+      states = state.nil? ? nil : [state.to_s.upcase]
+      data = graphql_data(<<~GRAPHQL, { "owner" => owner, "name" => repo, "states" => states })
+        query($owner: String!, $name: String!, $states: [PullRequestState!]) {
+          repository(owner: $owner, name: $name) {
+            pullRequests(first: 100, states: $states, orderBy: { field: UPDATED_AT, direction: DESC }) {
+              nodes { number title url state }
+            }
+          }
+        }
+      GRAPHQL
+      nodes = data.dig("repository", "pullRequests", "nodes")
+      regex = pull_request_title_regex(name, version)
+      Array(nodes).select do |pr|
+        pr.is_a?(Hash) && pr["url"].to_s.include?("/pull/") && regex.match?(pr["title"].to_s)
+      end.map do |pr|
+        {
+          "number" => pr["number"],
+          "title" => pr["title"],
+          "html_url" => pr["url"],
+          "state" => pr["state"].to_s.downcase,
+        }
+      end
+    end
+
+    def graphql_pull_request_commits(user, repo, pull_request)
+      data = graphql_data(<<~GRAPHQL,
+        query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              commits(first: 100) { nodes { oid messageHeadline } }
+            }
+          }
+        }
+      GRAPHQL
+        { "owner" => user.to_s, "name" => repo.to_s, "number" => pull_request.to_i })
+      nodes = data.dig("repository", "pullRequest", "commits", "nodes")
+      Array(nodes).map do |commit|
+        {
+          "sha" => commit["oid"],
+          "commit" => { "message" => commit["messageHeadline"] },
+        }
+      end
+    end
+
+    def graphql_pull_request_labels(user, repo, pull_request)
+      data = graphql_data(<<~GRAPHQL,
+        query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              labels(first: 100) { nodes { name } }
+            }
+          }
+        }
+      GRAPHQL
+        { "owner" => user.to_s, "name" => repo.to_s, "number" => pull_request.to_i })
+      nodes = data.dig("repository", "pullRequest", "labels", "nodes")
+      Array(nodes).map { |label| { "name" => label["name"] } }
+    end
+
+    def graphql_pull_request_changed_files(tap_remote_repo, pull_request)
+      owner, repo = tap_remote_repo.to_s.split("/", 2)
+      return [] if owner.nil? || repo.nil?
+
+      data = graphql_data(<<~GRAPHQL,
+        query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              files(first: 100) { nodes { path } }
+            }
+          }
+        }
+      GRAPHQL
+        { "owner" => owner, "name" => repo, "number" => pull_request.to_i })
+      nodes = data.dig("repository", "pullRequest", "files", "nodes")
+      Array(nodes).map { |file| { "filename" => file["path"] } }
+    end
+
+    def graphql_repository_approved_reviews(user, repo, pull_request, commit: nil)
+      data = graphql_data(<<~GRAPHQL,
+        query($owner: String!, $name: String!, $number: Int!) {
+          repository(owner: $owner, name: $name) {
+            pullRequest(number: $number) {
+              reviews(first: 100) {
+                nodes { state authorAssociation author { login } commit { oid } }
+              }
+            }
+          }
+        }
+      GRAPHQL
+        { "owner" => user.to_s, "name" => repo.to_s, "number" => pull_request.to_i })
+      nodes = data.dig("repository", "pullRequest", "reviews", "nodes")
+      result = []
+      Array(nodes).each do |review|
+        next unless review.is_a?(Hash) && review["state"].to_s == "APPROVED"
+        next if !commit.nil? && !commit.to_s.empty? &&
+                review.dig("commit", "oid").to_s != commit.to_s
+        next if !review["authorAssociation"].nil? &&
+                !%w[MEMBER OWNER].include?(review["authorAssociation"].to_s)
+
+        author = review["author"].is_a?(Hash) ? review["author"] : {}
+        result << { "login" => author["login"], "name" => author["login"] }
+      end
+      result
+    end
+
+    def graphql_members_by_team(org, team)
+      data = graphql_data(<<~GRAPHQL, { "org" => org.to_s, "team" => team.to_s })
+        query($org: String!, $team: String!) {
+          organization(login: $org) {
+            team(slug: $team) {
+              members(first: 100) { nodes { login } }
+            }
+          }
+        }
+      GRAPHQL
+      nodes = data.dig("organization", "team", "members", "nodes")
+      Array(nodes).map { |member| { "login" => member["login"] } }
+    end
+
+    def graphql_sponsorship_tiers(user)
+      data = graphql_data(<<~GRAPHQL, { "login" => user.to_s })
+        query($login: String!) {
+          user(login: $login) {
+            sponsorsListing {
+              tiers(first: 100) { nodes { name monthlyPriceInCents } }
+            }
+          }
+        }
+      GRAPHQL
+      nodes = data.dig("user", "sponsorsListing", "tiers", "nodes")
+      Array(nodes).map do |tier|
+        {
+          "name" => tier["name"],
+          "monthly_price_in_cents" => tier["monthlyPriceInCents"],
+        }
+      end
     end
 
     def unsupported_write!(name)

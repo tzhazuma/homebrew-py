@@ -1048,9 +1048,20 @@ def test_user_service_env_overrides_formula_environment(
         config,
     )
 
-    # User values win; new variables are added; PATH keeps the formula value
-    # because the env file does not override it.
+    # The declared environment stays exactly as the service block declared it.
     assert spec.environment_variables == {
+        "FOO": "formula",
+        "BAZ": "keep",
+        "PATH": _homebrew_std_service_path_env(config),
+    }
+    assert spec.declared_environment_variables() == spec.environment_variables
+    # User overrides are stored separately and only win in the effective map.
+    assert spec.user_environment_variables == {
+        "FOO": "override",
+        "BAR": "value=with=equals",
+        "SPACED": "trimmed",
+    }
+    assert spec.effective_environment_variables() == {
         "FOO": "override",
         "BAZ": "keep",
         "PATH": _homebrew_std_service_path_env(config),
@@ -1079,7 +1090,9 @@ def test_user_service_env_injectable_path_argument(
         user_config_home=user_home,
     )
 
-    assert spec.environment_variables["FOO"] == "custom"
+    assert spec.environment_variables["FOO"] == "formula"
+    assert spec.user_environment_variables["FOO"] == "custom"
+    assert spec.effective_environment_variables()["FOO"] == "custom"
 
 
 def test_user_service_env_bounded_parse_and_security(
@@ -1125,7 +1138,8 @@ def test_user_service_env_reaches_effective_helpers_and_to_plist(
             '''
             environment_variables FOO: "formula", KEEP: "yes",
                                   PATH: std_service_path_env
-            run [effective_environment_variables["FOO"],
+            run [declared_environment_variables["FOO"],
+                 effective_environment_variables["FOO"],
                  effective_environment_variables["KEEP"],
                  effective_environment_variables["PATH"],
                  to_plist["EnvironmentVariables"]["FOO"],
@@ -1137,12 +1151,28 @@ def test_user_service_env_reaches_effective_helpers_and_to_plist(
     )
 
     assert spec.run == [
+        "formula",
         "override",
         "yes",
         "/custom/bin",
         "override",
         'FOO="override" KEEP="yes"',
     ]
+    # Declared values stay untouched while the effective map applies overrides.
+    assert spec.environment_variables == {
+        "FOO": "formula",
+        "KEEP": "yes",
+        "PATH": _homebrew_std_service_path_env(config),
+    }
+    assert spec.user_environment_variables == {
+        "FOO": "override",
+        "PATH": "/custom/bin",
+    }
+    assert spec.effective_environment_variables() == {
+        "FOO": "override",
+        "KEEP": "yes",
+        "PATH": "/custom/bin",
+    }
 
 
 @requires_ruby
@@ -1167,9 +1197,45 @@ def test_user_service_env_renders_through_manager(
     spec = manager.spec_for(formula)
     payload = manager.plist_payload(formula, spec)
 
-    assert spec.environment_variables["FOO"] == "override"
+    # Declared environment is untouched; effective/render output applies the
+    # user override without destructively merging it.
+    assert spec.environment_variables == {"FOO": "formula"}
+    assert spec.declared_environment_variables() == {"FOO": "formula"}
+    assert spec.user_environment_variables == {"FOO": "override"}
+    assert spec.effective_environment_variables() == {"FOO": "override"}
     assert payload["EnvironmentVariables"]["FOO"] == "override"
     assert 'Environment="FOO=override"' in manager.unit_text(formula, spec)
+
+
+@requires_ruby
+def test_user_env_effective_values_with_pybrew_path_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    allow_ruby: None,
+    non_root: None,
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    monkeypatch.setenv(SERVICE_PATH_MODE_ENV, "pybrew")
+    user_home = tmp_path / "user-config"
+    _write_user_env(user_home, "svc", "PATH=/user/bin\n")
+    monkeypatch.setenv(USER_CONFIG_HOME_ENV, str(user_home))
+    formula = _formula_with_service(
+        '''
+        run [opt_bin/"svc"]
+        environment_variables FOO: "formula", PATH: std_service_path_env
+        '''
+    )
+
+    manager = ServiceManager(config)
+    spec = manager.spec_for(formula)
+
+    # pybrew path mode makes the declared std_service_path_env match the
+    # literal parser; the render-time effective value still lets the user win.
+    assert spec.declared_environment_variables()["PATH"] == str(config.prefix / "bin")
+    assert spec.user_environment_variables == {"PATH": "/user/bin"}
+    assert spec.effective_environment_variables()["PATH"] == "/user/bin"
+    payload = manager.plist_payload(formula, spec)
+    assert payload["EnvironmentVariables"]["PATH"] == "/user/bin"
 
 
 # ---------------------------------------------------------------------------

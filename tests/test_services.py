@@ -838,9 +838,12 @@ def test_service_spec_helper_methods(tmp_path: Path) -> None:
     assert spec.path_dir(prefix) == prefix / "bin"
     assert spec.path_dirs(prefix) == [prefix / "bin", prefix / "sbin"]
     assert spec.path_parent_dir(prefix) == tmp_path
+    assert spec.declared_environment_variables() == {"FOO": "bar"}
+    # Homebrew-style effective environment: the prefix argument is accepted for
+    # compatibility but no longer synthesises PATH.
     env = spec.effective_environment_variables(prefix)
-    assert env["FOO"] == "bar"
-    assert env["PATH"] == f"{prefix / 'bin'}:{prefix / 'sbin'}"
+    assert env == {"FOO": "bar"}
+    assert spec.effective_environment_variables() == {"FOO": "bar"}
     assert spec.parse_cron() == {
         "Minute": 5,
         "Hour": 6,
@@ -852,6 +855,53 @@ def test_service_spec_helper_methods(tmp_path: Path) -> None:
     assert ServiceSpec.cron_weekday_to_systemd_weekday("Sun") == "Sun"
     restored = ServiceSpec.from_hash({"run": ["x"], "unknown": "ignored"})
     assert restored.run == ["x"]
+
+
+def test_service_spec_declared_and_effective_environment_separation(
+    tmp_path: Path,
+) -> None:
+    prefix = tmp_path / "prefix"
+    spec = ServiceSpec(
+        environment_variables={"FOO": "declared", "PATH": "/declared/bin"},
+        user_environment_variables={"FOO": "user", "BAR": "added"},
+    )
+
+    # The declared map is untouched by user overrides.
+    assert spec.declared_environment_variables() == {
+        "FOO": "declared",
+        "PATH": "/declared/bin",
+    }
+    assert spec.environment_variables == {
+        "FOO": "declared",
+        "PATH": "/declared/bin",
+    }
+    # Effective values merge overrides with user values winning; the legacy
+    # prefix argument does not synthesise PATH.
+    effective = spec.effective_environment_variables(prefix)
+    assert effective == {
+        "FOO": "user",
+        "PATH": "/declared/bin",
+        "BAR": "added",
+    }
+    assert spec.effective_environment_variables() == effective
+    assert spec.user_environment == {"FOO": "user", "BAR": "added"}
+    # Returned dicts are copies: mutating them cannot corrupt the spec.
+    effective["NEW"] = "value"
+    assert "NEW" not in spec.effective_environment_variables()
+
+    restored = ServiceSpec.from_hash(
+        {
+            "environment_variables": {"A": "declared"},
+            "user_environment": {"A": "user"},
+        }
+    )
+    assert restored.declared_environment_variables() == {"A": "declared"}
+    assert restored.effective_environment_variables() == {"A": "user"}
+
+    empty = ServiceSpec()
+    assert empty.declared_environment_variables() == {}
+    assert empty.effective_environment_variables() == {}
+    assert empty.user_environment_variables == {}
 
 
 def test_service_manager_render_wrappers(
@@ -866,6 +916,49 @@ def test_service_manager_render_wrappers(
     assert payload["ProgramArguments"] == spec.run
     unit = manager.to_systemd_unit(formula)
     assert "[Service]" in unit
+
+
+def test_rendering_applies_user_environment_without_mutating_declared(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    manager = ServiceManager(config)
+    formula = _formula()
+    spec = ServiceSpec(
+        run=["/opt/svc/bin/svc"],
+        environment_variables={"FOO": "declared", "KEEP": "yes"},
+        user_environment_variables={"FOO": "override", "BAR": "added"},
+    )
+
+    payload = manager.plist_payload(formula, spec)
+    assert payload["EnvironmentVariables"] == {
+        "FOO": "override",
+        "KEEP": "yes",
+        "BAR": "added",
+        "PATH": str(config.prefix / "bin"),
+    }
+
+    unit = manager.unit_text(formula, spec)
+    assert 'Environment="FOO=override"' in unit
+    assert 'Environment="KEEP=yes"' in unit
+    assert 'Environment="BAR=added"' in unit
+    assert 'Environment="FOO=declared"' not in unit
+
+    # Rendering never merges overrides into the declared environment.
+    assert spec.environment_variables == {"FOO": "declared", "KEEP": "yes"}
+    assert spec.declared_environment_variables() == {
+        "FOO": "declared",
+        "KEEP": "yes",
+    }
+    assert spec.user_environment_variables == {"FOO": "override", "BAR": "added"}
+
+    # A user-provided PATH wins over pybrew's default search path.
+    path_spec = ServiceSpec(
+        run=["/opt/svc/bin/svc"],
+        user_environment_variables={"PATH": "/user/bin"},
+    )
+    path_payload = manager.plist_payload(formula, path_spec)
+    assert path_payload["EnvironmentVariables"]["PATH"] == "/user/bin"
 
 
 # ---------------------------------------------------------------------------

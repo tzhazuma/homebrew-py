@@ -2596,3 +2596,56 @@ end
     _install_keg(config, "dep-lib", output="dep-ok")
     result = run_formula_test(formula, config, ruby=_REAL_RUBY)
     assert result.success is True
+
+
+@requires_ruby
+def test_dsl_homebrew_mode_env_null_token(tmp_path: Path) -> None:
+    source = """do
+  assert_equal 0, Version.new("1.0") <=> Version.new("1.0.0")
+  assert Version.new("1.0") == Version.new("1.0.0")
+  assert Version.new("1.0") == "1.0.0"
+  assert_equal Version.new("1.0").hash, Version.new("1.0.0").hash
+  refute_equal Version.new("1.0"), Version.new("1.0.1")
+  assert Version.new("1.0") > Version.new("1.0-alpha")
+  assert Version.new("1.0") < Version.new("1.0-p1")
+  assert Version.new("1.0") < Version.new("1.0-foo")
+  assert PkgVersion.parse("1.0_0") == Version.new("1.0.0")
+  assert_equal PkgVersion.parse("1.0_0").hash, Version.new("1.0.0").hash
+  refute_equal Version.new("1.0"), PkgVersion.parse("1.0_2")
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(
+        formula,
+        config,
+        ruby=_REAL_RUBY,
+        env={"PYBREW_VERSION_HOMEBREW": "1"},
+    )
+    assert result.success is True
+
+
+@requires_ruby
+def test_dsl_homebrew_mode_class_flag(tmp_path: Path) -> None:
+    source = """do
+  begin
+    refute Version.new("1.0") == Version.new("1.0.0")
+    Version.homebrew = true
+    assert Version.new("1.0") == Version.new("1.0.0")
+    assert_equal Version.new("1.0").hash, Version.new("1.0.0").hash
+    Version.with_homebrew(false) do
+      refute Version.new("1.0") == Version.new("1.0.0")
+    end
+    assert Version.new("1.0") == Version.new("1.0.0")
+  ensure
+    Version.homebrew = false
+  end
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(
+        formula,
+        config,
+        ruby=_REAL_RUBY,
+        env={"PYBREW_VERSION_HOMEBREW": ""},
+    )
+    assert result.success is True

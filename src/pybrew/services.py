@@ -255,11 +255,19 @@ class ServiceSpec:
     cron: dict[str, Any] = field(default_factory=dict)
     sockets: dict[str, dict[str, str]] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    #: Homebrew user env file overrides, applied only by
+    #: :meth:`effective_environment_variables` and the renderers.  Appended at
+    #: the end so existing positional constructions keep their field order.
+    user_environment_variables: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def from_hash(cls, data: dict[str, Any]) -> "ServiceSpec":
         known = cls.__dataclass_fields__
-        return cls(**{key: value for key, value in data.items() if key in known})
+        values = {key: value for key, value in data.items() if key in known}
+        if "user_environment" in data and "user_environment_variables" not in values:
+            # Accept Homebrew's shorter spelling as an alias in serialised data.
+            values["user_environment_variables"] = data["user_environment"]
+        return cls(**values)
 
     def command(self) -> list[str]:
         return list(self.run)
@@ -307,11 +315,42 @@ class ServiceSpec:
     def path_parent_dir(self, prefix: Path) -> Path:
         return Path(prefix).parent
 
-    def effective_environment_variables(self, prefix: Path) -> dict[str, str]:
-        environment = dict(self.environment_variables)
-        search = ":".join(str(path) for path in self.path_dirs(prefix))
-        existing = environment.get("PATH")
-        environment["PATH"] = f"{search}:{existing}" if existing else search
+    @property
+    def user_environment(self) -> dict[str, str]:
+        """Alias for :attr:`user_environment_variables`."""
+
+        return self.user_environment_variables
+
+    @user_environment.setter
+    def user_environment(self, value: dict[str, str]) -> None:
+        self.user_environment_variables = dict(value)
+
+    def declared_environment_variables(self) -> dict[str, str]:
+        """Return the service-block environment without user overrides.
+
+        This mirrors Homebrew's ``Service#environment_variables`` getter; use
+        :meth:`effective_environment_variables` for the values that should be
+        written to a plist or systemd unit.
+        """
+
+        return {
+            str(key): str(value) for key, value in self.environment_variables.items()
+        }
+
+    def effective_environment_variables(
+        self, prefix: Optional[Path] = None
+    ) -> dict[str, str]:
+        """Return declared environment merged with Homebrew user overrides.
+
+        User values win, matching Homebrew's
+        ``Service#effective_environment_variables``.  ``prefix`` is accepted for
+        backwards compatibility but no longer synthesises ``PATH``; renderers
+        keep pybrew's default search path separately.
+        """
+
+        environment = self.declared_environment_variables()
+        for key, value in self.user_environment_variables.items():
+            environment[str(key)] = str(value)
         return environment
 
     def default_cron_values(self) -> dict[str, int]:
@@ -1063,7 +1102,7 @@ class ServiceManager:
             lines.append(f"WorkingDirectory={working_dir or root_dir}")
         if spec.nice is not None:
             lines.append(f"Nice={spec.nice}")
-        for key, value in spec.environment_variables.items():
+        for key, value in spec.effective_environment_variables().items():
             escaped = str(value).replace('"', '\\"')
             lines.append(f'Environment="{key}={escaped}"')
         lines += ["", "[Install]", "WantedBy=default.target", ""]
@@ -1179,7 +1218,9 @@ class ServiceManager:
             payload["LaunchOnlyOnce"] = True
         if spec.sockets:
             payload["Sockets"] = _launchd_sockets(spec)
-        environment = dict(spec.environment_variables)
+        environment = spec.effective_environment_variables()
+        # Keep pybrew's historical default search path unless the declared or
+        # user environment already provides PATH.
         environment.setdefault("PATH", str(self.config.prefix / "bin"))
         if environment:
             payload["EnvironmentVariables"] = environment

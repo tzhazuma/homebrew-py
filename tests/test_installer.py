@@ -428,7 +428,10 @@ def _synthetic_elf(
     *needed: str,
     rpath: "str | None" = None,
     runpath: "str | None" = None,
+    audit: "str | None" = None,
+    depaudit: "str | None" = None,
     extended_phnum: bool = False,
+    no_dynamic: bool = False,
 ) -> bytes:
     required = needed or ("libmissing.so",)
     strings = bytearray(b"\0")
@@ -444,26 +447,41 @@ def _synthetic_elf(
     if runpath is not None:
         runpath_offset = len(strings)
         strings.extend(runpath.encode("utf-8") + b"\0")
+    audit_offset: "int | None" = None
+    if audit is not None:
+        audit_offset = len(strings)
+        strings.extend(audit.encode("utf-8") + b"\0")
+    depaudit_offset: "int | None" = None
+    if depaudit is not None:
+        depaudit_offset = len(strings)
+        strings.extend(depaudit.encode("utf-8") + b"\0")
     strtab_offset = 0x200
     base_address = 0x400000
     dynamic_offset = 0x100
-    dynamic = [(1, offset) for offset in needed_offsets]
-    if rpath_offset is not None:
-        dynamic.append((15, rpath_offset))
-    if runpath_offset is not None:
-        dynamic.append((29, runpath_offset))
-    dynamic.extend(
-        [
-            (5, base_address + strtab_offset),
-            (10, len(strings)),
-            (0, 0),
-        ]
-    )
+    dynamic: list[tuple[int, int]] = []
+    if not no_dynamic:
+        dynamic = [(1, offset) for offset in needed_offsets]
+        if rpath_offset is not None:
+            dynamic.append((15, rpath_offset))
+        if runpath_offset is not None:
+            dynamic.append((29, runpath_offset))
+        if audit_offset is not None:
+            dynamic.append((0x6FFFFFFC, audit_offset))
+        if depaudit_offset is not None:
+            dynamic.append((0x6FFFFFFB, depaudit_offset))
+        dynamic.extend(
+            [
+                (5, base_address + strtab_offset),
+                (10, len(strings)),
+                (0, 0),
+            ]
+        )
     dynamic_size = len(dynamic) * 16
     section_offset = 0x300 if extended_phnum else 0
     data_size = 0x340 if extended_phnum else 0x300
     data = bytearray(data_size)
     struct.pack_into("<4sBBBBB7x", data, 0, b"\x7fELF", 2, 1, 1, 0, 0)
+    program_header_count = 1 if no_dynamic else 2
     struct.pack_into(
         "<HHIQQQIHHHHHH",
         data,
@@ -477,7 +495,7 @@ def _synthetic_elf(
         0,
         64,
         56,
-        0xFFFF if extended_phnum else 2,
+        0xFFFF if extended_phnum else program_header_count,
         64 if extended_phnum else 0,
         1 if extended_phnum else 0,
         0,
@@ -485,25 +503,28 @@ def _synthetic_elf(
     struct.pack_into(
         "<IIQQQQQQ", data, 64, 1, 5, 0, base_address, base_address, 0x300, 0x300, 0x1000
     )
-    struct.pack_into(
-        "<IIQQQQQQ",
-        data,
-        120,
-        2,
-        6,
-        dynamic_offset,
-        base_address + dynamic_offset,
-        base_address + dynamic_offset,
-        dynamic_size,
-        dynamic_size,
-        0x1000,
-    )
-    for index, (tag, value) in enumerate(dynamic):
-        struct.pack_into("<qQ", data, dynamic_offset + index * 16, tag, value)
+    if not no_dynamic:
+        struct.pack_into(
+            "<IIQQQQQQ",
+            data,
+            120,
+            2,
+            6,
+            dynamic_offset,
+            base_address + dynamic_offset,
+            base_address + dynamic_offset,
+            dynamic_size,
+            dynamic_size,
+            0x1000,
+        )
+        for index, (tag, value) in enumerate(dynamic):
+            struct.pack_into("<qQ", data, dynamic_offset + index * 16, tag, value)
     data[strtab_offset : strtab_offset + len(strings)] = strings
     if extended_phnum:
         # Section header zero's sh_info carries the real PN_XNUM phnum.
-        struct.pack_into("<I", data, section_offset + 44, 2)
+        struct.pack_into(
+            "<I", data, section_offset + 44, program_header_count
+        )
     return bytes(data)
 
 
@@ -1510,3 +1531,155 @@ def test_fat_macho_keeps_valid_slice_when_another_is_corrupt(
     assert len(report.corrupt) == 1
     assert "slice 1" in report.corrupt[0].detail
     assert report.skipped == 1
+
+
+def test_check_linkage_expands_elf_lib_and_platform_tokens(
+    tmp_path: Path,
+) -> None:
+    keg = tmp_path / "keg"
+    (keg / "bin").mkdir(parents=True)
+    (keg / "lib" / "x86_64").mkdir(parents=True)
+    (keg / "lib" / "x86_64" / "libtoken.so").write_bytes(b"library")
+    (keg / "bin" / "tool").write_bytes(
+        _synthetic_elf(
+            "libtoken.so",
+            rpath="${ORIGIN}/../${LIB}/${PLATFORM}",
+        )
+    )
+    (keg / "bin" / "tool-bare").write_bytes(
+        _synthetic_elf(
+            "libtoken.so",
+            rpath="$ORIGIN/../$LIB/$PLATFORM",
+        )
+    )
+
+    report = check_linkage(keg)
+
+    assert report.checked == 2
+    assert report.issues == []
+    assert report.audit == []
+
+
+def test_check_linkage_runpath_takes_precedence_over_rpath(
+    tmp_path: Path,
+) -> None:
+    keg = tmp_path / "keg"
+    (keg / "bin").mkdir(parents=True)
+    (keg / "rpath-lib").mkdir()
+    (keg / "runpath-lib").mkdir()
+    (keg / "rpath-lib" / "libpref.so").write_bytes(b"library")
+    (keg / "bin" / "tool").write_bytes(
+        _synthetic_elf(
+            "libpref.so",
+            rpath="$ORIGIN/../rpath-lib",
+            runpath="$ORIGIN/../runpath-lib",
+        )
+    )
+
+    report = check_linkage(keg)
+    assert [issue.reference for issue in report.issues] == ["libpref.so"]
+
+    (keg / "runpath-lib" / "libpref.so").write_bytes(b"library")
+    assert check_linkage(keg).issues == []
+
+
+def test_check_linkage_static_elf_without_pt_dynamic(tmp_path: Path) -> None:
+    keg = tmp_path / "keg"
+    (keg / "bin").mkdir(parents=True)
+    (keg / "bin" / "static-tool").write_bytes(
+        _synthetic_elf("libignored.so", no_dynamic=True)
+    )
+
+    report = check_linkage(keg)
+
+    assert report.checked == 1
+    assert report.issues == []
+    assert report.audit == []
+    assert report.corrupt == []
+    assert report.unsupported == []
+
+
+def test_check_linkage_diagnoses_audit_modules_without_false_positive(
+    tmp_path: Path,
+) -> None:
+    keg = tmp_path / "keg"
+    (keg / "bin").mkdir(parents=True)
+    (keg / "lib").mkdir()
+    (keg / "lib" / "libpresent.so").write_bytes(b"library")
+    (keg / "lib" / "libaudit.so").write_bytes(b"audit")
+    (keg / "bin" / "tool").write_bytes(
+        _synthetic_elf(
+            "libpresent.so",
+            audit="$ORIGIN/../lib/libaudit.so",
+            depaudit="/nonexistent/libdepaudit.so",
+        )
+    )
+
+    report = check_linkage(keg)
+
+    assert report.checked == 1
+    assert report.issues == []
+    assert report.has_errors is False
+    assert [audit.tag for audit in report.audit] == [
+        "DT_AUDIT",
+        "DT_DEPAUDIT",
+    ]
+    assert [audit.resolved for audit in report.audit] == [True, False]
+    assert "audit module" in report.format()
+
+
+def test_check_linkage_uses_bounded_dyld_environment_paths(
+    tmp_path: Path,
+) -> None:
+    keg = tmp_path / "keg"
+    (keg / "bin").mkdir(parents=True)
+    (keg / "bin" / "tool").write_bytes(
+        _synthetic_macho(
+            [
+                "libenv.dylib",
+                "@rpath/libfallback.dylib",
+                "@rpath/Foo.framework/Foo",
+            ]
+        )
+    )
+    library_dir = tmp_path / "library-dir"
+    fallback_dir = tmp_path / "fallback-dir"
+    framework_dir = tmp_path / "framework-dir"
+    library_dir.mkdir()
+    fallback_dir.mkdir()
+    framework_dir.mkdir()
+    (library_dir / "libenv.dylib").write_bytes(b"library")
+    (fallback_dir / "libfallback.dylib").write_bytes(b"library")
+    (framework_dir / "Foo.framework").mkdir()
+    (framework_dir / "Foo.framework" / "Foo").write_bytes(b"framework")
+    environment = {
+        "DYLD_LIBRARY_PATH": str(library_dir),
+        "DYLD_FALLBACK_LIBRARY_PATH": str(fallback_dir),
+        "DYLD_FRAMEWORK_PATH": str(framework_dir),
+    }
+
+    assert check_linkage(keg).issues != []
+    report = check_linkage(keg, environment=environment)
+
+    assert report.checked == 1
+    assert report.issues == []
+
+
+def test_check_linkage_macho_rpath_stack_uses_later_entries(
+    tmp_path: Path,
+) -> None:
+    keg = tmp_path / "keg"
+    (keg / "bin").mkdir(parents=True)
+    (keg / "lib2").mkdir()
+    (keg / "lib2" / "libstack.dylib").write_bytes(b"library")
+    (keg / "bin" / "tool").write_bytes(
+        _synthetic_macho(
+            ["@rpath/libstack.dylib"],
+            ["/nonexistent-rpath-entry", "@loader_path/../lib2"],
+        )
+    )
+
+    report = check_linkage(keg)
+
+    assert report.checked == 1
+    assert report.issues == []

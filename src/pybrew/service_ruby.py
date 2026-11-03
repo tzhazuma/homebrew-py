@@ -58,8 +58,10 @@ User environment overrides are read from
 ``user_config_home`` argument) with bounded Homebrew semantics: files for root
 services and world- or group-writable files are skipped, comments/blank/invalid
 lines are ignored, and the remaining ``KEY=value`` pairs override the
-formula-declared environment.  The overrides reach both ``ServiceSpec`` and the
-rendered plist/unit; no service manager is invoked.
+formula-declared environment.  The overrides are stored separately from the
+declared ``environment_variables`` (which stays intact) and are applied by
+``ServiceSpec.effective_environment_variables`` and the plist/unit renderers;
+no service manager is invoked.
 
 Host platform checks can be simulated with ``PYBREW_TARGET_OS`` and
 ``PYBREW_TARGET_ARCH`` (the same overrides used by the opt-in cask evaluator).
@@ -512,8 +514,10 @@ def _spec_from_result(
 
     The same helpers as the default literal parser normalise every field, so an
     invalid value fails with the same :class:`ServiceError` in both modes.
-    Homebrew user env overrides are applied last so they win over the values
-    declared in the service block (they also reach the rendered plist/unit).
+    Homebrew user env overrides are stored separately from the declared
+    ``environment_variables`` and only applied by
+    :meth:`ServiceSpec.effective_environment_variables` / the renderers, so the
+    declared environment is never destructively merged.
     """
 
     spec = ServiceSpec()
@@ -528,8 +532,9 @@ def _spec_from_result(
         except ServiceError as error:
             raise ServiceError(f"{formula.name}: {error}") from error
     if user_environment:
-        for key, value in user_environment.items():
-            spec.environment_variables[str(key)] = str(value)
+        spec.user_environment_variables = {
+            str(key): str(value) for key, value in user_environment.items()
+        }
     warnings = data.get("warnings")
     if isinstance(warnings, list):
         spec.warnings = [str(warning) for warning in warnings]
@@ -856,11 +861,17 @@ class PybrewServiceDSL
     ].compact.uniq
   end
 
+  # The formula-declared environment, without user overrides (Homebrew's
+  # ``Service#environment_variables`` getter).
+  def declared_environment_variables
+    (@data["environment_variables"] || {}).dup
+  end
+
   # Bounded Homebrew parity: the formula-declared environment merged with the
   # user override file read by the Python side
   # (``HOMEBREW_USER_CONFIG_HOME/services/<formula>.env``); user values win.
   def effective_environment_variables
-    environment = (@data["environment_variables"] || {}).dup
+    environment = declared_environment_variables
     (@config["user_environment"] || {}).each do |key, value|
       environment[key.to_s] = value.to_s
     end

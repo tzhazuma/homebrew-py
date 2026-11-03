@@ -7185,3 +7185,152 @@ def test_formulary_remote_api_json_fake_curl(
         "PybrewFormulaUnavailableError|true",
         "2.0",
     ]
+
+
+def test_utils_github_graphql_transport_and_mappings(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    monkeypatch.setenv("PYBREW_GITHUB_TOKEN", "secret-token")
+    argv_file = tmp_path / "graphql-argv.txt"
+    fake_curl = tmp_path / "fake-graphql-curl"
+    script = """#!/bin/sh
+printf '%s\\n' "$@" > "__ARGV__"
+url=""
+payload=""
+prev=""
+for arg in "$@"; do
+  case "$arg" in
+    http*) url="$arg" ;;
+  esac
+  if [ "$prev" = "--data" ]; then payload="$arg"; fi
+  prev="$arg"
+done
+case "$url" in
+  *api.github.com/graphql*)
+    case "$payload" in
+      *defaultBranchRef*) printf '%s' '{"data":{"repository":{"name":"foo","description":"desc","homepageUrl":"https://foo.example","isPrivate":true,"licenseInfo":{"spdxId":"MIT"},"defaultBranchRef":{"name":"main"},"stargazerCount":5,"forkCount":2}}}' ;;
+      *pullRequests*) printf '%s' '{"data":{"repository":{"pullRequests":{"nodes":[{"number":7,"title":"foo: update","url":"https://github.com/homebrew/foo/pull/7","state":"OPEN"}]}}}}' ;;
+      *commits*) printf '%s' '{"data":{"repository":{"pullRequest":{"commits":{"nodes":[{"oid":"abc","messageHeadline":"fix foo"}]}}}}}' ;;
+      *labels*) printf '%s' '{"data":{"repository":{"pullRequest":{"labels":{"nodes":[{"name":"bump"}]}}}}}' ;;
+      *files*) printf '%s' '{"data":{"repository":{"pullRequest":{"files":{"nodes":[{"path":"Formula/foo.rb"}]}}}}}' ;;
+      *reviews*) printf '%s' '{"data":{"repository":{"pullRequest":{"reviews":{"nodes":[{"state":"APPROVED","authorAssociation":"MEMBER","author":{"login":"rev"},"commit":{"oid":"abc"}}]}}}}}' ;;
+      *members*) printf '%s' '{"data":{"organization":{"team":{"members":{"nodes":[{"login":"alice"}]}}}}}' ;;
+      *sponsorsListing*) printf '%s' '{"data":{"user":{"sponsorsListing":{"tiers":{"nodes":[{"name":"Gold","monthlyPriceInCents":500}]}}}}}' ;;
+      *) printf '%s' '{"data":{}}' ;;
+    esac ;;
+  *) printf '%s' '{}' ;;
+esac
+"""
+    fake_curl.write_text(script.replace("__ARGV__", str(argv_file)))
+    fake_curl.chmod(0o755)
+    errors_curl = tmp_path / "errors-graphql-curl"
+    errors_curl.write_text("#!/bin/sh\nprintf '%s' '{\"errors\":[{\"message\":\"boom\"}]}'\n")
+    errors_curl.chmod(0o755)
+    bad_curl = tmp_path / "bad-graphql-curl"
+    bad_curl.write_text("#!/bin/sh\nprintf '%s' 'not json'\n")
+    bad_curl.chmod(0o755)
+    nodata_curl = tmp_path / "nodata-graphql-curl"
+    nodata_curl.write_text("#!/bin/sh\nprintf '%s' '{\"data\":{}}'\n")
+    nodata_curl.chmod(0o755)
+    monkeypatch.setenv("PYBREW_GITHUB_CURL", str(fake_curl))
+    formula = _formula(
+        "ruby-github-graphql",
+        "1.0",
+        (
+            '  gql_repo = Utils::GitHub.graphql_repository("homebrew", "foo")\n'
+            '  gql_prs = Utils::GitHub.graphql_fetch_pull_requests("foo", "homebrew/foo", state: "open")\n'
+            '  gql_commits = Utils::GitHub.graphql_pull_request_commits("homebrew", "foo", 7)\n'
+            '  gql_labels = Utils::GitHub.graphql_pull_request_labels("homebrew", "foo", 7)\n'
+            '  gql_files = Utils::GitHub.graphql_pull_request_changed_files("homebrew/foo", 7)\n'
+            '  gql_reviews = Utils::GitHub.graphql_repository_approved_reviews("homebrew", "foo", 7, commit: "abc")\n'
+            '  gql_members = Utils::GitHub.graphql_members_by_team("homebrew", "core")\n'
+            '  gql_tiers = Utils::GitHub.graphql_sponsorship_tiers("alice")\n'
+            '  repo = Utils::GitHub.repository("homebrew", "foo")\n'
+            '  prs = Utils::GitHub.fetch_pull_requests("foo", "homebrew/foo", state: "open")\n'
+            '  commits = Utils::GitHub.pull_request_commits("homebrew", "foo", 7)\n'
+            '  labels = Utils::GitHub.pull_request_labels("homebrew", "foo", 7)\n'
+            '  files = Utils::GitHub.pull_request_changed_files("homebrew/foo", 7)\n'
+            '  reviews = Utils::GitHub.repository_approved_reviews("homebrew", "foo", 7, commit: "abc")\n'
+            '  members = Utils::GitHub.members_by_team("homebrew", "core")\n'
+            '  tiers = Utils::GitHub.sponsorship_tiers("alice")\n'
+            '  argv = Pathname.new(ENV["PYBREW_GRAPHQL_ARGV"]).read.lines.map(&:chomp)\n'
+            '  ENV["PYBREW_GITHUB_CURL"] = "' + str(errors_curl) + '"\n'
+            '  error = begin\n'
+            '    Utils::GitHub.graphql_data("query { viewer { login } }")\n'
+            '    "none"\n'
+            '  rescue => raised\n'
+            '    raised.class.name + "|" + raised.message.include?("GraphQL error").to_s\n'
+            '  end\n'
+            '  ENV["PYBREW_GITHUB_CURL"] = "' + str(bad_curl) + '"\n'
+            '  malformed = begin\n'
+            '    Utils::GitHub.graphql_data("query { viewer { login } }")\n'
+            '    "none"\n'
+            '  rescue => raised\n'
+            '    raised.class.name + "|" + raised.message.include?("malformed GraphQL JSON").to_s\n'
+            '  end\n'
+            '  ENV["PYBREW_GITHUB_CURL"] = "' + str(nodata_curl) + '"\n'
+            '  nodata = begin\n'
+            '    Utils::GitHub.graphql_data("query { viewer { login } }")\n'
+            '    "none"\n'
+            '  rescue => raised\n'
+            '    raised.class.name + "|" + raised.message.include?("no data").to_s\n'
+            '  end\n'
+            '  ENV["PYBREW_GITHUB_CURL"] = "' + str(fake_curl) + '"\n'
+            '  (prefix/"graphql.txt").write [\n'
+            '    gql_repo["full_name"], gql_repo["description"], gql_repo["private"].to_s,\n'
+            '    gql_repo["license"]["spdx_id"], gql_repo["default_branch"],\n'
+            '    gql_repo["stargazers_count"].to_s, gql_repo["forks_count"].to_s,\n'
+            '    gql_prs.first["number"].to_s, gql_prs.first["html_url"], gql_prs.first["state"],\n'
+            '    gql_commits.first["sha"], gql_labels.first["name"], gql_files.first["filename"],\n'
+            '    gql_reviews.first["login"], gql_members.first["login"],\n'
+            '    gql_tiers.first["monthly_price_in_cents"].to_s,\n'
+            '    repo["description"], repo["private"].to_s,\n'
+            '    prs.first["state"], commits.first["sha"], labels.first["name"],\n'
+            '    files.first["filename"], reviews.first["login"], members.first["login"],\n'
+            '    tiers.first["monthly_price_in_cents"].to_s,\n'
+            '    argv.include?("-X").to_s, argv.include?("POST").to_s,\n'
+            '    argv.include?("Content-Type: application/json").to_s,\n'
+            '    argv.include?("Authorization: bearer secret-token").to_s,\n'
+            '    argv.include?("https://api.github.com/graphql").to_s,\n'
+            '    error, malformed, nodata\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    monkeypatch.setenv("PYBREW_GRAPHQL_ARGV", str(argv_file))
+    keg = _build(tmp_path, formula)
+    assert (keg / "graphql.txt").read_text().splitlines() == [
+        "homebrew/foo",
+        "desc",
+        "true",
+        "MIT",
+        "main",
+        "5",
+        "2",
+        "7",
+        "https://github.com/homebrew/foo/pull/7",
+        "open",
+        "abc",
+        "bump",
+        "Formula/foo.rb",
+        "rev",
+        "alice",
+        "500",
+        "desc",
+        "true",
+        "open",
+        "abc",
+        "bump",
+        "Formula/foo.rb",
+        "rev",
+        "alice",
+        "500",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "PybrewGitHubGraphqlError|true",
+        "PybrewGitHubGraphqlError|true",
+        "PybrewGitHubGraphqlError|true",
+    ]

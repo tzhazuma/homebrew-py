@@ -1194,8 +1194,49 @@ def test_generic_artifact_unsupported_kwargs_are_rejected(
         ),
     )
 
+    with pytest.raises(CaskError, match="install steps are not supported"):
+        cask_env.installer.install(cask_env.loader.load("generic"))
+
+
+def test_generic_artifact_unknown_kwarg_is_rejected(
+    cask_env: SimpleNamespace,
+) -> None:
+    archive = cask_env.tmp_path / "Generic-1.0.zip"
+    digest = _make_zip(archive, {"notes.txt": b"notes\n"})
+    _write_cask(
+        cask_env.tap,
+        "generic",
+        "1.0",
+        digest,
+        archive,
+        artifacts='  artifact "notes.txt", target: "notes.txt", mode: :copy',
+    )
+
     with pytest.raises(CaskError, match="options are not supported"):
         cask_env.installer.install(cask_env.loader.load("generic"))
+
+
+def test_generic_artifact_explicit_appdir_absolute_target(
+    cask_env: SimpleNamespace,
+) -> None:
+    archive = cask_env.tmp_path / "Generic-1.0.zip"
+    digest = _make_zip(archive, {"notes.txt": b"absolute notes\n"})
+    destination = cask_env.config.applications / "absolute-notes.txt"
+    _write_cask(
+        cask_env.tap,
+        "generic",
+        "1.0",
+        digest,
+        archive,
+        artifacts=(
+            f'  artifact "notes.txt", target: "{destination}", '
+            'dirmethod: :appdir'
+        ),
+    )
+
+    cask_env.installer.install(cask_env.loader.load("generic"))
+
+    assert destination.read_text() == "absolute notes\n"
 
 
 def test_generic_artifact_dirmethod_restricts_absolute_target(
@@ -1248,3 +1289,77 @@ def test_upgrade_removes_suite_artifact(cask_env: SimpleNamespace) -> None:
 
     assert result.version == "2.0"
     assert not old_suite.exists()
+
+
+# ---------------------------------------------------------------------------
+# suite receipt edges: shared target on upgrade, symlinked target on uninstall
+# ---------------------------------------------------------------------------
+
+
+def test_upgrade_keeps_shared_suite_target(cask_env: SimpleNamespace) -> None:
+    archive_one = cask_env.tmp_path / "Suite-1.0.zip"
+    digest_one = _make_zip(
+        archive_one,
+        {"Suite Folder/readme.txt": b"v1\n", "Suite Folder/App1.app/Contents/Info.plist": b"<plist/>"},
+    )
+    _write_cask(
+        cask_env.tap,
+        "suite",
+        "1.0",
+        digest_one,
+        archive_one,
+        artifacts='  suite "Suite Folder", target: "Shared Suite"',
+    )
+    cask_env.installer.install(cask_env.loader.load("suite"))
+    target = cask_env.config.applications / "Shared Suite"
+    assert (target / "readme.txt").read_text() == "v1\n"
+
+    archive_two = cask_env.tmp_path / "Suite-2.0.zip"
+    digest_two = _make_zip(
+        archive_two,
+        {"Suite Folder/readme.txt": b"v2\n", "Suite Folder/App1.app/Contents/Info.plist": b"<plist/>"},
+    )
+    _write_cask(
+        cask_env.tap,
+        "suite",
+        "2.0",
+        digest_two,
+        archive_two,
+        artifacts='  suite "Suite Folder", target: "Shared Suite"',
+    )
+    cask_env.installer.upgrade(cask_env.loader.load("suite"))
+
+    assert (target / "readme.txt").read_text() == "v2\n"
+
+
+def test_uninstall_suite_symlink_does_not_touch_target(
+    cask_env: SimpleNamespace,
+) -> None:
+    archive = cask_env.tmp_path / "Suite-1.0.zip"
+    digest = _make_zip(
+        archive, {"Suite Folder/App1.app/Contents/Info.plist": b"<plist/>"}
+    )
+    _write_cask(
+        cask_env.tap,
+        "suite",
+        "1.0",
+        digest,
+        archive,
+        artifacts='  suite "Suite Folder", target: "Linked Suite"',
+    )
+    cask_env.installer.install(cask_env.loader.load("suite"))
+    suite_path = cask_env.config.applications / "Linked Suite"
+    outside = cask_env.tmp_path / "outside-suite"
+    outside.mkdir()
+    keep = outside / "keep.txt"
+    keep.write_text("keep", encoding="utf-8")
+    # Replace the installed suite with a symlink to an outside directory.
+    import shutil
+
+    shutil.rmtree(suite_path)
+    suite_path.symlink_to(outside, target_is_directory=True)
+
+    cask_env.installer.uninstall("suite")
+
+    assert not suite_path.is_symlink()
+    assert keep.read_text() == "keep"

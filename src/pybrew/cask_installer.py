@@ -1739,10 +1739,15 @@ class CaskInstaller:
         """
 
         kwargs = artifact.kwargs if isinstance(artifact.kwargs, dict) else {}
+        kwargs_keys = {str(key) for key in kwargs}
+        if "steps" in kwargs_keys:
+            raise CaskError(
+                f"{cask.token}: generic `artifact` install steps are not "
+                "supported by pybrew; use the bounded copy semantics with "
+                "target/dirmethod/base_dir"
+            )
         supported = {"target", "dirmethod", "base_dir"}
-        unsupported = sorted(
-            str(key) for key in kwargs if str(key) not in supported
-        )
+        unsupported = sorted(key for key in kwargs_keys if key not in supported)
         if unsupported:
             raise CaskError(
                 f"{cask.token}: generic artifact options are not supported by "

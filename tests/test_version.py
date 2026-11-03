@@ -1,6 +1,15 @@
 from __future__ import annotations
 
+import pytest
+
 from pybrew.version import PkgVersion, Version, compare_versions, detect_version
+
+
+@pytest.fixture(autouse=True)
+def _reset_homebrew_mode(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("PYBREW_VERSION_HOMEBREW", raising=False)
+    monkeypatch.setattr(Version, "homebrew", False, raising=False)
+    yield
 
 
 def test_detect_common_source_urls() -> None:
@@ -137,4 +146,45 @@ def test_version_string_and_hash_contract() -> None:
     assert hash(version) == hash("1.2.3")
     assert hash(Version("1.2.3")) == hash(Version("1.2.3"))
     assert Version("1.0") == Version("1.0")
+    assert Version("1.0") != Version("1.0.0")
+
+
+def test_homebrew_mode_env_null_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    assert compare_versions("1.0.0", "1.0") > 0
+    assert Version("1.0") != Version("1.0.0")
+
+    monkeypatch.setenv("PYBREW_VERSION_HOMEBREW", "1")
+    assert compare_versions("1.0.0", "1.0") == 0
+    assert compare_versions("1.0.0", "1.0", missing_numeric_zero=False) > 0
+    assert Version("1.0") == Version("1.0.0")
+    assert Version("1.0") == "1.0.0"
+    assert Version("1.0") != Version("1.0.1")
+    assert Version("1.0") > Version("1.0-alpha")
+    assert Version("1.0") < Version("1.0-p1")
+    assert Version("1.0") < Version("1.0-foo")
+    assert hash(Version("1.0")) == hash(Version("1.0.0"))
+    assert PkgVersion("1.0", 0) == Version("1.0.0")
+    assert hash(PkgVersion("1.0", 0)) == hash(Version("1.0.0"))
+    assert PkgVersion("1.0", 2) != Version("1.0")
+    assert hash(PkgVersion("1.0", 2)) != hash(PkgVersion("1.0", 0))
+
+
+def test_homebrew_mode_class_flag_and_context() -> None:
+    assert Version("1.0") != Version("1.0.0")
+    Version.homebrew = True
+    try:
+        assert Version("1.0") == Version("1.0.0")
+        assert hash(Version("1.0")) == hash(Version("1.0.0"))
+    finally:
+        Version.homebrew = False
+    with Version.homebrew_mode():
+        assert Version("1.0") == Version("1.0.0")
+    assert Version("1.0") != Version("1.0.0")
+
+
+def test_homebrew_mode_env_false_overrides_class_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    Version.homebrew = True
+    monkeypatch.setenv("PYBREW_VERSION_HOMEBREW", "0")
     assert Version("1.0") != Version("1.0.0")

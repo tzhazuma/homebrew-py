@@ -841,6 +841,12 @@ _DT_STRTAB = 5
 _DT_STRSZ = 10
 _DT_RPATH = 15
 _DT_RUNPATH = 29
+_DT_AUDIT = 0x6FFFFFFC
+_DT_DEPAUDIT = 0x6FFFFFFB
+_ELF_AUDIT_TAGS = {
+    _DT_AUDIT: "DT_AUDIT",
+    _DT_DEPAUDIT: "DT_DEPAUDIT",
+}
 _PT_LOAD = 1
 _PT_DYNAMIC = 2
 
@@ -889,13 +895,32 @@ class LinkageProblem:
     detail: str
 
 
+@dataclass(frozen=True)
+class LinkageAudit:
+    """One ELF DT_AUDIT/DT_DEPAUDIT audit module reference.
+
+    Audit modules are optional runtime instrumentation: an unresolved audit
+    reference is diagnosed here but is never reported as a dangling dependency.
+    """
+
+    path: str
+    reference: str
+    tag: str
+    resolved: bool = False
+    keg: Optional[str] = None
+
+    @property
+    def kind(self) -> str:
+        return "audit"
+
+
 @dataclass
 class LinkageReport:
     """Result of :func:`check_linkage`.
 
-    ``unsupported`` and ``corrupt`` are reported separately instead of being
-    silently skipped; ``skipped`` counts those problems for compatibility with
-    older callers.
+    ``audit``, ``unsupported`` and ``corrupt`` are reported separately instead
+    of being silently skipped; ``skipped`` counts unsupported/corrupt problems
+    for compatibility with older callers.
     """
 
     checked: int = 0
@@ -903,6 +928,7 @@ class LinkageReport:
     issues: list[LinkageIssue] = field(default_factory=list)
     unsupported: list[LinkageProblem] = field(default_factory=list)
     corrupt: list[LinkageProblem] = field(default_factory=list)
+    audit: list[LinkageAudit] = field(default_factory=list)
 
     @property
     def dangling(self) -> list[LinkageIssue]:
@@ -925,16 +951,25 @@ class LinkageReport:
         # Preserve the old aggregate counter without hiding the detail.
         self.skipped += 1
 
+    def add_audit(self, audit: LinkageAudit) -> None:
+        self.audit.append(audit)
+
     def merge(self, other: "LinkageReport") -> "LinkageReport":
         self.checked += other.checked
         self.skipped += other.skipped
         self.issues.extend(other.issues)
         self.unsupported.extend(other.unsupported)
         self.corrupt.extend(other.corrupt)
+        self.audit.extend(other.audit)
         return self
 
     def format(self) -> str:
-        if not self.issues and not self.unsupported and not self.corrupt:
+        if (
+            not self.issues
+            and not self.unsupported
+            and not self.corrupt
+            and not self.audit
+        ):
             return "linkage OK"
         lines: list[str] = []
         if self.issues:
@@ -949,6 +984,20 @@ class LinkageReport:
                 )
             if len(self.issues) > 20:
                 lines.append(f"  ... and {len(self.issues) - 20} more")
+        if self.audit:
+            missing = sum(1 for audit in self.audit if not audit.resolved)
+            lines.append(
+                f"{len(self.audit)} audit module reference(s) "
+                f"({missing} unresolved, diagnostic only):"
+            )
+            for audit in self.audit[:10]:
+                state = "resolved" if audit.resolved else "unresolved"
+                lines.append(
+                    f"  {audit.path}: {audit.reference} "
+                    f"({audit.tag}, {state})"
+                )
+            if len(self.audit) > 10:
+                lines.append(f"  ... and {len(self.audit) - 10} more")
         for label, problems in (
             ("unsupported", self.unsupported),
             ("corrupt", self.corrupt),
@@ -1108,12 +1157,17 @@ def _elf_extended_phnum(
     return count
 
 
-def _elf_dynamic_references(data: bytes) -> tuple[list[str], list[str]]:
-    """Return ``(needed, rpaths)`` from an ELF dynamic section.
+def _elf_dynamic_references(
+    data: bytes,
+) -> tuple[list[str], list[str], list[tuple[str, str]]]:
+    """Return ``(needed, rpaths, audit_refs)`` for an ELF dynamic section.
 
-    Extended program-header counts (``PN_XNUM``), corrupt headers and
-    unsupported ELF classes are surfaced as typed :class:`_LinkageParseError`
-    values rather than silently skipped.
+    DT_RUNPATH takes precedence over DT_RPATH when both are present, matching
+    ld.so's direct-dependency semantics.  DT_AUDIT/DT_DEPAUDIT references are
+    returned separately as ``(tag_name, reference)`` pairs.  Extended
+    program-header counts (``PN_XNUM``), corrupt headers and unsupported ELF
+    classes are surfaced as typed :class:`_LinkageParseError` values rather
+    than silently skipped.
     """
 
     if data[:4] != ELF_MAGIC:
@@ -1183,10 +1237,12 @@ def _elf_dynamic_references(data: bytes) -> tuple[list[str], list[str]]:
             dynamic = (p_offset, p_filesz)
     if dynamic is None:
         # Valid static executables simply have no dynamic linkage.
-        return [], []
+        return [], [], []
 
     needed_offsets: list[int] = []
     rpath_offsets: list[int] = []
+    runpath_offsets: list[int] = []
+    audit_offsets: list[tuple[str, int]] = []
     strtab_address: Optional[int] = None
     strtab_size = 0
     entry_size = 16 if is_64 else 8
@@ -1207,11 +1263,15 @@ def _elf_dynamic_references(data: bytes) -> tuple[list[str], list[str]]:
             strtab_address = value
         elif tag == _DT_STRSZ:
             strtab_size = value
-        elif tag in (_DT_RPATH, _DT_RUNPATH):
+        elif tag == _DT_RPATH:
             rpath_offsets.append(value)
+        elif tag == _DT_RUNPATH:
+            runpath_offsets.append(value)
+        elif tag in _ELF_AUDIT_TAGS:
+            audit_offsets.append((_ELF_AUDIT_TAGS[tag], value))
         offset += entry_size
-    if not needed_offsets and not rpath_offsets:
-        return [], []
+    if not needed_offsets and not rpath_offsets and not runpath_offsets and not audit_offsets:
+        return [], [], []
     if strtab_address is None:
         raise _LinkageParseError(
             "corrupt", "ELF dynamic section has no DT_STRTAB"
@@ -1249,13 +1309,21 @@ def _elf_dynamic_references(data: bytes) -> tuple[list[str], list[str]]:
         value = read_string(relative)
         if value:
             needed.append(value)
+    # DT_RUNPATH is the modern direct-dependency search path; when present,
+    # DT_RPATH is ignored by ld.so for this object.
+    selected_offsets = runpath_offsets if runpath_offsets else rpath_offsets
     rpaths: list[str] = []
-    for relative in rpath_offsets:
+    for relative in selected_offsets:
         value = read_string(relative)
         if not value:
             continue
         rpaths.extend(part for part in value.split(":") if part)
-    return needed, rpaths
+    audits = [
+        (tag, read_string(relative))
+        for tag, relative in audit_offsets
+        if read_string(relative)
+    ]
+    return needed, rpaths, audits
 
 
 def _multiarch_library_paths() -> list[Path]:
@@ -1292,33 +1360,189 @@ def _default_library_paths(
     return paths
 
 
-def _expand_rpath(
-    raw: str, binary: Path, keg: Path, config: Optional[Config]
-) -> Path:
-    """Expand @loader_path/@executable_path/$ORIGIN in an LC_RPATH/ELF entry."""
+_LIB_TOKENS = ("lib", "lib64", "lib32", "libx32")
+_ELF_MACHINE_PLATFORMS: dict[int, tuple[str, ...]] = {
+    3: ("i386", "i686", "x86"),
+    40: ("arm", "armv7l"),
+    62: ("x86_64", "amd64"),
+    183: ("aarch64", "arm64"),
+    21: ("ppc64", "powerpc64"),
+    22: ("s390x",),
+    243: ("riscv64",),
+}
+_PLATFORM_ALIASES: dict[str, tuple[str, ...]] = {
+    "x86_64": ("amd64",),
+    "amd64": ("x86_64",),
+    "aarch64": ("arm64",),
+    "arm64": ("aarch64",),
+    "i386": ("i686", "x86"),
+    "i686": ("i386", "x86"),
+    "x86": ("i386", "i686"),
+    "arm": ("armv7l",),
+    "armv7l": ("arm",),
+    "ppc64": ("powerpc64",),
+    "powerpc64": ("ppc64",),
+}
+_MAX_TOKEN_VARIANTS = 64
+_MAX_ENVIRONMENT_PATHS = 64
 
-    value = (
-        raw.replace("${ORIGIN}", str(binary.parent))
-        .replace("$ORIGIN", str(binary.parent))
-        .replace("@loader_path", str(binary.parent))
-        .replace("@executable_path", str(binary.parent))
+
+@dataclass(frozen=True)
+class _SearchContext:
+    keg: Path
+    config: Optional[Config]
+    extra: tuple[Path, ...]
+    env_paths: tuple[str, ...]
+    platform_tokens: tuple[str, ...]
+
+
+def _host_platform_tokens() -> tuple[str, ...]:
+    machine = platform.machine().strip().lower()
+    tokens: list[str] = []
+    if machine:
+        tokens.extend((machine, *_PLATFORM_ALIASES.get(machine, ())))
+    return tuple(dict.fromkeys(tokens))
+
+
+def _elf_platform_tokens(data: bytes) -> tuple[str, ...]:
+    tokens = list(_host_platform_tokens())
+    if (
+        len(data) >= 20
+        and data[:4] == ELF_MAGIC
+        and data[5] in (1, 2)
+        and data[4] in (1, 2)
+    ):
+        endian = "<" if data[5] == 1 else ">"
+        machine = struct.unpack_from(endian + "H", data, 18)[0]
+        tokens.extend(_ELF_MACHINE_PLATFORMS.get(machine, ()))
+    return tuple(dict.fromkeys(tokens))
+
+
+def _macho_platform_tokens() -> tuple[str, ...]:
+    return tuple(
+        dict.fromkeys((*_host_platform_tokens(), "macosx", "darwin"))
     )
-    candidate = Path(value)
-    if not candidate.is_absolute():
-        candidate = binary.parent / candidate
-    return candidate
 
 
-def _candidate_references(
+def _expand_tokens(
+    value: str, origin: str, platform_tokens: Iterable[str]
+) -> list[str]:
+    """Expand $ORIGIN/$LIB/$PLATFORM with bounded candidate values."""
+
+    variants = [
+        value.replace("${ORIGIN}", origin).replace("$ORIGIN", origin)
+    ]
+    for token, replacements in (
+        ("${LIB}", _LIB_TOKENS),
+        ("$LIB", _LIB_TOKENS),
+        ("${PLATFORM}", tuple(platform_tokens)),
+        ("$PLATFORM", tuple(platform_tokens)),
+    ):
+        if not replacements:
+            continue
+        expanded: list[str] = []
+        for variant in variants:
+            if token in variant:
+                expanded.extend(
+                    variant.replace(token, replacement)
+                    for replacement in replacements
+                )
+            else:
+                expanded.append(variant)
+        variants = expanded[:_MAX_TOKEN_VARIANTS]
+    return variants
+
+
+def _environment_search_paths(
+    environment: Mapping[str, str], *, macho: bool
+) -> tuple[str, ...]:
+    """Bounded DYLD_* or LD_LIBRARY_PATH entries used for resolution."""
+
+    names = (
+        (
+            "DYLD_LIBRARY_PATH",
+            "DYLD_FALLBACK_LIBRARY_PATH",
+            "DYLD_FRAMEWORK_PATH",
+        )
+        if macho
+        else ("LD_LIBRARY_PATH",)
+    )
+    paths: list[str] = []
+    for name in names:
+        raw = environment.get(name, "")
+        for entry in raw.split(os.pathsep):
+            entry = entry.strip()
+            if not entry or entry in paths:
+                continue
+            paths.append(entry)
+            if len(paths) >= _MAX_ENVIRONMENT_PATHS:
+                return tuple(paths)
+    return tuple(paths)
+
+
+def _expand_rpath(
+    raw: str, binary: Path, context: _SearchContext
+) -> list[Path]:
+    """Expand @loader_path/@executable_path/$ORIGIN/$LIB/$PLATFORM in RPATH."""
+
+    value = raw.replace("@loader_path", str(binary.parent)).replace(
+        "@executable_path", str(binary.parent)
+    )
+    candidates: list[Path] = []
+    for expanded in _expand_tokens(
+        value, str(binary.parent), context.platform_tokens
+    ):
+        candidate = Path(expanded)
+        if not candidate.is_absolute():
+            candidate = binary.parent / candidate
+        candidates.append(candidate)
+    return candidates
+
+
+def _search_directories(
+    binary: Path,
+    rpaths: Iterable[str],
+    context: _SearchContext,
+) -> list[Path]:
+    directories: list[Path] = []
+    seen: set[str] = set()
+
+    def add(path: Path) -> None:
+        key = str(path)
+        if key not in seen:
+            seen.add(key)
+            directories.append(path)
+
+    for raw in rpaths:
+        if raw:
+            for candidate in _expand_rpath(raw, binary, context):
+                add(candidate)
+    for raw in context.env_paths:
+        value = raw.replace("@loader_path", str(binary.parent)).replace(
+            "@executable_path", str(binary.parent)
+        )
+        for expanded in _expand_tokens(
+            value, str(binary.parent), context.platform_tokens
+        ):
+            candidate = Path(expanded)
+            if not candidate.is_absolute():
+                candidate = binary.parent / candidate
+            add(candidate)
+    for candidate in _default_library_paths(
+        context.keg, binary, context.config
+    ):
+        add(candidate)
+    for candidate in context.extra:
+        add(candidate)
+    return directories
+
+
+def _candidate_for_reference(
     reference: str,
     binary: Path,
-    keg: Path,
-    config: Optional[Config],
     rpaths: Iterable[str],
-    extra_search_paths: Iterable[Path],
+    context: _SearchContext,
 ) -> Iterable[Path]:
-    """Yield filesystem candidates for a dynamic library reference."""
-
     tail: Optional[str] = None
     if reference.startswith("@rpath/"):
         tail = reference[len("@rpath/") :]
@@ -1327,17 +1551,13 @@ def _candidate_references(
         return
     elif reference.startswith("@executable_path/"):
         tail = reference[len("@executable_path/") :]
-        roots = [binary.parent, keg / "bin", keg]
-        if config is not None:
-            roots.extend([config.prefix / "bin", config.prefix])
+        roots = [binary.parent, context.keg / "bin", context.keg]
+        if context.config is not None:
+            roots.extend(
+                [context.config.prefix / "bin", context.config.prefix]
+            )
         for root in roots:
             yield root / tail
-        return
-    elif reference.startswith("$ORIGIN/"):
-        yield binary.parent / reference[len("$ORIGIN/") :]
-        return
-    elif reference.startswith("${ORIGIN}/"):
-        yield binary.parent / reference[len("${ORIGIN}/") :]
         return
     elif reference.startswith("/"):
         yield Path(reference)
@@ -1345,19 +1565,29 @@ def _candidate_references(
     else:
         yield binary.parent / reference
 
-    search_dirs: list[Path] = []
-    for raw in rpaths:
-        if raw:
-            search_dirs.append(_expand_rpath(raw, binary, keg, config))
-    search_dirs.extend(_default_library_paths(keg, binary, config))
-    search_dirs.extend(Path(path) for path in extra_search_paths)
-
+    search_dirs = _search_directories(binary, rpaths, context)
     if reference.startswith("@rpath/"):
         for directory in search_dirs:
             yield directory / (tail or "")
     else:
         for directory in search_dirs:
             yield directory / reference
+
+
+def _candidate_references(
+    reference: str,
+    binary: Path,
+    rpaths: Iterable[str],
+    context: _SearchContext,
+) -> Iterable[Path]:
+    """Yield filesystem candidates for a dynamic library reference."""
+
+    for expanded in _expand_tokens(
+        reference, str(binary.parent), context.platform_tokens
+    ):
+        yield from _candidate_for_reference(
+            expanded, binary, rpaths, context
+        )
 
 
 def _is_macos_system_reference(reference: str) -> bool:
@@ -1370,17 +1600,15 @@ def _is_macos_system_reference(reference: str) -> bool:
 def _reference_exists(
     reference: str,
     binary: Path,
-    keg: Path,
-    config: Optional[Config],
     rpaths: Iterable[str],
-    extra_search_paths: Iterable[Path],
+    context: _SearchContext,
     *,
     macho: bool = False,
 ) -> bool:
     if macho and _is_macos_system_reference(reference):
         return True
     for candidate in _candidate_references(
-        reference, binary, keg, config, rpaths, extra_search_paths
+        reference, binary, rpaths, context
     ):
         try:
             if candidate.exists():
@@ -1394,6 +1622,8 @@ def check_linkage(
     keg: Path,
     config: Optional[Config] = None,
     extra_search_paths: Iterable[Path] = (),
+    *,
+    environment: Optional[Mapping[str, str]] = None,
 ) -> LinkageReport:
     """Scan a keg for dangling Mach-O dylib / ELF DT_NEEDED references.
 
@@ -1403,17 +1633,20 @@ def check_linkage(
     unsupported or corrupt are recorded in ``report.unsupported`` /
     ``report.corrupt`` instead of being silently skipped.
 
-    Weak Mach-O libraries are ignored; macOS dyld shared-cache paths, keg/prefix
-    lib directories, RPATH/RUNPATH entries (including @loader_path,
-    @executable_path and $ORIGIN), Linux multiarch directories and optional
-    extra search roots are honoured.
+    Resolution follows bounded dyld/ld.so semantics: LC_RPATH entries in order,
+    @loader_path/@executable_path/@rpath, $ORIGIN/$LIB/$PLATFORM, macOS shared
+    caches, keg/prefix lib directories, Linux multiarch paths, optional extra
+    roots and bounded DYLD_*/LD_LIBRARY_PATH entries.  ELF DT_RUNPATH takes
+    precedence over DT_RPATH.  DT_AUDIT/DT_DEPAUDIT modules are diagnosed in
+    ``report.audit`` but never reported as dangling dependencies.
     """
 
     keg = Path(keg)
     report = LinkageReport()
     if not keg.is_dir():
         return report
-    extra = [Path(path) for path in extra_search_paths]
+    env = os.environ if environment is None else environment
+    extra = tuple(Path(path) for path in extra_search_paths)
     for current, _dirnames, filenames in os.walk(keg, followlinks=False):
         for filename in sorted(filenames):
             path = Path(current) / filename
@@ -1440,16 +1673,23 @@ def check_linkage(
                 continue
             if magic == ELF_MAGIC:
                 try:
-                    needed, rpaths = _elf_dynamic_references(data)
+                    needed, rpaths, audits = _elf_dynamic_references(data)
                 except _LinkageParseError as error:
                     report.add_problem(relative, error.kind, error.detail)
                     continue
                 report.checked += 1
+                context = _SearchContext(
+                    keg,
+                    config,
+                    extra,
+                    _environment_search_paths(env, macho=False),
+                    _elf_platform_tokens(data),
+                )
                 for reference in dict.fromkeys(needed):
                     if reference in _ELF_VIRTUAL_LIBRARIES:
                         continue
                     if not _reference_exists(
-                        reference, path, keg, config, rpaths, extra
+                        reference, path, rpaths, context
                     ):
                         report.issues.append(
                             LinkageIssue(
@@ -1459,6 +1699,19 @@ def check_linkage(
                                 keg=str(keg),
                             )
                         )
+                for tag, audit_reference in audits:
+                    resolved = _reference_exists(
+                        audit_reference, path, rpaths, context
+                    )
+                    report.add_audit(
+                        LinkageAudit(
+                            relative,
+                            audit_reference,
+                            tag,
+                            resolved,
+                            keg=str(keg),
+                        )
+                    )
                 continue
             # Mach-O thin or universal/fat container.
             try:
@@ -1469,6 +1722,13 @@ def check_linkage(
             for detail in slice_errors:
                 report.add_problem(relative, "corrupt", detail)
             report.checked += 1
+            context = _SearchContext(
+                keg,
+                config,
+                extra,
+                _environment_search_paths(env, macho=True),
+                _macho_platform_tokens(),
+            )
             missing: set[tuple[str, tuple[str, ...]]] = set()
             for image in images:
                 for reference, weak in image.loads:
@@ -1477,10 +1737,8 @@ def check_linkage(
                     if _reference_exists(
                         reference,
                         path,
-                        keg,
-                        config,
                         image.rpaths,
-                        extra,
+                        context,
                         macho=True,
                     ):
                         continue
@@ -1887,6 +2145,7 @@ class Installer:
         extra_search_paths: Iterable[Path] = (),
         *,
         all_formulae: bool = False,
+        environment: Optional[Mapping[str, str]] = None,
     ) -> LinkageReport:
         """Return a linkage report for one formula or all installed formulae.
 
@@ -1918,7 +2177,14 @@ class Installer:
                     keg = self.cellar.keg(name, installed_version)
                     if keg is None:
                         continue
-                    merged.merge(check_linkage(keg, self.config, extra))
+                    merged.merge(
+                        check_linkage(
+                            keg,
+                            self.config,
+                            extra,
+                            environment=environment,
+                        )
+                    )
             return merged
 
         if formula is None:
@@ -1927,7 +2193,9 @@ class Installer:
         keg = self.cellar.keg(name, version)
         if keg is None:
             raise PybrewError(f"{name} is not installed")
-        return check_linkage(keg, self.config, extra)
+        return check_linkage(
+            keg, self.config, extra, environment=environment
+        )
 
     def linkage_diagnostic(
         self,
@@ -1936,6 +2204,7 @@ class Installer:
         extra_search_paths: Iterable[Path] = (),
         *,
         all_formulae: bool = False,
+        environment: Optional[Mapping[str, str]] = None,
     ) -> str:
         """Human-readable linkage diagnostic for one or all installed formulae."""
 
@@ -1944,6 +2213,7 @@ class Installer:
             version,
             extra_search_paths,
             all_formulae=all_formulae,
+            environment=environment,
         ).format()
 
 

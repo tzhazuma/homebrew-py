@@ -3101,3 +3101,247 @@ def test_livecheck_status_online_uses_url_option_headers(
     request = opener.requests[0]
     assert request.get_header("X-test") == "yes"
     assert request.get_header("User-agent") == "custom-agent"
+
+
+# ---------------------------------------------------------------------------
+# Wave 6: brotli, Retry-After, jitter/circuit, redirect header policy
+# ---------------------------------------------------------------------------
+
+
+def test_livecheck_http_brotli_unsupported_is_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+
+    from pybrew.cask import livecheck_http_fetcher
+
+    # Force the optional decoders to look absent even if installed.
+    monkeypatch.setitem(sys.modules, "brotli", None)
+    monkeypatch.setitem(sys.modules, "brotlicffi", None)
+    _patch_livecheck_opener(
+        monkeypatch,
+        [
+            _FakeHttpResponse(
+                b"compressed-brotli", {"Content-Encoding": "br"}
+            )
+        ],
+    )
+
+    with pytest.raises(
+        CaskError, match="brotli content-encoding is not supported"
+    ):
+        livecheck_http_fetcher("https://example.com/page")
+
+
+def test_livecheck_http_brotli_decoder_when_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import sys
+    import types
+
+    from pybrew.cask import livecheck_http_fetcher
+
+    fake_brotli = types.ModuleType("brotli")
+    fake_brotli.decompress = lambda data: b"brotli page"  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "brotli", fake_brotli)
+    _patch_livecheck_opener(
+        monkeypatch,
+        [
+            _FakeHttpResponse(
+                b"compressed-brotli", {"Content-Encoding": "br"}
+            )
+        ],
+    )
+
+    assert livecheck_http_fetcher("https://example.com/page") == "brotli page"
+
+
+def test_livecheck_http_unknown_encoding_is_explicit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import livecheck_http_fetcher
+
+    _patch_livecheck_opener(
+        monkeypatch,
+        [
+            _FakeHttpResponse(
+                b"zstd-data", {"Content-Encoding": "zstd"}
+            )
+        ],
+    )
+
+    with pytest.raises(
+        CaskError, match="unsupported livecheck content-encoding"
+    ):
+        livecheck_http_fetcher("https://example.com/page")
+
+
+def _http_error(status: int, retry_after: str | None = None):
+    import email.message
+    import urllib.error
+
+    headers = email.message.Message()
+    if retry_after is not None:
+        headers["Retry-After"] = retry_after
+    return urllib.error.HTTPError(
+        "https://example.com/page", status, "error", headers, None
+    )
+
+
+def test_livecheck_http_honors_retry_after_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import livecheck_http_fetcher
+
+    slept: list[float] = []
+    monkeypatch.setattr("pybrew.cask.time.sleep", slept.append)
+    opener = _patch_livecheck_opener(
+        monkeypatch,
+        [_http_error(503, "1"), _FakeHttpResponse(b"ok")],
+    )
+
+    assert (
+        livecheck_http_fetcher(
+            "https://example.com/page", retries=1, retry_delay=0, jitter=0
+        )
+        == "ok"
+    )
+    assert slept == [1.0]
+    assert len(opener.requests) == 2
+
+
+def test_livecheck_http_retry_after_is_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import (
+        LIVECHECK_MAX_RETRY_AFTER,
+        livecheck_http_fetcher,
+    )
+
+    slept: list[float] = []
+    monkeypatch.setattr("pybrew.cask.time.sleep", slept.append)
+    _patch_livecheck_opener(
+        monkeypatch,
+        [_http_error(429, "999"), _FakeHttpResponse(b"ok")],
+    )
+
+    assert (
+        livecheck_http_fetcher(
+            "https://example.com/page",
+            retries=1,
+            retry_delay=0,
+            jitter=0,
+            max_total_retry_seconds=60,
+        )
+        == "ok"
+    )
+    assert slept == [LIVECHECK_MAX_RETRY_AFTER]
+
+
+def test_livecheck_http_honors_retry_after_http_date(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import datetime
+    import email.utils
+
+    from pybrew.cask import livecheck_http_fetcher
+
+    slept: list[float] = []
+    monkeypatch.setattr("pybrew.cask.time.sleep", slept.append)
+    future = datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(
+        seconds=2
+    )
+    retry_after = email.utils.format_datetime(future, usegmt=True)
+    _patch_livecheck_opener(
+        monkeypatch,
+        [_http_error(503, retry_after), _FakeHttpResponse(b"ok")],
+    )
+
+    assert (
+        livecheck_http_fetcher(
+            "https://example.com/page", retries=1, retry_delay=0, jitter=0
+        )
+        == "ok"
+    )
+    assert len(slept) == 1
+    assert 1.0 < slept[0] <= 2.0
+
+
+def test_livecheck_http_jitter_is_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import random
+
+    from pybrew.cask import _livecheck_retry_delay
+
+    monkeypatch.setattr(random, "uniform", lambda low, high: high)
+    delay = _livecheck_retry_delay(None, attempt=0, retry_delay=0.25, jitter=0.2)
+    assert delay == pytest.approx(0.3)
+
+    monkeypatch.setattr(random, "uniform", lambda low, high: low)
+    assert _livecheck_retry_delay(
+        None, attempt=0, retry_delay=0.25, jitter=0.2
+    ) == pytest.approx(0.25)
+
+
+def test_livecheck_http_total_retry_budget_is_bounded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import livecheck_http_fetcher
+
+    slept: list[float] = []
+    monkeypatch.setattr("pybrew.cask.time.sleep", slept.append)
+    opener = _patch_livecheck_opener(
+        monkeypatch,
+        [_http_error(503, "5"), _FakeHttpResponse(b"should not reach")],
+    )
+
+    with pytest.raises(Exception):
+        livecheck_http_fetcher(
+            "https://example.com/page",
+            retries=1,
+            retry_delay=0,
+            jitter=0,
+            max_total_retry_seconds=1,
+        )
+    assert slept == []
+    assert len(opener.requests) == 1
+
+
+def test_livecheck_redirect_header_policy() -> None:
+    import urllib.request
+
+    from pybrew.cask import _BoundedRedirectHandler
+
+    handler = _BoundedRedirectHandler()
+    request = urllib.request.Request(
+        "https://a.example/page",
+        headers={
+            "Cookie": "session=abc",
+            "Authorization": "Bearer secret",
+            "X-Test": "keep",
+        },
+    )
+
+    cross_origin = handler.redirect_request(
+        request,
+        None,
+        302,
+        "Found",
+        {},
+        "https://b.example/next",
+    )
+    assert cross_origin.get_header("Cookie") is None
+    assert cross_origin.get_header("Authorization") is None
+    assert cross_origin.get_header("X-test") == "keep"
+
+    same_origin = handler.redirect_request(
+        request,
+        None,
+        302,
+        "Found",
+        {},
+        "https://a.example/next",
+    )
+    assert same_origin.get_header("Cookie") == "session=abc"
+    assert same_origin.get_header("Authorization") == "Bearer secret"
