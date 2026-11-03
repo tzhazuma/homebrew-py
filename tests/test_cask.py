@@ -2226,3 +2226,14 @@ def test_cask_temp_cleanup_helpers(tmp_path: Path) -> None:
     assert path.is_dir()
     cask.cleanup_temp()
     assert not path.exists()
+
+
+def test_cask_artifact_article_config_and_sandbox_helpers() -> None:
+    artifact = Artifact("app", "Example.app", kwargs={"config": {"x": 1}})
+    assert artifact.english_article() == "an"
+    assert artifact.config() == {"x": 1}
+    assert artifact.dirmethod() == "mkdir_p"
+    assert artifact.cask_sandbox() is False
+    assert artifact.run_cask_sandbox() is False
+    assert artifact.requires_sudo_q() is False
+    assert artifact.read_script_arguments(["a", "b"]) == ["a", "b"]

@@ -55,6 +55,28 @@ class Artifact:
     def to_args(self) -> list[str]:
         return [self.source]
 
+    def english_article(self) -> str:
+        return "an" if self.english_name()[:1] in "aeiou" else "a"
+
+    def config(self) -> dict[str, Any]:
+        value = self.kwargs.get("config")
+        return value if isinstance(value, dict) else {}
+
+    def dirmethod(self) -> str:
+        return "mkdir_p"
+
+    def cask_sandbox(self) -> bool:
+        return False
+
+    def run_cask_sandbox(self) -> bool:
+        return False
+
+    def requires_sudo_q(self) -> bool:
+        return self.requires_sudo()
+
+    def read_script_arguments(self, arguments: Optional[list[str]] = None) -> list[str]:
+        return list(arguments or [])
+
 
 @dataclass
 class Cask:
