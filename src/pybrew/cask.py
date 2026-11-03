@@ -11,6 +11,7 @@ import os
 import platform
 import plistlib
 import re
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -914,11 +915,75 @@ LIVECHECK_SENSITIVE_HEADERS = frozenset(
     {"authorization", "cookie", "cookie2", "proxy-authorization"}
 )
 
+#: Default per-host rate-limit bucket for the livecheck transport.
+LIVECHECK_RATE_LIMIT_CAPACITY = 10.0
+LIVECHECK_RATE_LIMIT_REFILL = 2.0
+
+
+class LivecheckRateLimiter:
+    """Small per-host token bucket for the opt-in livecheck transport.
+
+    ``capacity`` is the burst size and ``refill_rate`` is tokens per second.
+    ``acquire(host)`` returns the seconds a caller should wait (0 when a token
+    is available) and never blocks itself.
+    """
+
+    def __init__(
+        self,
+        *,
+        capacity: float = LIVECHECK_RATE_LIMIT_CAPACITY,
+        refill_rate: float = LIVECHECK_RATE_LIMIT_REFILL,
+        clock: Optional[Any] = None,
+    ) -> None:
+        self.capacity = float(capacity)
+        self.refill_rate = float(refill_rate)
+        self.clock = clock or time.monotonic
+        self._buckets: dict[str, tuple[float, float]] = {}
+        self._lock = threading.Lock()
+
+    def acquire(self, host: str) -> float:
+        with self._lock:
+            now = self.clock()
+            tokens, last = self._buckets.get(
+                host, (self.capacity, now)
+            )
+            tokens = min(
+                self.capacity,
+                tokens + max(0.0, now - last) * self.refill_rate,
+            )
+            if tokens >= 1.0:
+                self._buckets[host] = (tokens - 1.0, now)
+                return 0.0
+            if self.refill_rate <= 0:
+                return float("inf")
+            wait = (1.0 - tokens) / self.refill_rate
+            self._buckets[host] = (0.0, now)
+            return wait
+
+
+_DEFAULT_LIVECHECK_RATE_LIMITER = LivecheckRateLimiter()
+
 
 class _BoundedRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Redirect handler with bounded hops and cross-origin header stripping."""
+    """Redirect handler with bounded hops and configurable header stripping."""
 
     max_redirections = LIVECHECK_MAX_REDIRECTS
+
+    def __init__(
+        self,
+        *,
+        strip_headers: Optional[Any] = None,
+        preserve_headers: Optional[Any] = None,
+    ) -> None:
+        super().__init__()
+        if strip_headers is None:
+            strip_headers = LIVECHECK_SENSITIVE_HEADERS
+        self.strip_headers = frozenset(
+            str(header).lower() for header in strip_headers
+        )
+        self.preserve_headers = frozenset(
+            str(header).lower() for header in (preserve_headers or ())
+        )
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         new_request = super().redirect_request(
@@ -933,7 +998,7 @@ class _BoundedRedirectHandler(urllib.request.HTTPRedirectHandler):
             new.hostname,
             new.port,
         ):
-            for header in LIVECHECK_SENSITIVE_HEADERS:
+            for header in self.strip_headers - self.preserve_headers:
                 new_request.remove_header(header.capitalize())
         return new_request
 
@@ -1100,13 +1165,19 @@ def livecheck_http_fetcher(
     jitter: float = LIVECHECK_JITTER,
     max_total_retry_seconds: float = LIVECHECK_MAX_TOTAL_RETRY_SECONDS,
     opener: Optional[Any] = None,
+    rate_limiter: Optional[Any] = _DEFAULT_LIVECHECK_RATE_LIMITER,
+    redirect_strip_headers: Optional[Any] = None,
+    redirect_preserve_headers: Optional[Any] = None,
 ) -> str:
     """Bounded default HTTP transport for ``pybrew livecheck --online``.
 
     Only ``http``/``https`` URLs are accepted.  Redirects are followed through
-    :class:`_BoundedRedirectHandler`; transient failures (connection errors,
-    timeouts, 408/425/429/5xx) are retried a bounded number of times.  The
-    response is capped and content-encoding/charset are decoded best-effort.
+    :class:`_BoundedRedirectHandler` with configurable stripped/preserved
+    headers; transient failures (connection errors, timeouts, 408/425/429/5xx)
+    are retried a bounded number of times, honoring Retry-After when present.
+    A per-host :class:`LivecheckRateLimiter` bucket (pass ``rate_limiter=None``
+    to disable) bounds request bursts.  The response is capped and
+    content-encoding/charset are decoded best-effort.
     The helper only runs when a caller explicitly passes ``online=True`` or a
     custom fetcher; default calls stay offline.
     """
@@ -1123,8 +1194,14 @@ def livecheck_http_fetcher(
             request_headers[str(key)] = str(value)
     request = urllib.request.Request(url, headers=request_headers)
     effective_opener = (
-        opener if opener is not None
-        else urllib.request.build_opener(_BoundedRedirectHandler())
+        opener
+        if opener is not None
+        else urllib.request.build_opener(
+            _BoundedRedirectHandler(
+                strip_headers=redirect_strip_headers,
+                preserve_headers=redirect_preserve_headers,
+            )
+        )
     )
 
     attempts = max(0, int(retries)) + 1
@@ -1133,7 +1210,18 @@ def livecheck_http_fetcher(
     charset = "utf-8"
     last_error: Optional[BaseException] = None
     total_delay = 0.0
+    host = urllib.parse.urlsplit(url).hostname or ""
     for attempt in range(attempts):
+        if rate_limiter is not None:
+            wait = rate_limiter.acquire(host)
+            if wait > 0:
+                if total_delay + wait > max_total_retry_seconds:
+                    raise CaskError(
+                        "livecheck rate limit wait exceeds the bounded retry "
+                        "budget"
+                    )
+                total_delay += wait
+                time.sleep(wait)
         try:
             with effective_opener.open(request, timeout=timeout) as response:
                 body = response.read(max_bytes + 1)
@@ -1156,8 +1244,10 @@ def livecheck_http_fetcher(
             last_error = error
             if attempt + 1 >= attempts:
                 raise
+            # Some connection errors carry Retry-After-like headers; honor
+            # them when present, otherwise use jittered backoff.
             delay = _livecheck_retry_delay(
-                None, attempt, retry_delay, jitter
+                error, attempt, retry_delay, jitter
             )
         # Bounded circuit: never sleep/retry past the total retry budget.
         if total_delay + delay > max_total_retry_seconds:

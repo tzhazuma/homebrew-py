@@ -191,12 +191,11 @@ class FormulaTestContext
   end
 
   # Lightweight, String-compatible formula version (Homebrew's ``Version``).
-  # Mirrors the Python ``pybrew.version.Version`` token comparison, including
-  # the intentional default deviation that an extra numeric segment is
-  # significant (``1.2.3 < 1.2.3.0``; Homebrew treats it as equal).  The
-  # closer Homebrew null-token behavior is available via ``homebrew_compare``,
-  # ``Version.homebrew = true``, or ``PYBREW_VERSION_HOMEBREW=1`` (in that
-  # mode 1.0 == 1.0.0 and hashes are canonical).
+  # Mirrors the Python ``pybrew.version.Version`` token comparison.  Homebrew
+  # null-token semantics are the default (1.0 == 1.0.0; missing numeric
+  # segments are zero).  The historical extra-numeric behavior is an explicit
+  # opt-out via ``Version.legacy = true`` or ``PYBREW_VERSION_LEGACY=1``;
+  # ``homebrew_compare`` remains available for explicit comparisons.
   class Version < String
     include Comparable
 
@@ -209,16 +208,29 @@ class FormulaTestContext
     TOKEN_PATTERN = /(\d+)|(preview|alpha|beta|post|pre|rc|p)(\d*)|([A-Za-z]+)/i
 
     class << self
-      # Class-level opt-in for Homebrew null-token comparison.  The
-      # PYBREW_VERSION_HOMEBREW environment variable overrides this.
-      attr_accessor :homebrew
+      # Homebrew null-token comparison is the default; ``legacy`` (or the
+      # PYBREW_VERSION_LEGACY env var) explicitly opts out.  ``homebrew`` can
+      # be set true/false for the old opt-in API; nil means use the default.
+      attr_accessor :homebrew, :legacy
 
-      def homebrew_enabled?
-        raw = ENV["PYBREW_VERSION_HOMEBREW"].to_s.strip.downcase
+      def legacy_enabled?
+        raw = ENV["PYBREW_VERSION_LEGACY"].to_s.strip.downcase
         return true if %w[1 true yes on].include?(raw)
         return false if %w[0 false no off].include?(raw)
 
-        homebrew == true
+        legacy == true
+      end
+
+      def homebrew_enabled?
+        return false if legacy_enabled?
+
+        raw = ENV["PYBREW_VERSION_HOMEBREW"].to_s.strip.downcase
+        return true if %w[1 true yes on].include?(raw)
+        return false if %w[0 false no off].include?(raw)
+        return true if homebrew == true
+        return false if homebrew == false
+
+        true
       end
 
       def with_homebrew(enabled = true)
@@ -227,6 +239,14 @@ class FormulaTestContext
         yield
       ensure
         self.homebrew = previous
+      end
+
+      def with_legacy(enabled = true)
+        previous = legacy
+        self.legacy = enabled
+        yield
+      ensure
+        self.legacy = previous
       end
     end
 

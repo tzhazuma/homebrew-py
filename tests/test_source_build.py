@@ -1200,7 +1200,7 @@ def test_sdkroot_exported_and_isysroot_added_in_superenv(
     )
     env = prepared.env
     assert env["SDKROOT"] == str(sdk)
-    for name in ("CPPFLAGS", "CFLAGS", "CXXFLAGS"):
+    for name in ("CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS"):
         tokens = shlex.split(env[name])
         assert "-isysroot" in tokens
         assert str(sdk) in tokens
@@ -1284,6 +1284,12 @@ def test_language_standard_flags_are_bounded_and_do_not_override(
     assert "-std=c11" not in cflags
     assert sum(token.startswith("-std=") for token in cflags) == 1
 
+    alias = source_builder.build_environment(
+        config,
+        {**base, "PYBREW_CXX_STANDARD": "c++1z"},
+    )
+    assert "-std=c++17" in shlex.split(alias.env["CXXFLAGS"])
+
     invalid = source_builder.build_environment(
         config,
         {
@@ -1360,3 +1366,261 @@ def test_superenv_compiler_wrapper_specs(tmp_path: Path) -> None:
     assert "-O3" in compiler_cxx["argv"]
     assert "-isystem" in compiler_cxx["argv"]
     assert str(prefix / "include") in compiler_cxx["argv"]
+
+
+def test_sanitize_flag_list_handles_sdk_sysroots_and_dedupes(
+    tmp_path: Path,
+) -> None:
+    import pybrew.source_builder as source_builder
+
+    tokens = source_builder.sanitize_flag_list(
+        [
+            "-O2",
+            "-isysroot",
+            "/SDK",
+            "-isysroot",
+            "/SDK",
+            "-Wl,-syslibroot,/SDK",
+            "--sysroot=/SDK",
+            "-Wl,-syslibroot,/OTHER",
+            "-Wl,-syslibroot=/OTHER2",
+            "-arch",
+            "arm64",
+            "-m64",
+        ],
+        tmp_path / "prefix",
+    )
+
+    assert tokens.count("/SDK") == 1
+    assert tokens.count("-isysroot") == 1
+    assert "-Wl,-syslibroot,/OTHER" in tokens
+    assert "-Wl,-syslibroot=/OTHER2" in tokens
+    assert "-O2" in tokens
+    assert tokens[tokens.index("-arch") + 1] == "arm64"
+    assert "-m64" in tokens
+
+
+def test_superenv_shims_filter_duplicate_sdk_flags(tmp_path: Path) -> None:
+    import subprocess
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    fake_bin = tmp_path / "fake-bin"
+    cc = _fake_compiler(fake_bin, "clang", "cc-report.txt")
+    cxx = _fake_compiler(fake_bin, "clang++", "cxx-report.txt")
+    prepared = source_builder.build_environment(
+        config,
+        {
+            "PATH": str(fake_bin),
+            "PYBREW_SUPERENV": "1",
+            "PYBREW_CC": str(cc),
+            "PYBREW_CXX": str(cxx),
+        },
+    )
+    subprocess.run(
+        [
+            prepared.env["CC"],
+            "-isysroot",
+            "/SDK",
+            "-isysroot",
+            "/SDK",
+            "-Wl,-syslibroot,/SDK",
+            "-Wl,-syslibroot,/OTHER",
+            "-O2",
+        ],
+        cwd=tmp_path,
+        env=prepared.env,
+        check=True,
+    )
+    argv = shlex.split(_compiler_report(tmp_path / "cc-report.txt")["argv"])
+    assert argv.count("/SDK") == 1
+    assert argv.count("-isysroot") == 1
+    assert "-Wl,-syslibroot,/OTHER" in argv
+    assert "-O2" in argv
+
+
+def test_architecture_flag_is_bounded_and_platform_aware() -> None:
+    import pybrew.source_builder as source_builder
+
+    assert (
+        source_builder.architecture_flag(
+            {"PYBREW_ARCH": "arm64"}, system="Darwin"
+        )
+        == "-arch arm64"
+    )
+    assert (
+        source_builder.architecture_flag(
+            {"PYBREW_ARCH": "amd64"}, system="Darwin"
+        )
+        == "-arch x86_64"
+    )
+    assert (
+        source_builder.architecture_flag(
+            {"PYBREW_ARCH": "x86_64"}, system="Linux", machine="x86_64"
+        )
+        == "-m64"
+    )
+    assert (
+        source_builder.architecture_flag(
+            {"PYBREW_ARCH": "i386"}, system="Linux", machine="x86_64"
+        )
+        == "-m32"
+    )
+    assert (
+        source_builder.architecture_flag(
+            {"PYBREW_ARCH": "arm64"}, system="Linux", machine="arm64"
+        )
+        is None
+    )
+    assert (
+        source_builder.architecture_flag(
+            {"PYBREW_ARCH": "arm64"}, system="Linux", machine="x86_64"
+        )
+        is None
+    )
+    assert source_builder.architecture_flag({"PYBREW_ARCH": "bogus"}) is None
+
+
+def test_build_environment_applies_arch_and_preserves_explicit(
+    tmp_path: Path,
+) -> None:
+    import platform
+    import pybrew.source_builder as source_builder
+
+    host = platform.system()
+    arch = "arm64" if host == "Darwin" else "x86_64"
+    expected = source_builder.architecture_flag({"PYBREW_ARCH": arch})
+    if expected is None:
+        pytest.skip("no bounded architecture flag for this host")
+    config = _source_config(tmp_path)
+    prepared = source_builder.build_environment(
+        config, {"PATH": "/usr/bin:/bin", "PYBREW_ARCH": arch}
+    )
+    expected_tokens = expected.split()
+    for name in ("CFLAGS", "CXXFLAGS", "LDFLAGS"):
+        tokens = shlex.split(prepared.env[name])
+        assert all(token in tokens for token in expected_tokens)
+
+    explicit = "-arch x86_64" if expected.startswith("-arch") else "-m32"
+    explicit_prepared = source_builder.build_environment(
+        config,
+        {
+            "PATH": "/usr/bin:/bin",
+            "PYBREW_ARCH": arch,
+            "CFLAGS": f"-O2 {explicit}",
+        },
+    )
+    cflags = shlex.split(explicit_prepared.env["CFLAGS"])
+    assert all(token in cflags for token in explicit.split())
+    assert not all(token in cflags for token in expected_tokens)
+
+
+def test_superenv_objc_shims_and_flags(tmp_path: Path) -> None:
+    import subprocess
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    prefix = config.prefix
+    fake_bin = tmp_path / "fake-bin"
+    cc = _fake_compiler(fake_bin, "clang", "cc-report.txt")
+    cxx = _fake_compiler(fake_bin, "clang++", "cxx-report.txt")
+    prepared = source_builder.build_environment(
+        config,
+        {
+            "PATH": str(fake_bin),
+            "PYBREW_SUPERENV": "1",
+            "PYBREW_CC": str(cc),
+            "PYBREW_CXX": str(cxx),
+            "OBJCFLAGS": "-O2 -I/usr/include",
+        },
+    )
+    env = prepared.env
+    assert prepared.superenv is not None
+    assert prepared.superenv.objc is not None
+    assert prepared.superenv.objcxx is not None
+    assert env["OBJC"] == str(prepared.superenv.objc)
+    assert env["OBJCXX"] == str(prepared.superenv.objcxx)
+    assert env["HOMEBREW_OBJC"] == str(cc)
+    assert "-I/usr/include" not in env["OBJCFLAGS"]
+
+    subprocess.run(
+        [env["OBJC"], "-x", "objective-c", "-O2"],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+    )
+    compiler = _compiler_report(tmp_path / "cc-report.txt")
+    for token in ("-x", "objective-c", "-O2", "-isystem"):
+        assert token in compiler["argv"]
+    assert str(prefix / "include") in compiler["argv"]
+
+
+def test_build_environment_preserves_explicit_objc_and_standards(
+    tmp_path: Path,
+) -> None:
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    prefix = config.prefix
+    env = source_builder.build_environment(
+        config,
+        {
+            "PATH": "/usr/bin:/bin",
+            "OBJC": "user-objc",
+            "OBJCXX": "user-objcxx",
+            "OBJCFLAGS": "-O2 -std=gnu11",
+            "OBJCXXFLAGS": "-O3",
+            "PYBREW_OBJC_STANDARD": "c11",
+            "PYBREW_OBJCXX_STANDARD": "c++17",
+        },
+    ).env
+    assert env["OBJC"] == "user-objc"
+    assert env["OBJCXX"] == "user-objcxx"
+    objcflags = shlex.split(env["OBJCFLAGS"])
+    assert "-O2" in objcflags and "-std=gnu11" in objcflags
+    assert "-std=c11" not in objcflags
+    assert f"-I{prefix / 'include'}" in objcflags
+    objcxxflags = shlex.split(env["OBJCXXFLAGS"])
+    assert "-O3" in objcxxflags and "-std=c++17" in objcxxflags
+    assert f"-I{prefix / 'include'}" in objcxxflags
+
+    precedence = source_builder.build_environment(
+        config,
+        {
+            "PATH": "/usr/bin:/bin",
+            "OBJC": "plain-objc",
+            "PYBREW_OBJC": "brew-objc",
+        },
+    ).env
+    assert precedence["OBJC"] == "brew-objc"
+
+
+def test_explicit_linker_sysroot_is_preserved(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    fake_bin = tmp_path / "fake-bin"
+    cc = _fake_compiler(fake_bin, "clang", "cc-report.txt")
+    cxx = _fake_compiler(fake_bin, "clang++", "cxx-report.txt")
+    detected_sdk = tmp_path / "Detected.sdk"
+    detected_sdk.mkdir()
+    explicit_sdk = tmp_path / "Explicit.sdk"
+    explicit_sdk.mkdir()
+    xcrun = _fake_xcrun(tmp_path / "xcrun-bin", detected_sdk)
+    prepared = source_builder.build_environment(
+        config,
+        {
+            "PATH": str(fake_bin),
+            "PYBREW_SUPERENV": "1",
+            "PYBREW_XCRUN": str(xcrun),
+            "PYBREW_CC": str(cc),
+            "PYBREW_CXX": str(cxx),
+            "LDFLAGS": f"-Wl,-syslibroot,{explicit_sdk}",
+        },
+    )
+    env = prepared.env
+    ldflags = shlex.split(env["LDFLAGS"])
+    assert f"-Wl,-syslibroot,{explicit_sdk}" in ldflags
+    assert f"-Wl,-syslibroot,{detected_sdk}" not in ldflags
+    assert "-isysroot" not in ldflags
+    assert str(detected_sdk) in shlex.split(env["CFLAGS"])

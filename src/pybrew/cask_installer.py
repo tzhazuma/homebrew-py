@@ -1598,6 +1598,16 @@ class CaskInstaller:
                 # A stage_only artifact entry installs nothing.
                 continue
             elif artifact.kind == "artifact":
+                kwargs = (
+                    artifact.kwargs
+                    if isinstance(artifact.kwargs, dict)
+                    else {}
+                )
+                if "steps" in {str(key) for key in kwargs}:
+                    self._install_generic_artifact_steps(
+                        cask, artifact, source_root, force, installed
+                    )
+                    continue
                 # Homebrew's generic artifact is a "moved" artifact that
                 # requires an explicit target.  pybrew installs it bounded:
                 # relative targets live under appdir, absolute targets must
@@ -1742,9 +1752,8 @@ class CaskInstaller:
         kwargs_keys = {str(key) for key in kwargs}
         if "steps" in kwargs_keys:
             raise CaskError(
-                f"{cask.token}: generic `artifact` install steps are not "
-                "supported by pybrew; use the bounded copy semantics with "
-                "target/dirmethod/base_dir"
+                f"{cask.token}: generic `artifact` steps cannot be combined "
+                "with target-based copy semantics"
             )
         supported = {"target", "dirmethod", "base_dir"}
         unsupported = sorted(key for key in kwargs_keys if key not in supported)
@@ -1754,20 +1763,7 @@ class CaskInstaller:
                 f"pybrew: {', '.join(unsupported)} (only target/dirmethod/"
                 "base_dir are bounded)"
             )
-        raw_base = kwargs.get("dirmethod") or kwargs.get("base_dir")
-        explicit_base = raw_base is not None
-        base_name = str(raw_base).lstrip(":") if explicit_base else "appdir"
-        bases = {
-            "appdir": self.appdir,
-            "prefix": self.config.prefix,
-            "library_root": self.library_root,
-        }
-        if base_name not in bases:
-            raise CaskError(
-                f"{cask.token}: unsupported generic artifact dirmethod "
-                f"{raw_base!r}; expected one of appdir, prefix, library_root"
-            )
-        base_dir = bases[base_name]
+        base_dir, explicit_base = self._generic_artifact_base(cask, artifact)
 
         target = artifact.target
         if target is None or not str(target).strip():
@@ -1803,6 +1799,249 @@ class CaskInstaller:
             str(target), source_name, cask.token
         )
         return Path(base_dir) / relative
+
+    def _generic_artifact_base(
+        self, cask: Cask, artifact: Artifact
+    ) -> tuple[Path, bool]:
+        """Resolve the bounded dirmethod/base_dir for a generic artifact."""
+
+        kwargs = artifact.kwargs if isinstance(artifact.kwargs, dict) else {}
+        raw_base = kwargs.get("dirmethod") or kwargs.get("base_dir")
+        explicit_base = raw_base is not None
+        base_name = str(raw_base).lstrip(":") if explicit_base else "appdir"
+        bases = {
+            "appdir": self.appdir,
+            "prefix": self.config.prefix,
+            "library_root": self.library_root,
+        }
+        if base_name not in bases:
+            raise CaskError(
+                f"{cask.token}: unsupported generic artifact dirmethod "
+                f"{raw_base!r}; expected one of appdir, prefix, library_root"
+            )
+        return Path(bases[base_name]), explicit_base
+
+    def _generic_step_destination(
+        self, cask: Cask, base_dir: Path, raw_target: object
+    ) -> Path:
+        """Resolve one declarative step target below the selected base."""
+
+        if raw_target is None or not str(raw_target).strip():
+            raise CaskError(
+                f"{cask.token}: generic artifact step requires a target path"
+            )
+        expanded = Path(os.path.expanduser(str(raw_target)))
+        if expanded.is_absolute():
+            candidate = Path(os.path.abspath(str(expanded)))
+            try:
+                resolved_root = Path(base_dir).resolve()
+            except OSError:
+                resolved_root = Path(base_dir)
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                resolved = candidate
+            if not (
+                resolved == resolved_root or resolved_root in resolved.parents
+            ):
+                raise CaskError(
+                    f"{cask.token}: generic artifact step target "
+                    f"{str(raw_target)!r} is outside install roots"
+                )
+            return candidate
+        relative = _safe_artifact_target(
+            str(raw_target), "step", cask.token
+        )
+        return Path(base_dir) / relative
+
+    def _plan_generic_step(
+        self,
+        cask: Cask,
+        base_dir: Path,
+        source_root: Path,
+        step: object,
+    ) -> dict[str, object]:
+        """Validate one declarative generic-artifact step.
+
+        Supported grammar: ``["mkdir", target]``,
+        ``["copy", staged_source, target]`` and
+        ``["symlink", relative_link_target, target]``.  Targets are relative to
+        the artifact's dirmethod base (absolute targets must stay inside it);
+        symlink targets must be relative and stay inside the base.  All steps
+        are validated before anything is installed.
+        """
+
+        if not isinstance(step, (list, tuple)) or len(step) < 2:
+            raise CaskError(
+                f"{cask.token}: generic artifact step must be "
+                f"['op', target] or ['op', source, target]; got {step!r}"
+            )
+        op = str(step[0]).lstrip(":").strip().lower()
+        if op == "mkdir":
+            if len(step) != 2:
+                raise CaskError(
+                    f"{cask.token}: generic artifact 'mkdir' step takes "
+                    "exactly one argument"
+                )
+            return {
+                "op": op,
+                "destination": self._generic_step_destination(
+                    cask, base_dir, step[1]
+                ),
+            }
+        if op == "copy":
+            if len(step) != 3:
+                raise CaskError(
+                    f"{cask.token}: generic artifact 'copy' step takes "
+                    "source and target"
+                )
+            source = self._find(source_root, str(step[1]))
+            if source is None:
+                raise CaskError(
+                    f"{cask.token}: generic artifact copy source "
+                    f"{step[1]!r} not found"
+                )
+            return {
+                "op": op,
+                "source": source,
+                "destination": self._generic_step_destination(
+                    cask, base_dir, step[2]
+                ),
+            }
+        if op == "symlink":
+            if len(step) != 3:
+                raise CaskError(
+                    f"{cask.token}: generic artifact 'symlink' step takes "
+                    "link target and destination"
+                )
+            link_target = str(step[1]).strip()
+            if (
+                not link_target
+                or Path(link_target).is_absolute()
+                or link_target.startswith("~")
+            ):
+                raise CaskError(
+                    f"{cask.token}: generic artifact symlink target "
+                    f"{step[1]!r} must be a relative path"
+                )
+            try:
+                base_resolved = Path(base_dir).resolve()
+            except OSError:
+                base_resolved = Path(base_dir)
+            candidate = Path(
+                os.path.abspath(os.path.join(str(base_dir), link_target))
+            )
+            try:
+                candidate_resolved = candidate.resolve()
+            except OSError:
+                candidate_resolved = candidate
+            if not (
+                candidate_resolved == base_resolved
+                or base_resolved in candidate_resolved.parents
+            ):
+                raise CaskError(
+                    f"{cask.token}: generic artifact symlink target "
+                    f"{link_target!r} escapes the destination base"
+                )
+            return {
+                "op": op,
+                "link": link_target,
+                "destination": self._generic_step_destination(
+                    cask, base_dir, step[2]
+                ),
+            }
+        raise CaskError(
+            f"{cask.token}: unsupported generic artifact step {op!r}; "
+            "supported steps: mkdir, copy, symlink"
+        )
+
+    def _install_generic_artifact_steps(
+        self,
+        cask: Cask,
+        artifact: Artifact,
+        source_root: Path,
+        force: bool,
+        installed: list[str],
+    ) -> None:
+        """Execute the bounded declarative ``steps:`` grammar."""
+
+        kwargs = artifact.kwargs if isinstance(artifact.kwargs, dict) else {}
+        if artifact.target is not None:
+            raise CaskError(
+                f"{cask.token}: generic `artifact` target: cannot be "
+                "combined with steps:"
+            )
+        allowed = {"steps", "dirmethod", "base_dir"}
+        unsupported = sorted(
+            str(key) for key in kwargs if str(key) not in allowed
+        )
+        if unsupported:
+            raise CaskError(
+                f"{cask.token}: generic artifact options are not supported by "
+                f"pybrew: {', '.join(unsupported)} (only steps/dirmethod/"
+                "base_dir are bounded with steps)"
+            )
+        raw_steps = kwargs.get("steps")
+        if not isinstance(raw_steps, (list, tuple)) or not raw_steps:
+            raise CaskError(
+                f"{cask.token}: generic `artifact` steps: must be a "
+                "non-empty array"
+            )
+        base_dir, _ = self._generic_artifact_base(cask, artifact)
+        planned = [
+            self._plan_generic_step(cask, base_dir, source_root, step)
+            for step in raw_steps
+        ]
+        created: list[Path] = []
+        try:
+            for item in planned:
+                destination = Path(item["destination"])
+                if destination.exists() or destination.is_symlink():
+                    if not force:
+                        raise CaskError(
+                            f"{cask.token}: {destination} already exists"
+                        )
+                    self._remove_path(destination)
+                op = str(item["op"])
+                if op == "mkdir":
+                    destination.mkdir(parents=True, exist_ok=False)
+                elif op == "copy":
+                    source = Path(item["source"])
+                    if source.is_dir():
+                        shutil.copytree(source, destination, symlinks=True)
+                    else:
+                        destination.parent.mkdir(
+                            parents=True, exist_ok=True
+                        )
+                        shutil.copy2(source, destination)
+                else:  # symlink
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    link_target = str(item["link"])
+                    candidate = Path(
+                        os.path.abspath(
+                            os.path.join(str(base_dir), link_target)
+                        )
+                    )
+                    # Store the link relative to its own parent so the link
+                    # resolves as validated (relative to the selected base).
+                    stored_target = os.path.relpath(
+                        candidate, destination.parent
+                    )
+                    destination.symlink_to(
+                        stored_target,
+                        target_is_directory=(
+                            candidate.exists() and candidate.is_dir()
+                        ),
+                    )
+                created.append(destination)
+        except Exception:
+            for path in reversed(created):
+                try:
+                    self._remove_path(path)
+                except Exception:
+                    pass
+            raise
+        installed.extend(str(path) for path in created)
 
     def _install_manpage_artifact(
         self,

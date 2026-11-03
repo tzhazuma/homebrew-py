@@ -1125,6 +1125,25 @@ def _flag_value(
         return "include", token[2:], 1
     if token.startswith("-isystem") and len(token) > len("-isystem"):
         return "include", token[len("-isystem") :], 1
+    if token == "-isysroot":
+        if index + 1 < len(arguments):
+            return "sysroot", arguments[index + 1], 2
+        return None
+    if token.startswith("-isysroot") and len(token) > len("-isysroot"):
+        return "sysroot", token[len("-isysroot") :], 1
+    if token == "--sysroot":
+        if index + 1 < len(arguments):
+            return "sysroot", arguments[index + 1], 2
+        return None
+    if token.startswith("--sysroot=") and len(token) > len("--sysroot="):
+        return "sysroot", token[len("--sysroot=") :], 1
+    if token == "-Wl,-syslibroot":
+        if index + 1 < len(arguments):
+            return "sysroot", arguments[index + 1], 2
+        return None
+    for prefix in ("-Wl,-syslibroot,", "-Wl,-syslibroot="):
+        if token.startswith(prefix) and len(token) > len(prefix):
+            return "sysroot", token[len(prefix) :], 1
     if token == "-L":
         if index + 1 < len(arguments):
             return "library", arguments[index + 1], 2
@@ -1161,6 +1180,7 @@ def sanitize_flag_list(
     prefix_library = os.path.normpath(str(Path(prefix) / "lib"))
     result: list[str] = []
     seen_prefix: set[tuple[str, str]] = set()
+    seen_sysroot: set[str] = set()
     index = 0
     while index < len(args):
         parsed = _flag_value(args, index)
@@ -1176,6 +1196,11 @@ def sanitize_flag_list(
         elif kind == "library":
             unsafe = _path_under(normalised, _SYSTEM_LIBRARY_ROOTS)
             is_prefix = normalised == prefix_library
+        elif kind == "sysroot":
+            # SDK paths intentionally live outside the keg.  Only deduplicate
+            # equivalent -isysroot/-Wl,-syslibroot forms; never strip them.
+            unsafe = False
+            is_prefix = False
         else:
             unsafe = _path_under(normalised, _SYSTEM_LIBRARY_ROOTS) or (
                 normalised.startswith("/")
@@ -1185,7 +1210,12 @@ def sanitize_flag_list(
         if unsafe or (drop_prefix_flags and is_prefix):
             index += consumed
             continue
-        if is_prefix:
+        if kind == "sysroot":
+            if normalised in seen_sysroot:
+                index += consumed
+                continue
+            seen_sysroot.add(normalised)
+        elif is_prefix:
             key = (kind, normalised)
             if key in seen_prefix:
                 index += consumed
@@ -1264,6 +1294,25 @@ def flag_value(args, index):
         return "include", token[2:], 1
     if token.startswith("-isystem") and len(token) > len("-isystem"):
         return "include", token[len("-isystem"):], 1
+    if token == "-isysroot":
+        if index + 1 < len(args):
+            return "sysroot", args[index + 1], 2
+        return None
+    if token.startswith("-isysroot") and len(token) > len("-isysroot"):
+        return "sysroot", token[len("-isysroot"):], 1
+    if token == "--sysroot":
+        if index + 1 < len(args):
+            return "sysroot", args[index + 1], 2
+        return None
+    if token.startswith("--sysroot=") and len(token) > len("--sysroot="):
+        return "sysroot", token[len("--sysroot="):], 1
+    if token == "-Wl,-syslibroot":
+        if index + 1 < len(args):
+            return "sysroot", args[index + 1], 2
+        return None
+    for flag_prefix in ("-Wl,-syslibroot,", "-Wl,-syslibroot="):
+        if token.startswith(flag_prefix) and len(token) > len(flag_prefix):
+            return "sysroot", token[len(flag_prefix):], 1
     if token == "-L":
         if index + 1 < len(args):
             return "library", args[index + 1], 2
@@ -1281,6 +1330,7 @@ def flag_value(args, index):
 
 
 filtered = []
+seen_sysroot = set()
 index = 0
 while index < len(arguments):
     parsed = flag_value(arguments, index)
@@ -1296,6 +1346,9 @@ while index < len(arguments):
     elif kind == "library":
         unsafe = path_under(normalised, SYSTEM_LIBRARY_ROOTS)
         duplicate_prefix = normalised == PREFIX_LIBRARY
+    elif kind == "sysroot":
+        unsafe = False
+        duplicate_prefix = False
     else:
         unsafe = path_under(normalised, SYSTEM_LIBRARY_ROOTS) or (
             normalised.startswith("/")
@@ -1305,6 +1358,11 @@ while index < len(arguments):
     if unsafe or duplicate_prefix:
         index += consumed
         continue
+    if kind == "sysroot":
+        if normalised in seen_sysroot:
+            index += consumed
+            continue
+        seen_sysroot.add(normalised)
     filtered.extend(arguments[index:index + consumed])
     index += consumed
 
@@ -1344,6 +1402,8 @@ class SuperenvShims:
     cc: Path
     cxx: Path
     helper: Path
+    objc: Optional[Path] = None
+    objcxx: Optional[Path] = None
 
 
 @dataclass(frozen=True)
@@ -1476,6 +1536,22 @@ _C_STANDARDS = frozenset(
         "gnu2x",
     }
 )
+_C_STANDARD_ALIASES = {
+    "c9x": "c99",
+    "c1x": "c11",
+    "gnu9x": "gnu99",
+    "gnu1x": "gnu11",
+}
+
+_CXX_STANDARD_ALIASES = {
+    "c++0x": "c++11",
+    "c++1y": "c++14",
+    "c++1z": "c++17",
+    "gnu++0x": "gnu++11",
+    "gnu++1y": "gnu++14",
+    "gnu++1z": "gnu++17",
+}
+
 _CXX_STANDARDS = frozenset(
     {
         "c++98",
@@ -1542,6 +1618,10 @@ def language_standard_flags(
         value = raw.strip().lower()
         if value.startswith("-std="):
             value = value[len("-std=") :]
+        if allowed is _CXX_STANDARDS:
+            value = _CXX_STANDARD_ALIASES.get(value, value)
+        elif allowed is _C_STANDARDS:
+            value = _C_STANDARD_ALIASES.get(value, value)
         return value if value in allowed else None
 
     return (
@@ -1555,6 +1635,93 @@ def _ensure_language_standard(flags: str, standard: str) -> str:
     if _has_flag(flags, ("-std",), prefixes=("-std=",)):
         return flags
     return _append_flag(flags, f"-std={standard}")
+
+
+_MACOS_ARCH_ALIASES = {
+    "arm64": "arm64",
+    "aarch64": "arm64",
+    "x86_64": "x86_64",
+    "amd64": "x86_64",
+}
+_LINUX_ARCH_FLAGS = {
+    "x86_64": "-m64",
+    "amd64": "-m64",
+    "i386": "-m32",
+    "i686": "-m32",
+    "x86": "-m32",
+}
+
+
+def architecture_flag(
+    environment: Optional[Mapping[str, str]] = None,
+    *,
+    system: Optional[str] = None,
+    machine: Optional[str] = None,
+) -> Optional[str]:
+    """Return a bounded PYBREW_ARCH flag for Darwin/Linux, if safe.
+
+    macOS accepts ``-arch arm64|x86_64``.  On Linux only the x86 family has a
+    safe bounded mapping (``-m64``/``-m32``); non-x86 hosts return ``None``.
+    ``system``/``machine`` are injectable for deterministic tests.
+    """
+
+    env = os.environ if environment is None else environment
+    raw = env.get("PYBREW_ARCH")
+    if raw is None or not raw.strip():
+        return None
+    value = raw.strip().lower()
+    host = platform.system() if system is None else system
+    host_machine = (
+        platform.machine() if machine is None else machine
+    ).strip().lower()
+    if host == "Darwin":
+        arch = _MACOS_ARCH_ALIASES.get(value)
+        return f"-arch {arch}" if arch else None
+    if host == "Linux":
+        flag = _LINUX_ARCH_FLAGS.get(value)
+        if flag is None or host_machine not in _INTEL_MACHINES:
+            return None
+        return flag
+    return None
+
+
+def _ensure_architecture_flag(flags: str, flag: str) -> str:
+    if flag.startswith("-arch"):
+        if _has_flag(flags, ("-arch",), prefixes=("-arch=",)):
+            return flags
+    elif _has_flag(flags, ("-m32", "-m64")):
+        return flags
+    return _append_flag(flags, flag)
+
+
+def objective_language_standard_flags(
+    environment: Optional[Mapping[str, str]] = None,
+) -> tuple[Optional[str], Optional[str]]:
+    """Bounded Objective-C/Objective-C++ standard knobs."""
+
+    env = os.environ if environment is None else environment
+
+    def resolve(names: Iterable[str], allowed: frozenset[str]) -> Optional[str]:
+        raw = _first_environment_value(env, names)
+        if not raw:
+            return None
+        value = raw.strip().lower()
+        if value.startswith("-std="):
+            value = value[len("-std=") :]
+        if allowed is _CXX_STANDARDS:
+            value = _CXX_STANDARD_ALIASES.get(value, value)
+        elif allowed is _C_STANDARDS:
+            value = _C_STANDARD_ALIASES.get(value, value)
+        return value if value in allowed else None
+
+    return (
+        resolve(
+            ("PYBREW_OBJC_STANDARD", "PYBREW_OBJCSTD"), _C_STANDARDS
+        ),
+        resolve(
+            ("PYBREW_OBJCXX_STANDARD", "PYBREW_OBJCXXSTD"), _CXX_STANDARDS
+        ),
+    )
 
 
 def detect_sdkroot(
@@ -1620,8 +1787,13 @@ def _ensure_isysroot(flags: str, sdkroot: Path) -> str:
     # A user-provided SDK flag (or any --sysroot) is never overridden.
     if _has_flag(
         flags,
-        ("-isysroot", "--sysroot"),
-        prefixes=("-isysroot", "--sysroot="),
+        ("-isysroot", "--sysroot", "-Wl,-syslibroot"),
+        prefixes=(
+            "-isysroot",
+            "--sysroot=",
+            "-Wl,-syslibroot,",
+            "-Wl,-syslibroot=",
+        ),
     ):
         return flags
     return _append_flag(flags, f"-isysroot {shlex.quote(str(sdkroot))}")
@@ -1661,7 +1833,14 @@ def install_superenv_shims(
     root = prefix / "var" / "pybrew" / "superenv" / "shims"
     root.mkdir(parents=True, exist_ok=True)
 
-    for name in ("CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS"):
+    for name in (
+        "CPPFLAGS",
+        "CFLAGS",
+        "CXXFLAGS",
+        "OBJCFLAGS",
+        "OBJCXXFLAGS",
+        "LDFLAGS",
+    ):
         if name in env:
             env[name] = sanitize_build_flags(env[name], prefix)
 
@@ -1694,18 +1873,36 @@ def install_superenv_shims(
         path.write_text(script, encoding="utf-8")
         path.chmod(0o755)
 
+    objc = _first_environment_value(env, ("OBJC", "PYBREW_OBJC")) or cc
+    objcxx = _first_environment_value(
+        env, ("OBJCXX", "PYBREW_OBJCXX")
+    ) or cxx
+
     cc_path = root / "cc"
     cxx_path = root / "c++"
+    objc_path = root / "objc"
+    objcxx_path = root / "objc++"
     write_shim(cc_path, cc)
     write_shim(cxx_path, cxx)
+    write_shim(objc_path, objc)
+    write_shim(objcxx_path, objcxx)
     env["PATH"] = os.pathsep.join([str(root), env.get("PATH", os.defpath)])
     env["CC"] = str(cc_path)
     env["CXX"] = str(cxx_path)
+    env["OBJC"] = str(objc_path)
+    env["OBJCXX"] = str(objcxx_path)
     env["HOMEBREW_CC"] = cc
     env["HOMEBREW_CXX"] = cxx
+    env["HOMEBREW_OBJC"] = objc
+    env["HOMEBREW_OBJCXX"] = objcxx
     env["SUPERENV"] = "1"
     return env, SuperenvShims(
-        root=root, cc=cc_path, cxx=cxx_path, helper=helper
+        root=root,
+        cc=cc_path,
+        cxx=cxx_path,
+        helper=helper,
+        objc=objc_path,
+        objcxx=objcxx_path,
     )
 
 
@@ -1722,7 +1919,8 @@ def build_environment(
     user did not set the corresponding variable.
 
     Bounded opt-ins: language standards via ``PYBREW_C_STANDARD`` /
-    ``PYBREW_CXX_STANDARD``, best-effort macOS SDKROOT detection via
+    ``PYBREW_CXX_STANDARD`` (plus OBJC/OBJCXX variants), architecture via
+    ``PYBREW_ARCH``, best-effort macOS SDKROOT detection via
     ``PYBREW_SDKROOT``/``PYBREW_XCRUN``, and Superenv shims via
     ``PYBREW_SUPERENV=1``.  None of these require full Homebrew Superenv and
     explicit user flags always win.
@@ -1748,6 +1946,41 @@ def build_environment(
     env["LDFLAGS"] = _merge_flags(env.get("LDFLAGS", ""), [library_flag])
     env["MAKEFLAGS"] = env.get("MAKEFLAGS", f"-j{max(1, (os.cpu_count() or 2))}")
 
+    # Objective-C/Objective-C++ support is opt-in: only touch the language
+    # variables when the caller supplied a compiler or flags for them.
+    objc = _first_environment_value(env, ("PYBREW_OBJC", "OBJC"))
+    objcxx = _first_environment_value(env, ("PYBREW_OBJCXX", "OBJCXX"))
+    objc_standard_configured = (
+        _first_environment_value(
+            env, ("PYBREW_OBJC_STANDARD", "PYBREW_OBJCSTD")
+        )
+        is not None
+    )
+    objcxx_standard_configured = (
+        _first_environment_value(
+            env, ("PYBREW_OBJCXX_STANDARD", "PYBREW_OBJCXXSTD")
+        )
+        is not None
+    )
+    if objc is not None or objc_standard_configured:
+        if objc is not None:
+            env["OBJC"] = objc
+        env["OBJCFLAGS"] = _merge_flags(
+            env.get("OBJCFLAGS", ""), [include_flag]
+        )
+    elif "OBJCFLAGS" in env:
+        env["OBJCFLAGS"] = _merge_flags(env["OBJCFLAGS"], [include_flag])
+    if objcxx is not None or objcxx_standard_configured:
+        if objcxx is not None:
+            env["OBJCXX"] = objcxx
+        env["OBJCXXFLAGS"] = _merge_flags(
+            env.get("OBJCXXFLAGS", ""), [include_flag]
+        )
+    elif "OBJCXXFLAGS" in env:
+        env["OBJCXXFLAGS"] = _merge_flags(
+            env["OBJCXXFLAGS"], [include_flag]
+        )
+
     c_standard, cxx_standard = language_standard_flags(env)
     if c_standard is not None:
         env["CFLAGS"] = _ensure_language_standard(env["CFLAGS"], c_standard)
@@ -1755,6 +1988,23 @@ def build_environment(
         env["CXXFLAGS"] = _ensure_language_standard(
             env["CXXFLAGS"], cxx_standard
         )
+    objc_standard, objcxx_standard = objective_language_standard_flags(env)
+    if objc_standard is not None and "OBJCFLAGS" in env:
+        env["OBJCFLAGS"] = _ensure_language_standard(
+            env["OBJCFLAGS"], objc_standard
+        )
+    if objcxx_standard is not None and "OBJCXXFLAGS" in env:
+        env["OBJCXXFLAGS"] = _ensure_language_standard(
+            env["OBJCXXFLAGS"], objcxx_standard
+        )
+
+    arch = architecture_flag(env)
+    if arch is not None:
+        for name in ("CFLAGS", "CXXFLAGS", "LDFLAGS"):
+            env[name] = _ensure_architecture_flag(env[name], arch)
+        for name in ("OBJCFLAGS", "OBJCXXFLAGS"):
+            if name in env:
+                env[name] = _ensure_architecture_flag(env[name], arch)
 
     # SDK detection is best-effort and never required.  Generic inherited
     # SDKROOT is exported, but -isysroot flags are only added for explicit
@@ -1765,8 +2015,11 @@ def build_environment(
     if sdkroot is not None:
         env.setdefault("SDKROOT", str(sdkroot))
         if explicit_sdk or env.get("PYBREW_SUPERENV") == "1":
-            for name in ("CPPFLAGS", "CFLAGS", "CXXFLAGS"):
+            for name in ("CPPFLAGS", "CFLAGS", "CXXFLAGS", "LDFLAGS"):
                 env[name] = _ensure_isysroot(env[name], sdkroot)
+            for name in ("OBJCFLAGS", "OBJCXXFLAGS"):
+                if name in env:
+                    env[name] = _ensure_isysroot(env[name], sdkroot)
 
     compiler = select_compiler(env)
     if compiler.cc is not None:

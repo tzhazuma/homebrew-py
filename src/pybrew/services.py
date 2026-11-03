@@ -9,6 +9,14 @@ The literal parser keeps pybrew's formula-opt-prefix paths and the opt-in Ruby
 evaluator in :mod:`pybrew.service_ruby` uses Homebrew's formula paths.  Set
 ``PYBREW_SERVICE_PATH_MODE=homebrew`` or ``=pybrew`` to make both parsers use
 the same path semantics (see :func:`service_path_mode`).
+
+Both parsers read Homebrew's user service env override file
+(``HOMEBREW_USER_CONFIG_HOME/services/<formula>.env``, see
+:func:`read_user_service_env`) and keep it separate from the declared
+environment: :meth:`ServiceSpec.effective_environment_variables` follows
+Homebrew and never synthesises ``PATH``, while the launchd renderer historically
+adds pybrew's ``<prefix>/bin`` default when no PATH is declared or overridden.
+The systemd renderer writes effective values only.
 """
 
 from __future__ import annotations
@@ -229,6 +237,90 @@ def std_service_path_env_value(config: Any, mode: str = "pybrew") -> str:
     return str(prefix / "bin")
 
 
+#: Homebrew's user configuration directory; service env overrides live in its
+#: ``services/<formula>.env`` subdirectory.  Also injectable per parse/render.
+USER_CONFIG_HOME_ENV = "HOMEBREW_USER_CONFIG_HOME"
+
+
+def resolve_user_config_home(
+    user_config_home: Optional[Path] = None,
+) -> Optional[Path]:
+    """Resolve the user config directory from an argument or Homebrew's env."""
+
+    raw: Any = user_config_home
+    if raw is None:
+        raw = os.environ.get(USER_CONFIG_HOME_ENV)
+    if raw is None:
+        return None
+    text = os.path.expanduser(os.fspath(raw))
+    if not text:
+        return None
+    return Path(text)
+
+
+def read_user_service_env(
+    formula: Formula,
+    user_config_home: Optional[Path] = None,
+    euid: Optional[int] = None,
+) -> dict[str, str]:
+    """Read Homebrew's ``services/<formula>.env`` user environment file.
+
+    This is a bounded implementation of Homebrew's ``Service`` behavior shared
+    by the literal parser and the opt-in Ruby evaluator: the file is skipped for
+    root services and for world- or group-writable files, blank/comment lines
+    are ignored, invalid lines are ignored, and the remaining ``KEY=value``
+    pairs override the formula-declared environment.  ``user_config_home``
+    injects a directory for tests/callers; otherwise ``HOMEBREW_USER_CONFIG_HOME``
+    is used and an unset value means "no overrides".
+    """
+
+    base = resolve_user_config_home(user_config_home)
+    if base is None:
+        return {}
+    name = str(formula.name or "")
+    if (
+        not name
+        or name in (".", "..")
+        or "/" in name
+        or "\\" in name
+        or "\x00" in name
+    ):
+        return {}
+    try:
+        effective_uid = os.geteuid() if euid is None else euid
+    except AttributeError:  # pragma: no cover - non-POSIX hosts
+        effective_uid = -1
+    if effective_uid == 0:
+        # Homebrew refuses user env overrides for root services.
+        return {}
+    path = base / "services" / f"{name}.env"
+    try:
+        if not path.is_file():
+            return {}
+        mode = path.stat().st_mode
+    except OSError:
+        return {}
+    if mode & 0o002 or mode & 0o020:
+        return {}
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return {}
+    overrides: dict[str, str] = {}
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        overrides[key] = value.strip()
+    return overrides
+
+
 @dataclass
 class ServiceSpec:
     run: list[str] = field(default_factory=list)
@@ -351,6 +443,23 @@ class ServiceSpec:
         environment = self.declared_environment_variables()
         for key, value in self.user_environment_variables.items():
             environment[str(key)] = str(value)
+        return environment
+
+    def render_environment_variables(
+        self, default_path: Optional[str] = None
+    ) -> dict[str, str]:
+        """Return the environment a renderer should write.
+
+        Homebrew's effective environment never synthesises ``PATH``; pybrew's
+        launchd renderer historically adds ``<prefix>/bin`` when neither the
+        declared nor the user environment provides one.  Passing
+        ``default_path`` reproduces that renderer default, while systemd (and
+        callers that need Homebrew semantics) pass nothing.
+        """
+
+        environment = self.effective_environment_variables()
+        if default_path is not None:
+            environment.setdefault("PATH", default_path)
         return environment
 
     def default_cron_values(self) -> dict[str, int]:
@@ -535,7 +644,12 @@ class _ServiceValueParser:
         return re.sub(r"#\{([^{}]+)\}", replace, template)
 
 
-def parse_service_block(formula: Formula, config: Config, raw: Optional[str] = None) -> ServiceSpec:
+def parse_service_block(
+    formula: Formula,
+    config: Config,
+    raw: Optional[str] = None,
+    user_config_home: Optional[Path] = None,
+) -> ServiceSpec:
     raw = raw or (formula.service or {}).get("source") if isinstance(formula.service, dict) else None
     if not raw:
         raise ServiceError(f"{formula.name} does not define a service")
@@ -544,7 +658,9 @@ def parse_service_block(formula: Formula, config: Config, raw: Optional[str] = N
     if os.environ.get("PYBREW_ALLOW_SERVICE_RUBY", "") == "1":
         from .service_ruby import evaluate_service_source
 
-        return evaluate_service_source(raw, formula, config)
+        return evaluate_service_source(
+            raw, formula, config, user_config_home=user_config_home
+        )
     tokens = Lexer(raw).tokenise()
     # Drop the opening `do` and the trailing `end`; parse the inner statements.
     if tokens and tokens[0].kind == "kw" and tokens[0].value == "do":
@@ -606,6 +722,13 @@ def parse_service_block(formula: Formula, config: Config, raw: Optional[str] = N
         ):
             parser.advance()
         _apply_service_directive(spec, name, args)
+    # Homebrew user env overrides apply to the literal parser as well.  They are
+    # stored separately so the declared environment stays intact; effective
+    # values are produced by ServiceSpec.effective_environment_variables and the
+    # renderers.
+    overrides = read_user_service_env(formula, user_config_home)
+    if overrides:
+        spec.user_environment_variables = overrides
     return spec
 
 
@@ -1102,7 +1225,7 @@ class ServiceManager:
             lines.append(f"WorkingDirectory={working_dir or root_dir}")
         if spec.nice is not None:
             lines.append(f"Nice={spec.nice}")
-        for key, value in spec.effective_environment_variables().items():
+        for key, value in spec.render_environment_variables().items():
             escaped = str(value).replace('"', '\\"')
             lines.append(f'Environment="{key}={escaped}"')
         lines += ["", "[Install]", "WantedBy=default.target", ""]
@@ -1218,10 +1341,12 @@ class ServiceManager:
             payload["LaunchOnlyOnce"] = True
         if spec.sockets:
             payload["Sockets"] = _launchd_sockets(spec)
-        environment = spec.effective_environment_variables()
-        # Keep pybrew's historical default search path unless the declared or
-        # user environment already provides PATH.
-        environment.setdefault("PATH", str(self.config.prefix / "bin"))
+        # pybrew's launchd renderer keeps its historical default search path
+        # unless the declared or user environment already provides PATH.
+        # ``effective_environment_variables`` itself stays Homebrew-style.
+        environment = spec.render_environment_variables(
+            default_path=str(self.config.prefix / "bin")
+        )
         if environment:
             payload["EnvironmentVariables"] = environment
         return payload
@@ -1235,9 +1360,18 @@ class ServiceManager:
         return path
 
     # -- operations ------------------------------------------------------
-    def spec_for(self, formula: Formula) -> ServiceSpec:
+    def spec_for(
+        self,
+        formula: Formula,
+        user_config_home: Optional[Path] = None,
+    ) -> ServiceSpec:
         raw = formula.service.get("source") if isinstance(formula.service, dict) else None
-        return parse_service_block(formula, self.config, raw=raw)
+        return parse_service_block(
+            formula,
+            self.config,
+            raw=raw,
+            user_config_home=user_config_home,
+        )
 
     def _spec_for_paths(self, formula: Formula) -> Optional[ServiceSpec]:
         try:

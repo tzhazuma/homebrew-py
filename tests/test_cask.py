@@ -3202,7 +3202,11 @@ def test_livecheck_http_honors_retry_after_seconds(
 
     assert (
         livecheck_http_fetcher(
-            "https://example.com/page", retries=1, retry_delay=0, jitter=0
+            "https://example.com/page",
+            retries=1,
+            retry_delay=0,
+            jitter=0,
+            rate_limiter=None,
         )
         == "ok"
     )
@@ -3232,6 +3236,7 @@ def test_livecheck_http_retry_after_is_bounded(
             retry_delay=0,
             jitter=0,
             max_total_retry_seconds=60,
+            rate_limiter=None,
         )
         == "ok"
     )
@@ -3259,7 +3264,11 @@ def test_livecheck_http_honors_retry_after_http_date(
 
     assert (
         livecheck_http_fetcher(
-            "https://example.com/page", retries=1, retry_delay=0, jitter=0
+            "https://example.com/page",
+            retries=1,
+            retry_delay=0,
+            jitter=0,
+            rate_limiter=None,
         )
         == "ok"
     )
@@ -3303,6 +3312,7 @@ def test_livecheck_http_total_retry_budget_is_bounded(
             retry_delay=0,
             jitter=0,
             max_total_retry_seconds=1,
+            rate_limiter=None,
         )
     assert slept == []
     assert len(opener.requests) == 1
@@ -3345,3 +3355,185 @@ def test_livecheck_redirect_header_policy() -> None:
     )
     assert same_origin.get_header("Cookie") == "session=abc"
     assert same_origin.get_header("Authorization") == "Bearer secret"
+
+
+# ---------------------------------------------------------------------------
+# Wave 7: rate-limit bucket, connection Retry-After, redirect header config
+# ---------------------------------------------------------------------------
+
+
+class _FakeClock:
+    def __init__(self) -> None:
+        self.now = 100.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def test_livecheck_rate_limiter_token_bucket() -> None:
+    from pybrew.cask import LivecheckRateLimiter
+
+    clock = _FakeClock()
+    limiter = LivecheckRateLimiter(
+        capacity=1, refill_rate=1, clock=clock
+    )
+
+    assert limiter.acquire("example.com") == 0.0
+    wait = limiter.acquire("example.com")
+    assert wait == pytest.approx(1.0)
+    assert limiter.acquire("other.example") == 0.0
+
+    clock.now += 2.0
+    assert limiter.acquire("example.com") == 0.0
+
+
+def test_livecheck_transport_applies_rate_limiter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import livecheck_http_fetcher
+
+    class FakeLimiter:
+        def __init__(self) -> None:
+            self.hosts: list[str] = []
+            self.waits = [1.5]
+
+        def acquire(self, host: str) -> float:
+            self.hosts.append(host)
+            return self.waits.pop(0) if self.waits else 0.0
+
+    limiter = FakeLimiter()
+    slept: list[float] = []
+    monkeypatch.setattr("pybrew.cask.time.sleep", slept.append)
+    _patch_livecheck_opener(monkeypatch, b"ok")
+
+    assert (
+        livecheck_http_fetcher(
+            "https://example.com/page",
+            rate_limiter=limiter,
+            retries=0,
+        )
+        == "ok"
+    )
+    assert limiter.hosts == ["example.com"]
+    assert slept == [1.5]
+
+
+def test_livecheck_rate_limit_wait_counts_toward_budget(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import livecheck_http_fetcher
+
+    class SlowLimiter:
+        def acquire(self, _host: str) -> float:
+            return 5.0
+
+    opener = _patch_livecheck_opener(monkeypatch, b"should not be read")
+
+    with pytest.raises(CaskError, match="rate limit wait exceeds"):
+        livecheck_http_fetcher(
+            "https://example.com/page",
+            rate_limiter=SlowLimiter(),
+            max_total_retry_seconds=1,
+            retries=0,
+        )
+    assert opener.requests == []
+
+
+def test_livecheck_connection_error_retry_after(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import email.message
+    import urllib.error
+
+    from pybrew.cask import livecheck_http_fetcher
+
+    class RetryableConnectionError(urllib.error.URLError):
+        def __init__(self, message: str, headers):
+            super().__init__(message)
+            self.headers = headers
+
+    headers = email.message.Message()
+    headers["Retry-After"] = "2"
+    error = RetryableConnectionError("reset", headers)
+    slept: list[float] = []
+    monkeypatch.setattr("pybrew.cask.time.sleep", slept.append)
+    _patch_livecheck_opener(
+        monkeypatch, [error, _FakeHttpResponse(b"ok")]
+    )
+
+    assert (
+        livecheck_http_fetcher(
+            "https://example.com/page",
+            retries=1,
+            retry_delay=0,
+            jitter=0,
+            rate_limiter=None,
+        )
+        == "ok"
+    )
+    assert slept == [2.0]
+
+
+def test_livecheck_redirect_header_policy_is_configurable() -> None:
+    import urllib.request
+
+    from pybrew.cask import _BoundedRedirectHandler
+
+    request = urllib.request.Request(
+        "https://a.example/page",
+        headers={
+            "Cookie": "session=abc",
+            "Authorization": "Bearer secret",
+            "X-Test": "keep",
+        },
+    )
+
+    custom_strip = _BoundedRedirectHandler(strip_headers={"X-Test"})
+    redirected = custom_strip.redirect_request(
+        request, None, 302, "Found", {}, "https://b.example/next"
+    )
+    assert redirected.get_header("X-test") is None
+    assert redirected.get_header("Cookie") == "session=abc"
+    assert redirected.get_header("Authorization") == "Bearer secret"
+
+    preserve_cookie = _BoundedRedirectHandler(
+        preserve_headers={"Cookie"}
+    )
+    redirected = preserve_cookie.redirect_request(
+        request, None, 302, "Found", {}, "https://b.example/next"
+    )
+    assert redirected.get_header("Cookie") == "session=abc"
+    assert redirected.get_header("Authorization") is None
+
+
+def test_livecheck_transport_passes_redirect_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import livecheck_http_fetcher
+
+    captured: dict[str, object] = {}
+
+    class FakeOpener:
+        def open(self, request, timeout=None):
+            return _FakeHttpResponse(b"ok")
+
+    def fake_build_opener(handler):
+        captured["handler"] = handler
+        return FakeOpener()
+
+    monkeypatch.setattr(
+        "pybrew.cask.urllib.request.build_opener", fake_build_opener
+    )
+
+    assert (
+        livecheck_http_fetcher(
+            "https://example.com/page",
+            redirect_strip_headers={"X-Test"},
+            redirect_preserve_headers={"Cookie"},
+            rate_limiter=None,
+        )
+        == "ok"
+    )
+    handler = captured["handler"]
+    assert handler.strip_headers == {"x-test"}
+    assert handler.preserve_headers == {"cookie"}

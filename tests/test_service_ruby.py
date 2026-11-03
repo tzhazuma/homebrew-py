@@ -1095,6 +1095,26 @@ def test_user_service_env_injectable_path_argument(
     assert spec.effective_environment_variables()["FOO"] == "custom"
 
 
+@requires_ruby
+def test_parse_service_block_passes_injectable_user_config_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    allow_ruby: None,
+    non_root: None,
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    user_home = tmp_path / "explicit-config"
+    _write_user_env(user_home, "svc", "FOO=custom\n")
+    assert os.environ.get(USER_CONFIG_HOME_ENV) is None
+    formula = _formula_with_service('environment_variables FOO: "formula"')
+
+    spec = parse_service_block(formula, config, user_config_home=user_home)
+
+    assert spec.environment_variables["FOO"] == "formula"
+    assert spec.user_environment_variables["FOO"] == "custom"
+    assert spec.effective_environment_variables()["FOO"] == "custom"
+
+
 def test_user_service_env_bounded_parse_and_security(
     tmp_path: Path,
     non_root: None,

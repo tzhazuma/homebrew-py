@@ -332,6 +332,14 @@ def build_parser() -> argparse.ArgumentParser:
     livecheck_cmd.add_argument("cask")
     livecheck_cmd.add_argument("--page", type=Path, help="use a local page instead of the network")
     livecheck_cmd.add_argument("--online", action="store_true", help="fetch the livecheck page over HTTP")
+    livecheck_cmd.add_argument(
+        "--header",
+        action="append",
+        default=[],
+        metavar="NAME: VALUE",
+        help="extra HTTP header (repeatable; with --online)",
+    )
+    livecheck_cmd.add_argument("--timeout", type=float, default=30.0, help="HTTP timeout seconds")
     livecheck_cmd.add_argument("--json", action="store_true")
     return parser
 
@@ -1373,8 +1381,18 @@ def cmd_livecheck(args: argparse.Namespace) -> int:
     if getattr(args, "page", None) is not None:
         page = Path(args.page).read_text(encoding="utf-8", errors="replace")
 
+    headers = {}
+    for raw in getattr(args, "header", []) or []:
+        if ":" not in raw:
+            print(f"Error: invalid --header {raw!r}; expected NAME: VALUE", file=sys.stderr)
+            return 1
+        name, value = raw.split(":", 1)
+        headers[name.strip()] = value.strip()
     status = cask.livecheck_status(
-        page=page, online=bool(getattr(args, "online", False))
+        page=page,
+        online=bool(getattr(args, "online", False)),
+        headers=headers or None,
+        timeout=getattr(args, "timeout", 30.0),
     )
     if getattr(args, "json", False):
         print(json.dumps(status, indent=2, sort_keys=True))

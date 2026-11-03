@@ -88,9 +88,12 @@ from typing import Any, Optional
 from .models import Formula
 from .paths import Config
 from .services import (
+    USER_CONFIG_HOME_ENV as USER_CONFIG_HOME_ENV,
     ServiceError,
     ServiceSpec,
     _apply_service_directive,
+    read_user_service_env,
+    resolve_user_config_home,
     service_path_mode,
     service_paths,
     std_service_path_env_value,
@@ -101,10 +104,6 @@ ALLOW_ENV = "PYBREW_ALLOW_SERVICE_RUBY"
 
 #: Environment variable overriding the Ruby interpreter used for evaluation.
 RUBY_ENV = "PYBREW_RUBY"
-
-#: Homebrew's user configuration directory; service env overrides live in its
-#: ``services/<formula>.env`` subdirectory.  Also injectable per evaluation.
-USER_CONFIG_HOME_ENV = "HOMEBREW_USER_CONFIG_HOME"
 
 #: System Ruby on macOS (also present on most Linux distributions).
 DEFAULT_RUBY = "/usr/bin/ruby"
@@ -268,22 +267,14 @@ def _normalise_source(raw: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# user service environment overrides
+# user service environment overrides (shared with the literal parser)
 # ---------------------------------------------------------------------------
 
 
 def _user_config_home(user_config_home: Optional[Path]) -> Optional[Path]:
-    """Resolve the user config directory from the argument or Homebrew's env."""
+    """Backward-compatible alias for the shared config-home resolver."""
 
-    raw: Any = user_config_home
-    if raw is None:
-        raw = os.environ.get(USER_CONFIG_HOME_ENV)
-    if raw is None:
-        return None
-    text = os.path.expanduser(os.fspath(raw))
-    if not text:
-        return None
-    return Path(text)
+    return resolve_user_config_home(user_config_home)
 
 
 def _read_user_service_env(
@@ -291,59 +282,13 @@ def _read_user_service_env(
     user_config_home: Optional[Path] = None,
     euid: Optional[int] = None,
 ) -> dict[str, str]:
-    """Read Homebrew's ``services/<formula>.env`` user override file.
+    """Backward-compatible alias for the shared user env reader.
 
-    This is a bounded implementation of Homebrew's ``Service`` behavior: the
-    file is skipped for root services and for world- or group-writable files,
-    blank/comment lines are ignored, invalid lines are ignored, and remaining
-    ``KEY=value`` pairs override the formula-declared environment.
+    The implementation lives in :mod:`pybrew.services` so the default literal
+    parser applies exactly the same bounded/security rules as this evaluator.
     """
 
-    base = _user_config_home(user_config_home)
-    if base is None:
-        return {}
-    name = str(formula.name or "")
-    if (
-        not name
-        or name in (".", "..")
-        or "/" in name
-        or "\\" in name
-        or "\x00" in name
-    ):
-        return {}
-    try:
-        effective_uid = os.geteuid() if euid is None else euid
-    except AttributeError:  # pragma: no cover - non-POSIX hosts
-        effective_uid = -1
-    if effective_uid == 0:
-        # Homebrew refuses user env overrides for root services.
-        return {}
-    path = base / "services" / f"{name}.env"
-    try:
-        if not path.is_file():
-            return {}
-        mode = path.stat().st_mode
-    except OSError:
-        return {}
-    if mode & 0o002 or mode & 0o020:
-        return {}
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return {}
-    overrides: dict[str, str] = {}
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if "=" not in stripped:
-            continue
-        key, value = stripped.split("=", 1)
-        key = key.strip()
-        if not key:
-            continue
-        overrides[key] = value.strip()
-    return overrides
+    return read_user_service_env(formula, user_config_home, euid)
 
 
 # ---------------------------------------------------------------------------

@@ -190,3 +190,16 @@ def test_linkage_all_after_install(run_cli, sample) -> None:
     payload = json.loads(proc.stdout)
     assert payload["formula"] == "all installed kegs"
     assert payload["ok"] is True
+
+
+def test_livecheck_headers_and_invalid_header(run_cli, tmp_path: Path) -> None:
+    page = tmp_path / "page.html"
+    page.write_text("Livecheck 1.0", encoding="utf-8")
+    proc = run_cli(
+        "livecheck", "livecheck", "--page", str(page), "--header", "X-Test: 1", "--ruby-cask"
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "up_to_date" in proc.stdout
+    proc = run_cli("livecheck", "livecheck", "--page", str(page), "--header", "bad")
+    assert proc.returncode == 1
+    assert "invalid --header" in proc.stderr

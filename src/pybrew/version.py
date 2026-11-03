@@ -6,15 +6,14 @@ homebrew-core, plus a small natural-order comparison used by ``deps``/``list``.
 
 Token semantics are a bounded approximation of Homebrew's ``Version`` parser:
 numeric and letter tokens, ranked pre-release words (alpha < beta < pre < rc <
-p < post), and the ``PkgVersion`` revision suffix are supported.  Deviations
-are intentional and documented on :class:`Version`: most notably the default
-comparison keeps ``Version("1.0.0") > Version("1.0")`` (Homebrew's null token
-compares equal to a numeric zero), composite tokens such as ``alpha5`` are
-compared as separate letter/numeric tokens, and only :class:`PkgVersion` has a
-revision.  The closer Homebrew null-token behavior is available opt-in via
-``compare_versions(..., missing_numeric_zero=True)``/``Version.homebrew_compare``
-or globally via ``PYBREW_VERSION_HOMEBREW=1`` and ``Version.homebrew = True``
-(in that mode ``1.0 == 1.0.0`` and hashes are canonical).
+p < post), and the ``PkgVersion`` revision suffix are supported.  Homebrew
+null-token comparison is the default (``1.0 == 1.0.0``; missing numeric
+segments are zero).  The historical extra-numeric behavior is an explicit
+opt-out via ``PYBREW_VERSION_LEGACY=1`` or ``Version.legacy = True``.
+Composite tokens such as ``alpha5`` are compared as separate letter/numeric
+tokens, and only :class:`PkgVersion` has a revision.  Hashes are canonical in
+Homebrew mode (equal versions hash equally) and String-compatible in legacy
+mode.
 """
 
 from __future__ import annotations
@@ -242,15 +241,33 @@ _HOMEBREW_TRUTHY = {"1", "true", "yes", "on"}
 _HOMEBREW_FALSEY = {"0", "false", "no", "off"}
 
 
-def _homebrew_mode_enabled() -> bool:
-    """Whether Homebrew null-token comparison is enabled by env/class flag."""
+def _legacy_mode_enabled() -> bool:
+    """Whether the legacy extra-numeric comparison is explicitly requested."""
 
+    raw = os.environ.get("PYBREW_VERSION_LEGACY", "").strip().lower()
+    if raw in _HOMEBREW_TRUTHY:
+        return True
+    if raw in _HOMEBREW_FALSEY:
+        return False
+    return bool(getattr(Version, "legacy", False))
+
+
+def _homebrew_mode_enabled() -> bool:
+    """Whether Homebrew null-token comparison is active (now the default)."""
+
+    if _legacy_mode_enabled():
+        return False
     raw = os.environ.get("PYBREW_VERSION_HOMEBREW", "").strip().lower()
     if raw in _HOMEBREW_TRUTHY:
         return True
     if raw in _HOMEBREW_FALSEY:
         return False
-    return bool(getattr(Version, "homebrew", False))
+    homebrew = getattr(Version, "homebrew", None)
+    if homebrew is True:
+        return True
+    if homebrew is False:
+        return False
+    return True
 
 
 def compare_versions(
@@ -261,17 +278,16 @@ def compare_versions(
 ) -> int:
     """Return -1/0/1 for natural ordering of two version strings.
 
-    By default pybrew keeps its historical behavior: numeric segments compare
-    numerically, letter segments compare after numeric segments, trailing
-    letters are pre-release markers, and extra numeric segments are
-    significant (``1.0.0 > 1.0``) because existing callers/tests rely on it.
+    The default is Homebrew's null-token behavior: a missing token is a null
+    token, numeric zero compares equal to it, and pre-release words sort before
+    the release while ``p``/``post`` (and unknown letters) sort after it.
 
-    ``missing_numeric_zero=True`` selects the closer Homebrew token-class
-    behavior: a missing token is a null token, numeric zero compares equal to
-    it, and pre-release words sort before the release while ``p``/``post``
-    (and unknown letters) sort after it.  Passing ``None`` (the default) uses
-    the mode selected by ``PYBREW_VERSION_HOMEBREW=1`` or
-    ``Version.homebrew = True``; passing ``False`` always keeps legacy order.
+    ``missing_numeric_zero=False`` forces the historical pybrew behavior
+    (extra numeric segments significant: ``1.0.0 > 1.0``; trailing letters are
+    pre-release markers).  Passing ``None`` (the default) uses the active mode:
+    legacy when ``PYBREW_VERSION_LEGACY=1``/``Version.legacy = True`` (or
+    ``PYBREW_VERSION_HOMEBREW=0``/``Version.homebrew = False``), otherwise
+    Homebrew.
     """
 
     if missing_numeric_zero is None:
@@ -311,30 +327,32 @@ class Version:
     ``minor`` and ``patch``; comparisons stay String-compatible and match
     :func:`compare_versions`.
 
+    Homebrew null-token comparison (``1.0 == 1.0.0``) is the default; the
+    legacy extra-numeric behavior is an explicit opt-out via
+    ``Version.legacy = True`` or ``PYBREW_VERSION_LEGACY=1`` (also
+    ``Version.homebrew = False`` / ``PYBREW_VERSION_HOMEBREW=0``).
+
     Intentional deviations from Homebrew's parser:
 
     * no composite token classes (``alpha5`` is the tokens ``"alpha", 5``);
     * pre-release words are ranked approximately rather than by token class;
-    * extra numeric segments stay significant: ``Version("1.0.0") >
-      Version("1.0")`` whereas Homebrew compares the missing/null token equal
-      to a numeric zero;
     * ``revision`` is always 0 on ``Version`` and meaningful only on
       :class:`PkgVersion`.
 
-    Use :meth:`homebrew_compare` for the opt-in Homebrew null-token behavior
-    where a missing numeric segment compares equal to zero, pre-release words
-    sort before the release, and ``p``/``post``/unknown letters sort after it.
-    The same behavior can be enabled globally with ``Version.homebrew = True``
-    or ``PYBREW_VERSION_HOMEBREW=1``; in that mode ``1.0 == 1.0.0`` and hashes
-    are canonical.  Configure the mode before using versions as dict/set keys,
-    because the hash function follows the active mode.
+    Hashes follow the active mode: Homebrew mode uses a canonical key (equal
+    versions hash equally), legacy mode keeps the String-compatible hash.
+    Configure the mode before using versions as dict/set keys.
     """
 
     __slots__ = ("value",)
 
-    #: Class-level opt-in for Homebrew null-token comparison.  The environment
-    #: variable ``PYBREW_VERSION_HOMEBREW=1`` overrides this.
-    homebrew: bool = False
+    #: Optional explicit Homebrew flag (``None`` means use the default).
+    #: The environment variables ``PYBREW_VERSION_HOMEBREW`` and
+    #: ``PYBREW_VERSION_LEGACY`` override this.
+    homebrew: Optional[bool] = None
+
+    #: Explicit legacy opt-out; ``PYBREW_VERSION_LEGACY=1`` also sets it.
+    legacy: bool = False
 
     def __init__(self, value: str):
         self.value = str(value)
@@ -350,6 +368,18 @@ class Version:
             yield cls
         finally:
             cls.homebrew = previous
+
+    @classmethod
+    @contextmanager
+    def legacy_mode(cls, enabled: bool = True):
+        """Temporarily enable/disable the legacy extra-numeric comparison."""
+
+        previous = cls.legacy
+        cls.legacy = enabled
+        try:
+            yield cls
+        finally:
+            cls.legacy = previous
 
     def __str__(self) -> str:  # pragma: no cover - trivial
         return self.value

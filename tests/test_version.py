@@ -8,7 +8,9 @@ from pybrew.version import PkgVersion, Version, compare_versions, detect_version
 @pytest.fixture(autouse=True)
 def _reset_homebrew_mode(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("PYBREW_VERSION_HOMEBREW", raising=False)
-    monkeypatch.setattr(Version, "homebrew", False, raising=False)
+    monkeypatch.delenv("PYBREW_VERSION_LEGACY", raising=False)
+    monkeypatch.setattr(Version, "homebrew", None, raising=False)
+    monkeypatch.setattr(Version, "legacy", False, raising=False)
     yield
 
 
@@ -31,7 +33,8 @@ def test_detect_git_tag() -> None:
 def test_version_comparison() -> None:
     assert compare_versions("1.10", "1.9") > 0
     assert compare_versions("2.0", "2.0") == 0
-    assert compare_versions("1.0.0", "1.0") > 0
+    assert compare_versions("1.0.0", "1.0") == 0
+    assert compare_versions("1.0.0", "1.0", missing_numeric_zero=False) > 0
     assert Version("5.3.20") > Version("5.3.9")
     assert Version("20260817.0") > Version("20260801.0")
 
@@ -97,10 +100,10 @@ def test_version_prerelease_and_token_semantics() -> None:
     assert alpha.pre_release is True
     assert alpha.pre_release_tokens == ["alpha"]
     assert Version("1.0").pre_release is False
-    assert alpha < beta < pre < rc < patch < Version("1.0")
+    assert alpha < beta < pre < rc < Version("1.0") < patch
     assert Version("1.0-beta2") < Version("1.0-beta10")
     assert Version("1.0-post1") > Version("1.0-p1")
-    assert Version("1.0.0") > Version("1.0")  # documented deviation
+    assert Version("1.0.0") == Version("1.0")
     assert alpha.revision == 0
     assert PkgVersion("1.0-alpha", 3).pre_release is True
     assert PkgVersion.parse("1.0-alpha_2").revision == 2
@@ -125,7 +128,8 @@ def test_version_token_classes_and_homebrew_missing_zero() -> None:
     assert compare_versions("1.0", "1.0-alpha", missing_numeric_zero=True) > 0
     assert compare_versions("1.0", "1.0-p1", missing_numeric_zero=True) < 0
     assert compare_versions("1.0", "1.0-foo", missing_numeric_zero=True) < 0
-    assert compare_versions("1.0.0", "1.0") > 0  # legacy default preserved
+    assert compare_versions("1.0.0", "1.0") == 0
+    assert compare_versions("1.0.0", "1.0", missing_numeric_zero=False) > 0
 
     assert Version("1.0").homebrew_compare("1.0.0") == 0
     assert Version("1.0").homebrew_compare("1.0.1") < 0
@@ -143,19 +147,20 @@ def test_version_string_and_hash_contract() -> None:
     assert str(version) == "1.2.3"
     assert version.to_s() == "1.2.3"
     assert version == "1.2.3"
-    assert hash(version) == hash("1.2.3")
     assert hash(Version("1.2.3")) == hash(Version("1.2.3"))
     assert Version("1.0") == Version("1.0")
-    assert Version("1.0") != Version("1.0.0")
+    assert Version("1.0") == Version("1.0.0")
+    assert hash(Version("1.0")) == hash(Version("1.0.0"))
+    assert hash(Version("1.2.3")) != hash(Version("1.2.4"))
+    assert PkgVersion("1.0", 0) == Version("1.0.0")
+    assert hash(PkgVersion("1.0", 0)) == hash(Version("1.0.0"))
+    assert PkgVersion("1.0", 2) != Version("1.0")
+    assert hash(PkgVersion("1.0", 2)) != hash(PkgVersion("1.0", 0))
 
 
 def test_homebrew_mode_env_null_token(monkeypatch: pytest.MonkeyPatch) -> None:
-    assert compare_versions("1.0.0", "1.0") > 0
-    assert Version("1.0") != Version("1.0.0")
-
-    monkeypatch.setenv("PYBREW_VERSION_HOMEBREW", "1")
+    # Null-token behavior is the default now.
     assert compare_versions("1.0.0", "1.0") == 0
-    assert compare_versions("1.0.0", "1.0", missing_numeric_zero=False) > 0
     assert Version("1.0") == Version("1.0.0")
     assert Version("1.0") == "1.0.0"
     assert Version("1.0") != Version("1.0.1")
@@ -163,23 +168,41 @@ def test_homebrew_mode_env_null_token(monkeypatch: pytest.MonkeyPatch) -> None:
     assert Version("1.0") < Version("1.0-p1")
     assert Version("1.0") < Version("1.0-foo")
     assert hash(Version("1.0")) == hash(Version("1.0.0"))
+
+    monkeypatch.setenv("PYBREW_VERSION_HOMEBREW", "1")
+    assert compare_versions("1.0.0", "1.0") == 0
+    assert compare_versions("1.0.0", "1.0", missing_numeric_zero=False) > 0
     assert PkgVersion("1.0", 0) == Version("1.0.0")
     assert hash(PkgVersion("1.0", 0)) == hash(Version("1.0.0"))
     assert PkgVersion("1.0", 2) != Version("1.0")
     assert hash(PkgVersion("1.0", 2)) != hash(PkgVersion("1.0", 0))
 
+    monkeypatch.delenv("PYBREW_VERSION_HOMEBREW")
+    monkeypatch.setenv("PYBREW_VERSION_LEGACY", "1")
+    assert compare_versions("1.0.0", "1.0") > 0
+    assert Version("1.0") != Version("1.0.0")
+    assert Version("1.0-p1") < Version("1.0")
+    assert compare_versions("1.0.0", "1.0", missing_numeric_zero=True) == 0
+    assert hash(Version("1.0")) == hash("1.0")
+
 
 def test_homebrew_mode_class_flag_and_context() -> None:
-    assert Version("1.0") != Version("1.0.0")
-    Version.homebrew = True
+    assert Version("1.0") == Version("1.0.0")
+    Version.legacy = True
     try:
-        assert Version("1.0") == Version("1.0.0")
-        assert hash(Version("1.0")) == hash(Version("1.0.0"))
+        assert Version("1.0") != Version("1.0.0")
     finally:
-        Version.homebrew = False
-    with Version.homebrew_mode():
-        assert Version("1.0") == Version("1.0.0")
-    assert Version("1.0") != Version("1.0.0")
+        Version.legacy = False
+    with Version.legacy_mode():
+        assert Version("1.0") != Version("1.0.0")
+    Version.homebrew = False
+    try:
+        assert Version("1.0") != Version("1.0.0")
+    finally:
+        Version.homebrew = None
+    with Version.homebrew_mode(False):
+        assert Version("1.0") != Version("1.0.0")
+    assert Version("1.0") == Version("1.0.0")
 
 
 def test_homebrew_mode_env_false_overrides_class_flag(

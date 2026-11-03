@@ -246,6 +246,8 @@ require "rbconfig"
 require "shellwords"
 require "stringio"
 require "open3"
+require "openssl"
+require "tempfile"
 require "tmpdir"
 require "uri"
 
@@ -8617,6 +8619,9 @@ module Formulary
   API_JSON_ENV = "PYBREW_FORMULA_API_JSON"
   API_URL_ENV = "PYBREW_FORMULA_API_URL"
   API_CURL_ENV = "PYBREW_FORMULA_API_CURL"
+  API_TOKEN_ENV = "PYBREW_FORMULA_API_TOKEN"
+  API_SIDECAR_ENV = "PYBREW_FORMULA_API_SIDECAR"
+  API_JWS_KEY_ENV = "PYBREW_FORMULA_API_JWS_KEY"
   TAPS_ENV = "PYBREW_TAPS"
 
   # Bounded local Homebrew API JSON support.  The file is expected to contain
@@ -8647,36 +8652,215 @@ module Formulary
   # Bounded remote API JSON transport.  Uses curl (or a fake transport via
   # PYBREW_FORMULA_API_CURL) and validates the same struct shapes as local
   # files.  No network happens unless PYBREW_FORMULA_API_URL is set.
+  def jws_compact?(text)
+    stripped = text.to_s.strip
+    return false if stripped.empty?
+
+    stripped.split(".", -1).length == 3 &&
+      !stripped.match(/\A[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*\z/).nil?
+  end
+
+  def decode_jws_segment(segment)
+    padded = segment.to_s.tr("-_", "+/")
+    padded += "=" * ((4 - padded.length % 4) % 4)
+    Base64.strict_decode64(padded)
+  end
+
+  def verify_formula_jws!(text)
+    parts = text.to_s.strip.split(".", -1)
+    if parts.length != 3
+      raise PybrewFormulaUnavailableError,
+            "malformed API JWS: expected three dot-separated segments"
+    end
+    header_segment, payload_segment, signature_segment = parts
+    begin
+      header = JSON.parse(decode_jws_segment(header_segment).force_encoding("UTF-8"))
+    rescue ScriptError, StandardError => error
+      raise PybrewFormulaUnavailableError,
+            "malformed API JWS header: #{error.class}: #{error.message}"
+    end
+    alg = header.is_a?(Hash) ? header["alg"].to_s : ""
+    unless alg == "HS256"
+      raise PybrewFormulaUnavailableError,
+            "unsupported API JWS alg #{alg.inspect}: pybrew only verifies HS256"
+    end
+    key = ENV[API_JWS_KEY_ENV].to_s
+    if key.empty?
+      raise PybrewFormulaUnavailableError,
+            "API JWS verification requires #{API_JWS_KEY_ENV} (HS256); " \
+            "refusing to trust an unverified payload"
+    end
+    expected = OpenSSL::HMAC.digest("SHA256", key, "#{header_segment}.#{payload_segment}")
+    actual = begin
+      decode_jws_segment(signature_segment)
+    rescue ScriptError, StandardError => error
+      raise PybrewFormulaUnavailableError,
+            "malformed API JWS signature: #{error.class}: #{error.message}"
+    end
+    valid = if OpenSSL.respond_to?(:fixed_length_secure_compare)
+      expected.bytesize == actual.bytesize &&
+        OpenSSL.fixed_length_secure_compare(expected, actual)
+    else
+      expected == actual
+    end
+    unless valid
+      raise PybrewFormulaUnavailableError, "API JWS signature verification failed"
+    end
+    begin
+      decode_jws_segment(payload_segment).force_encoding("UTF-8")
+    rescue ScriptError, StandardError => error
+      raise PybrewFormulaUnavailableError,
+            "malformed API JWS payload: #{error.class}: #{error.message}"
+    end
+  end
+
+  def api_json_text_data(text, source, remote: false)
+    stripped = text.to_s
+    if jws_compact?(stripped)
+      payload = verify_formula_jws!(stripped)
+      begin
+        return JSON.parse(payload)
+      rescue ScriptError, StandardError => error
+        raise PybrewFormulaUnavailableError,
+              "malformed JWS payload from #{source}: #{error.class}: #{error.message}"
+      end
+    end
+    begin
+      JSON.parse(stripped)
+    rescue ScriptError, StandardError => error
+      prefix = remote ? "malformed API JSON from" : "malformed API JSON at"
+      raise PybrewFormulaUnavailableError,
+            "#{prefix} #{source}: #{error.class}: #{error.message}"
+    end
+  end
+
+  def remote_sidecar_path
+    raw = ENV[API_SIDECAR_ENV].to_s.strip
+    return nil if raw.empty?
+
+    Pathname.new(raw)
+  end
+
+  def remote_sidecar_read(url)
+    path = remote_sidecar_path
+    return nil if path.nil? || !path.file?
+
+    data = JSON.parse(path.read)
+    return nil unless data.is_a?(Hash) && data["url"] == url && data["entries"].is_a?(Array)
+
+    {
+      url: data["url"],
+      entries: data["entries"],
+      etag: data["etag"].to_s,
+      last_modified: data["last_modified"].to_s,
+      content_hash: data["content_hash"].to_s,
+    }
+  rescue ScriptError, StandardError
+    nil
+  end
+
+  def remote_sidecar_write(url:, entries:, etag:, last_modified:, content_hash:)
+    path = remote_sidecar_path
+    return nil if path.nil?
+
+    path.dirname.mkpath
+    path.write(JSON.pretty_generate({
+      "url" => url,
+      "etag" => etag,
+      "last_modified" => last_modified,
+      "content_hash" => content_hash,
+      "entries" => entries,
+    }) + "\n")
+    nil
+  rescue ScriptError, StandardError
+    nil
+  end
+
+  def remote_sidecar_clear!
+    path = remote_sidecar_path
+    path.unlink if !path.nil? && path.file?
+    nil
+  rescue ScriptError, StandardError
+    nil
+  end
+
   def remote_api_json_entries
     url = api_json_url
     return nil if url.nil?
 
-    cached = (@remote_api_json_cache ||= {})
-    return cached[:entries] if cached[:url] == url
+    memory = (@remote_api_json_cache ||= {})
+    cached = if memory[:url] == url
+               memory
+             else
+               remote_sidecar_read(url)
+             end
 
     transport = ENV[API_CURL_ENV].to_s.strip
     transport = "curl" if transport.empty?
+    header_file = Tempfile.new(["pybrew-api-headers", ".txt"])
     begin
-      text = Utils.popen_read(transport, "-fsSL", "--max-time", "30", url, safe: true).to_s
-    rescue ScriptError, StandardError => error
-      raise PybrewFormulaUnavailableError,
-            "failed to fetch API JSON from #{url} using #{transport.inspect}: " \
-            "#{error.class}: #{error.message}"
+      command = [transport, "-fsSL", "--max-time", "30", "-D", header_file.path.to_s]
+      if !cached.nil? && !cached[:etag].to_s.empty?
+        command += ["-H", "If-None-Match: #{cached[:etag]}"]
+      end
+      if !cached.nil? && !cached[:last_modified].to_s.empty?
+        command += ["-H", "If-Modified-Since: #{cached[:last_modified]}"]
+      end
+      token_value = ENV[API_TOKEN_ENV].to_s
+      command += ["-H", "Authorization: Bearer #{token_value}"] unless token_value.empty?
+      command << url
+
+      begin
+        text = Utils.popen_read(*command, safe: true).to_s
+      rescue ScriptError, StandardError
+        raise PybrewFormulaUnavailableError,
+              "failed to fetch API JSON from #{url} (transport failed; " \
+              "credentials are never included in this message)"
+      end
+
+      headers = File.file?(header_file.path.to_s) ? File.read(header_file.path.to_s) : ""
+      status = headers[/\AHTTP\/\S+\s+(\d{3})/, 1] || "200"
+      if status == "304"
+        if cached.nil? || !cached[:entries].is_a?(Array)
+          raise PybrewFormulaUnavailableError,
+                "HTTP 304 for #{url} but no cached API JSON is available"
+        end
+        @remote_api_json_cache = cached
+        return cached[:entries]
+      end
+      if status.to_i >= 400
+        raise PybrewFormulaUnavailableError,
+              "failed to fetch API JSON from #{url}: HTTP #{status}"
+      end
+      if text.strip.empty?
+        raise PybrewFormulaUnavailableError,
+              "failed to fetch API JSON from #{url} using #{transport.inspect} " \
+              "(empty response); set #{API_CURL_ENV} to a test transport if needed"
+      end
+
+      data = api_json_text_data(text, url, remote: true)
+      entries = api_json_entries(data, url)
+      etag = headers[/^ETag:\s*(.+)$/i, 1].to_s.strip
+      last_modified = headers[/^Last-Modified:\s*(.+)$/i, 1].to_s.strip
+      content_hash = Digest::SHA256.hexdigest(text)
+      @remote_api_json_cache = {
+        url: url,
+        entries: entries,
+        etag: etag,
+        last_modified: last_modified,
+        content_hash: content_hash,
+      }
+      remote_sidecar_write(
+        url: url,
+        entries: entries,
+        etag: etag,
+        last_modified: last_modified,
+        content_hash: content_hash
+      )
+      entries
+    ensure
+      header_file.close!
     end
-    if text.strip.empty?
-      raise PybrewFormulaUnavailableError,
-            "failed to fetch API JSON from #{url} using #{transport.inspect} " \
-            "(empty response); set #{API_CURL_ENV} to a test transport if needed"
-    end
-    begin
-      data = JSON.parse(text)
-    rescue ScriptError, StandardError => error
-      raise PybrewFormulaUnavailableError,
-            "malformed API JSON from #{url}: #{error.class}: #{error.message}"
-    end
-    entries = api_json_entries(data, url)
-    @remote_api_json_cache = { url: url, entries: entries }
-    entries
   end
 
   def load_api_entries!(entries)
@@ -8694,11 +8878,11 @@ module Formulary
 
     begin
       text = path.open("r") { |io| ensure_utf8_encoding(io).read }
-      data = JSON.parse(text)
     rescue ScriptError, StandardError => error
       raise PybrewFormulaUnavailableError,
-            "malformed API JSON at #{path}: #{error.class}: #{error.message}"
+            "failed to read API JSON at #{path}: #{error.class}: #{error.message}"
     end
+    data = api_json_text_data(text, path)
     entries = api_json_entries(data, path)
     @api_json_cache = { path: path.to_s, mtime: mtime, entries: entries }
     entries
@@ -9255,6 +9439,7 @@ module Formulary
     @api_json_cache = {}
     @api_json_loaded = nil
     @remote_api_json_cache = nil
+    remote_sidecar_clear!
     nil
   end
 

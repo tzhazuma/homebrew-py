@@ -1194,7 +1194,7 @@ def test_generic_artifact_unsupported_kwargs_are_rejected(
         ),
     )
 
-    with pytest.raises(CaskError, match="install steps are not supported"):
+    with pytest.raises(CaskError, match="cannot be combined with steps"):
         cask_env.installer.install(cask_env.loader.load("generic"))
 
 
@@ -1363,3 +1363,156 @@ def test_uninstall_suite_symlink_does_not_touch_target(
 
     assert not suite_path.is_symlink()
     assert keep.read_text() == "keep"
+
+
+# ---------------------------------------------------------------------------
+# generic artifact declarative `steps:` grammar
+# ---------------------------------------------------------------------------
+
+
+def _write_steps_cask(
+    cask_env: SimpleNamespace,
+    artifacts: str,
+    *,
+    token: str = "steps",
+    entries: dict[str, bytes] | None = None,
+) -> None:
+    archive = cask_env.tmp_path / f"{token}-1.0.zip"
+    digest = _make_zip(
+        archive,
+        entries
+        or {
+            "files/app.txt": b"app payload\n",
+            "files/dir/keep.txt": b"keep\n",
+        },
+    )
+    _write_cask(cask_env.tap, token, "1.0", digest, archive, artifacts=artifacts)
+
+
+def test_generic_artifact_steps_mkdir_copy_symlink(
+    cask_env: SimpleNamespace,
+) -> None:
+    _write_steps_cask(
+        cask_env,
+        (
+            '  artifact "ignored", steps: ['
+            '["mkdir", "staging"], '
+            '["copy", "files/app.txt", "staging/app.txt"], '
+            '["symlink", "staging/app.txt", "staging/link.txt"]]'
+        ),
+    )
+
+    result = cask_env.installer.install(cask_env.loader.load("steps"))
+
+    staging = cask_env.config.applications / "staging"
+    assert staging.is_dir()
+    assert (staging / "app.txt").read_text() == "app payload\n"
+    link = staging / "link.txt"
+    assert link.is_symlink()
+    assert (staging / "link.txt").read_text() == "app payload\n"
+    assert len(result.artifacts) == 3
+
+    cask_env.installer.uninstall("steps")
+    assert not staging.exists()
+
+
+def test_generic_artifact_steps_use_dirmethod_base(
+    cask_env: SimpleNamespace,
+) -> None:
+    _write_steps_cask(
+        cask_env,
+        (
+            '  artifact "ignored", dirmethod: :prefix, steps: ['
+            '["mkdir", "share/tool"], '
+            '["copy", "files/app.txt", "share/tool/app.txt"]]'
+        ),
+    )
+
+    cask_env.installer.install(cask_env.loader.load("steps"))
+
+    target = cask_env.config.prefix / "share" / "tool" / "app.txt"
+    assert target.read_text() == "app payload\n"
+
+
+def test_generic_artifact_steps_reject_unknown_op(
+    cask_env: SimpleNamespace,
+) -> None:
+    _write_steps_cask(
+        cask_env, '  artifact "ignored", steps: [["delete", "x"]]'
+    )
+
+    with pytest.raises(
+        CaskError, match="unsupported generic artifact step"
+    ):
+        cask_env.installer.install(cask_env.loader.load("steps"))
+
+
+def test_generic_artifact_steps_reject_symlink_escape(
+    cask_env: SimpleNamespace,
+) -> None:
+    _write_steps_cask(
+        cask_env,
+        (
+            '  artifact "ignored", steps: ['
+            '["symlink", "../outside", "link.txt"]]'
+        ),
+    )
+
+    with pytest.raises(CaskError, match="escapes the destination base"):
+        cask_env.installer.install(cask_env.loader.load("steps"))
+
+
+def test_generic_artifact_steps_validate_before_install(
+    cask_env: SimpleNamespace,
+) -> None:
+    _write_steps_cask(
+        cask_env,
+        (
+            '  artifact "ignored", steps: ['
+            '["mkdir", "never-created"], '
+            '["copy", "missing.txt", "never-created/missing.txt"]]'
+        ),
+    )
+
+    with pytest.raises(CaskError, match="copy source"):
+        cask_env.installer.install(cask_env.loader.load("steps"))
+    assert not (cask_env.config.applications / "never-created").exists()
+
+
+def test_generic_artifact_steps_require_array(cask_env: SimpleNamespace) -> None:
+    _write_steps_cask(cask_env, '  artifact "ignored", steps: "copy"')
+
+    with pytest.raises(CaskError, match="must be a non-empty array"):
+        cask_env.installer.install(cask_env.loader.load("steps"))
+
+
+# ---------------------------------------------------------------------------
+# zap broken symlink edges
+# ---------------------------------------------------------------------------
+
+
+def test_zap_broken_symlink_outside_roots_is_refused(
+    cask_env: SimpleNamespace,
+) -> None:
+    cask = parse_cask_source('cask "zappy" do\n  version "1.0"\nend\n')
+    link = cask_env.config.prefix / "broken-outside"
+    link.symlink_to(Path("/etc/pybrew-definitely-missing"))
+    cask.zap = [str(link)]
+
+    with pytest.raises(CaskError, match="outside allowed roots"):
+        cask_env.installer.zap(cask)
+    assert link.is_symlink()
+
+
+def test_zap_broken_symlink_inside_roots_is_removed(
+    cask_env: SimpleNamespace,
+) -> None:
+    cask = parse_cask_source('cask "zappy" do\n  version "1.0"\nend\n')
+    link = cask_env.config.prefix / "broken-inside"
+    link.symlink_to(cask_env.config.prefix / "missing-target")
+    cask.zap = [str(link)]
+
+    removed = cask_env.installer.zap(cask)
+
+    assert removed == [link]
+    assert not link.is_symlink()

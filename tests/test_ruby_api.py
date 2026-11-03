@@ -8,7 +8,9 @@ no network access and no writes outside ``tmp_path``.
 
 from __future__ import annotations
 
+import base64
 import hashlib
+import hmac
 import io
 import json
 import os
@@ -7333,4 +7335,192 @@ esac
         "PybrewGitHubGraphqlError|true",
         "PybrewGitHubGraphqlError|true",
         "PybrewGitHubGraphqlError|true",
+    ]
+
+
+def test_formulary_remote_api_conditional_cache_and_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    argv_file = tmp_path / "conditional-argv.txt"
+    fake_curl = tmp_path / "conditional-curl"
+    script = """#!/bin/sh
+printf '%s\\n' "$@" > "__ARGV__"
+url=""
+headers=""
+prev=""
+for arg in "$@"; do
+  case "$arg" in
+    http*) url="$arg" ;;
+  esac
+  if [ "$prev" = "-D" ]; then headers="$arg"; fi
+  prev="$arg"
+done
+if printf '%s\\n' "$@" | grep -q 'If-None-Match'; then
+  printf 'HTTP/1.1 304 Not Modified\\r\\n\\r\\n' > "$headers"
+  exit 0
+fi
+printf 'HTTP/1.1 200 OK\\r\\nETag: "v1"\\r\\nLast-Modified: Wed, 01 Jan 2025 00:00:00 GMT\\r\\n\\r\\n' > "$headers"
+printf '%s' '{"formulae":[{"name":"cond-one","desc":"conditional","version":"1.0"}]}'
+"""
+    fake_curl.write_text(script.replace("__ARGV__", str(argv_file)))
+    fake_curl.chmod(0o755)
+    failing_curl = tmp_path / "conditional-failing-curl"
+    failing_curl.write_text("#!/bin/sh\nexit 1\n")
+    failing_curl.chmod(0o755)
+    sidecar = tmp_path / "api-sidecar.json"
+    monkeypatch.setenv("PYBREW_FORMULA_API_URL", "https://api.example.test/formula.jws.json")
+    monkeypatch.setenv("PYBREW_FORMULA_API_CURL", str(fake_curl))
+    monkeypatch.setenv("PYBREW_FORMULA_API_TOKEN", "secret-token")
+    monkeypatch.setenv("PYBREW_FORMULA_API_SIDECAR", str(sidecar))
+    monkeypatch.setenv("PYBREW_CONDITIONAL_ARGV", str(argv_file))
+    formula = _formula(
+        "ruby-conditional-api",
+        "1.0",
+        (
+            '  first = Formulary.remote_api_json_entries\n'
+            '  sidecar_text = Pathname.new(ENV["PYBREW_FORMULA_API_SIDECAR"]).read\n'
+            '  second = Formulary.remote_api_json_entries\n'
+            '  argv = Pathname.new(ENV["PYBREW_CONDITIONAL_ARGV"]).read.lines.map(&:chomp)\n'
+            '  sidecar = JSON.parse(sidecar_text)\n'
+            '  ENV["PYBREW_FORMULA_API_CURL"] = "' + str(failing_curl) + '"\n'
+            '  Formulary.clear_cache\n'
+            '  sidecar_after_clear = Pathname.new(ENV["PYBREW_FORMULA_API_SIDECAR"]).file?\n'
+            '  leak = begin\n'
+            '    Formulary.remote_api_json_entries\n'
+            '    "none"\n'
+            '  rescue => raised\n'
+            '    raised.message.include?("secret-token").to_s\n'
+            '  end\n'
+            '  (prefix/"conditional.txt").write [\n'
+            '    first.length.to_s, first.first["name"],\n'
+            '    second.length.to_s, second.first["name"],\n'
+            '    sidecar["etag"].to_s, sidecar["last_modified"].to_s,\n'
+            '    (sidecar["content_hash"].to_s.length == 64).to_s,\n'
+            '    sidecar_after_clear.to_s, leak,\n'
+            '    argv.include?("Authorization: Bearer secret-token").to_s,\n'
+            '    argv.any? { |line| line.include?("If-None-Match: \\"v1\\"") }.to_s,\n'
+            '    argv.any? { |line| line.include?("If-Modified-Since: Wed, 01 Jan 2025 00:00:00 GMT") }.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "conditional.txt").read_text().splitlines() == [
+        "1",
+        "cond-one",
+        "1",
+        "cond-one",
+        '"v1"',
+        "Wed, 01 Jan 2025 00:00:00 GMT",
+        "true",
+        "false",
+        "false",
+        "true",
+        "true",
+        "true",
+    ]
+
+
+def test_formulary_api_jws_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+
+    def b64url(data: bytes) -> str:
+        return base64.urlsafe_b64encode(data).rstrip(b"=").decode()
+
+    payload_json = json.dumps(
+        {
+            "formulae": [
+                {
+                    "name": "jws-one",
+                    "desc": "jws formula",
+                    "homepage": "https://example.test/jws",
+                    "version": "4.0",
+                    "license": "MIT",
+                }
+            ]
+        }
+    ).encode()
+    header = b64url(b'{"alg":"HS256","typ":"JWT"}')
+    payload = b64url(payload_json)
+    signature = b64url(
+        hmac.new(
+            b"test-jws-key",
+            f"{header}.{payload}".encode(),
+            hashlib.sha256,
+        ).digest()
+    )
+    good_token = f"{header}.{payload}.{signature}"
+    bad_token = f"{header}.{payload}.{'A' + signature[1:]}"
+    rs256_header = b64url(b'{"alg":"RS256","typ":"JWT"}')
+    rs256_token = f"{rs256_header}.{payload}.{signature}"
+
+    scripts = {}
+    for name, token in (
+        ("good", good_token),
+        ("bad", bad_token),
+        ("rs256", rs256_token),
+        ("malformed", "abc.def.ghi"),
+    ):
+        path = tmp_path / f"jws-curl-{name}"
+        path.write_text("#!/bin/sh\nprintf '%s' '" + token + "'\n")
+        path.chmod(0o755)
+        scripts[name] = path
+    monkeypatch.setenv("PYBREW_FORMULA_API_URL", "https://api.example.test/formula.jws.json")
+    monkeypatch.setenv("PYBREW_FORMULA_API_CURL", str(scripts["good"]))
+    monkeypatch.setenv("PYBREW_FORMULA_API_JWS_KEY", "test-jws-key")
+    formula = _formula(
+        "ruby-jws-api",
+        "1.0",
+        (
+            '  loaded = Formulary.load_formula_from_api!\n'
+            '  key_error = begin\n'
+            '    ENV.delete("PYBREW_FORMULA_API_JWS_KEY")\n'
+            '    Formulary.clear_cache\n'
+            '    Formulary.load_formula_from_api!\n'
+            '    "none"\n'
+            '  rescue => raised\n'
+            '    raised.class.name + "|" + raised.message.include?("PYBREW_FORMULA_API_JWS_KEY").to_s\n'
+            '  end\n'
+            '  ENV["PYBREW_FORMULA_API_JWS_KEY"] = "wrong-key"\n'
+            '  Formulary.clear_cache\n'
+            '  wrong_key = begin\n'
+            '    Formulary.load_formula_from_api!\n'
+            '    "none"\n'
+            '  rescue => raised\n'
+            '    raised.class.name + "|" + raised.message.include?("verification failed").to_s\n'
+            '  end\n'
+            '  ENV["PYBREW_FORMULA_API_JWS_KEY"] = "test-jws-key"\n'
+            '  ENV["PYBREW_FORMULA_API_CURL"] = "' + str(scripts["rs256"]) + '"\n'
+            '  Formulary.clear_cache\n'
+            '  unsupported = begin\n'
+            '    Formulary.load_formula_from_api!\n'
+            '    "none"\n'
+            '  rescue => raised\n'
+            '    raised.class.name + "|" + raised.message.include?("unsupported API JWS alg").to_s\n'
+            '  end\n'
+            '  ENV["PYBREW_FORMULA_API_CURL"] = "' + str(scripts["malformed"]) + '"\n'
+            '  Formulary.clear_cache\n'
+            '  malformed = begin\n'
+            '    Formulary.load_formula_from_api!\n'
+            '    "none"\n'
+            '  rescue => raised\n'
+            '    raised.class.name + "|" + raised.message.include?("malformed API JWS").to_s\n'
+            '  end\n'
+            '  (prefix/"jws.txt").write [\n'
+            '    loaded.loaded_name, loaded.loaded_desc, loaded.loaded_version,\n'
+            '    key_error, wrong_key, unsupported, malformed\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "jws.txt").read_text().splitlines() == [
+        "jws-one",
+        "jws formula",
+        "4.0",
+        "PybrewFormulaUnavailableError|true",
+        "PybrewFormulaUnavailableError|true",
+        "PybrewFormulaUnavailableError|true",
+        "PybrewFormulaUnavailableError|true",
     ]

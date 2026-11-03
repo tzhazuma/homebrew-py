@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import plistlib
 import shlex
 import textwrap
@@ -14,12 +15,14 @@ from pybrew.paths import Config
 from pybrew.ruby_parser import parse_formula_source
 from pybrew.services import (
     SERVICE_PATH_MODE_ENV,
+    USER_CONFIG_HOME_ENV,
     LaunchctlRunner,
     ServiceError,
     ServiceManager,
     ServiceSpec,
     SystemctlRunner,
     parse_service_block,
+    read_user_service_env,
 )
 
 SERVICE_FORMULA = '''
@@ -50,6 +53,27 @@ def _config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Config:
     config = Config.default(prefix=tmp_path / "prefix", taps=[], cache=tmp_path / "cache")
     config.ensure()
     return config
+
+
+@pytest.fixture
+def non_root(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pin the effective uid so user env files are read even in root CI."""
+
+    monkeypatch.setattr(os, "geteuid", lambda: 1000, raising=False)
+
+
+def _write_user_env(
+    home: Path,
+    name: str = "svc",
+    text: str = "FOO=override\n",
+    mode: int = 0o600,
+) -> Path:
+    directory = home / "services"
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"{name}.env"
+    path.write_text(textwrap.dedent(text).strip() + "\n", encoding="utf-8")
+    path.chmod(mode)
+    return path
 
 
 def _formula() -> Formula:
@@ -165,6 +189,257 @@ def test_literal_parser_keeps_pybrew_service_path_helpers(
     ]
     assert spec.environment_variables["PATH"] == str(config.prefix / "bin")
     assert spec.environment_variables["PREFIX"] == str(config.prefix)
+
+
+# ---------------------------------------------------------------------------
+# Homebrew user service env overrides for the literal parser
+# ---------------------------------------------------------------------------
+
+
+def test_literal_parser_reads_user_service_env(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    non_root: None,
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    user_home = tmp_path / "user-config"
+    _write_user_env(
+        user_home,
+        "svc",
+        """
+        # user overrides
+        FOO=override
+        BAR=value=with=equals
+        PATH=/user/bin
+
+        NOT A PAIR
+        SPACED =  trimmed
+        """,
+    )
+    monkeypatch.setenv(USER_CONFIG_HOME_ENV, str(user_home))
+    formula = _formula_with_service(
+        """
+        run [opt_bin/"svc"]
+        environment_variables FOO: "formula", KEEP: "yes",
+                              PATH: std_service_path_env
+        frobnicate "x"
+        """
+    )
+
+    spec = parse_service_block(formula, config)
+
+    # Declared values stay exactly as parsed; user overrides are separate.
+    assert spec.environment_variables == {
+        "FOO": "formula",
+        "KEEP": "yes",
+        "PATH": str(config.prefix / "bin"),
+    }
+    assert spec.declared_environment_variables() == spec.environment_variables
+    assert spec.user_environment_variables == {
+        "FOO": "override",
+        "BAR": "value=with=equals",
+        "PATH": "/user/bin",
+        "SPACED": "trimmed",
+    }
+    assert spec.effective_environment_variables() == {
+        "FOO": "override",
+        "KEEP": "yes",
+        "PATH": "/user/bin",
+        "BAR": "value=with=equals",
+        "SPACED": "trimmed",
+    }
+    # Unknown directives keep their warning surface (shared with the evaluator).
+    assert spec.warnings == ["unsupported service directive `frobnicate`"]
+
+    manager = ServiceManager(config)
+    payload = manager.plist_payload(formula, spec)
+    assert payload["EnvironmentVariables"]["FOO"] == "override"
+    assert payload["EnvironmentVariables"]["BAR"] == "value=with=equals"
+    assert payload["EnvironmentVariables"]["PATH"] == "/user/bin"
+    unit = manager.unit_text(formula, spec)
+    assert 'Environment="FOO=override"' in unit
+    assert 'Environment="PATH=/user/bin"' in unit
+
+
+def test_literal_parser_user_env_injectable_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    non_root: None,
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    user_home = tmp_path / "explicit-config"
+    _write_user_env(user_home, "svc", "FOO=custom\n")
+    assert os.environ.get(USER_CONFIG_HOME_ENV) is None
+    formula = _formula_with_service('environment_variables FOO: "formula"')
+
+    spec = parse_service_block(formula, config, user_config_home=user_home)
+    assert spec.environment_variables["FOO"] == "formula"
+    assert spec.user_environment_variables["FOO"] == "custom"
+    assert spec.effective_environment_variables()["FOO"] == "custom"
+
+    manager_spec = ServiceManager(config).spec_for(
+        formula, user_config_home=user_home
+    )
+    assert manager_spec.effective_environment_variables()["FOO"] == "custom"
+
+
+def test_literal_user_env_applies_without_declared_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    non_root: None,
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    user_home = tmp_path / "user-config"
+    _write_user_env(user_home, "svc", "FOO=only-user\n")
+    monkeypatch.setenv(USER_CONFIG_HOME_ENV, str(user_home))
+    formula = _formula_with_service('run [opt_bin/"svc"]')
+
+    spec = parse_service_block(formula, config)
+
+    assert spec.environment_variables == {}
+    assert spec.user_environment_variables == {"FOO": "only-user"}
+    assert spec.effective_environment_variables() == {"FOO": "only-user"}
+
+    manager = ServiceManager(config)
+    payload = manager.plist_payload(formula, spec)
+    assert payload["EnvironmentVariables"] == {
+        "FOO": "only-user",
+        "PATH": str(config.prefix / "bin"),
+    }
+    assert 'Environment="FOO=only-user"' in manager.unit_text(formula, spec)
+
+
+def test_literal_parser_user_env_bounded_security_rules(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    non_root: None,
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    user_home = tmp_path / "user-config"
+    env_path = _write_user_env(user_home, "svc", "FOO=override\n")
+    monkeypatch.setenv(USER_CONFIG_HOME_ENV, str(user_home))
+    formula = _formula_with_service('environment_variables FOO: "formula"')
+
+    def effective_foo() -> str:
+        return parse_service_block(formula, config).effective_environment_variables()[
+            "FOO"
+        ]
+
+    assert effective_foo() == "override"
+    # World- and group-writable user env files are ignored.
+    env_path.chmod(0o666)
+    assert effective_foo() == "formula"
+    env_path.chmod(0o664)
+    assert effective_foo() == "formula"
+    # Root services never read user overrides.
+    env_path.chmod(0o600)
+    monkeypatch.setattr(os, "geteuid", lambda: 0, raising=False)
+    assert effective_foo() == "formula"
+    monkeypatch.setattr(os, "geteuid", lambda: 1000, raising=False)
+    # Unset HOMEBREW_USER_CONFIG_HOME means no overrides.
+    monkeypatch.delenv(USER_CONFIG_HOME_ENV, raising=False)
+    assert effective_foo() == "formula"
+
+
+def test_read_user_service_env_shared_bounds(tmp_path: Path) -> None:
+    formula = _formula()
+    user_home = tmp_path / "config"
+    env_path = _write_user_env(user_home, "svc", "FOO=bar\n")
+
+    assert read_user_service_env(formula, user_home) == {"FOO": "bar"}
+    assert read_user_service_env(formula, user_home, euid=0) == {}
+    env_path.chmod(0o664)
+    assert read_user_service_env(formula, user_home) == {}
+    env_path.chmod(0o666)
+    assert read_user_service_env(formula, user_home) == {}
+    env_path.chmod(0o600)
+    assert read_user_service_env(formula, user_home) == {"FOO": "bar"}
+    assert read_user_service_env(formula, tmp_path / "missing") == {}
+    assert read_user_service_env(formula, None) == {}
+
+
+def test_literal_user_env_with_homebrew_path_mode(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    non_root: None,
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    monkeypatch.setenv(SERVICE_PATH_MODE_ENV, "homebrew")
+    user_home = tmp_path / "user-config"
+    _write_user_env(user_home, "svc", "FOO=override\nPATH=/user/bin\n")
+    monkeypatch.setenv(USER_CONFIG_HOME_ENV, str(user_home))
+    formula = _formula_with_service(
+        """
+        run [opt_bin/"svc"]
+        environment_variables FOO: "formula", PATH: std_service_path_env
+        """
+    )
+
+    spec = parse_service_block(formula, config)
+    declared_path = ":".join(
+        [
+            str(config.prefix / "bin"),
+            str(config.prefix / "sbin"),
+            "/usr/bin",
+            "/bin",
+            "/usr/sbin",
+            "/sbin",
+        ]
+    )
+    assert spec.declared_environment_variables() == {
+        "FOO": "formula",
+        "PATH": declared_path,
+    }
+    assert spec.user_environment_variables == {
+        "FOO": "override",
+        "PATH": "/user/bin",
+    }
+    assert spec.effective_environment_variables()["PATH"] == "/user/bin"
+    payload = ServiceManager(config).plist_payload(formula, spec)
+    assert payload["EnvironmentVariables"]["PATH"] == "/user/bin"
+
+
+# ---------------------------------------------------------------------------
+# effective PATH vs pybrew renderer default
+# ---------------------------------------------------------------------------
+
+
+def test_effective_path_is_homebrew_style_while_plist_keeps_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    manager = ServiceManager(config)
+    formula = _formula()
+    spec = ServiceSpec(run=["/opt/svc/bin/svc"])
+
+    # Homebrew's effective environment never synthesises PATH.
+    assert spec.effective_environment_variables() == {}
+    assert spec.render_environment_variables() == {}
+    # The launchd renderer keeps pybrew's historical default PATH.
+    assert spec.render_environment_variables(
+        default_path=str(config.prefix / "bin")
+    ) == {"PATH": str(config.prefix / "bin")}
+    payload = manager.plist_payload(formula, spec)
+    assert payload["EnvironmentVariables"] == {"PATH": str(config.prefix / "bin")}
+    # systemd renders effective values only (no synthetic PATH).
+    assert "Environment=" not in manager.unit_text(formula, spec)
+
+    # Declared or user PATH wins over the renderer default.
+    declared = ServiceSpec(
+        run=["/opt/svc/bin/svc"], environment_variables={"PATH": "/declared/bin"}
+    )
+    assert (
+        manager.plist_payload(formula, declared)["EnvironmentVariables"]["PATH"]
+        == "/declared/bin"
+    )
+    user = ServiceSpec(
+        run=["/opt/svc/bin/svc"], user_environment_variables={"PATH": "/user/bin"}
+    )
+    assert user.effective_environment_variables() == {"PATH": "/user/bin"}
+    assert (
+        manager.plist_payload(formula, user)["EnvironmentVariables"]["PATH"]
+        == "/user/bin"
+    )
 
 
 def test_plist_generation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1598,8 +1598,8 @@ def test_formula_version_object_semantics(tmp_path: Path) -> None:
   assert version < "1.10"
   assert version > 1
   assert_equal 0, version <=> "1.2.3"
-  assert_equal -1, version <=> "1.2.3.0"
-  assert version < "1.2.3.0"
+  assert_equal 0, version <=> "1.2.3.0"
+  assert version == "1.2.3.0"
   assert_equal 0, version <=> Version.new("1.2.3")
 end
 """,
@@ -2036,7 +2036,7 @@ def test_version_letter_segments_and_pkg_ordering(tmp_path: Path) -> None:
   assert_equal 0, beta <=> upper
   assert beta < release
   assert release > beta
-  assert Version.new("1.2.3a") < release
+  assert Version.new("1.2.3a") > release
   assert_equal "1.2.3-beta", beta.to_s
   pkg = PkgVersion.parse("1.2.3_2")
   assert_equal "1.2.3_2", pkg.to_s
@@ -2506,8 +2506,9 @@ def test_dsl_version_matches_python_token_semantics(tmp_path: Path) -> None:
   assert beta < pre
   assert pre < rc
   assert rc < patch
-  assert patch < Version.new("1.0")
-  assert Version.new("1.0.0") > Version.new("1.0")
+  assert Version.new("1.0") < patch
+  assert Version.new("1.0") < Version.new("1.0-foo")
+  assert Version.new("1.0.0") == Version.new("1.0")
   assert_equal 0, alpha.revision
   assert_equal 2, PkgVersion.parse("1.0-alpha_2").revision
   assert PkgVersion.parse("1.0-alpha_2").pre_release?
@@ -2628,16 +2629,18 @@ end
 def test_dsl_homebrew_mode_class_flag(tmp_path: Path) -> None:
     source = """do
   begin
-    refute Version.new("1.0") == Version.new("1.0.0")
-    Version.homebrew = true
     assert Version.new("1.0") == Version.new("1.0.0")
     assert_equal Version.new("1.0").hash, Version.new("1.0.0").hash
-    Version.with_homebrew(false) do
-      refute Version.new("1.0") == Version.new("1.0.0")
+    Version.legacy = true
+    refute Version.new("1.0") == Version.new("1.0.0")
+    Version.with_legacy(false) do
+      assert Version.new("1.0") == Version.new("1.0.0")
     end
-    assert Version.new("1.0") == Version.new("1.0.0")
-  ensure
     Version.homebrew = false
+    refute Version.new("1.0") == Version.new("1.0.0")
+  ensure
+    Version.legacy = false
+    Version.homebrew = nil
   end
 end
 """
@@ -2647,5 +2650,25 @@ end
         config,
         ruby=_REAL_RUBY,
         env={"PYBREW_VERSION_HOMEBREW": ""},
+    )
+    assert result.success is True
+
+
+@requires_ruby
+def test_dsl_legacy_mode_env_restores_extra_numeric_behavior(tmp_path: Path) -> None:
+    source = """do
+  assert Version.new("1.0.0") > Version.new("1.0")
+  refute Version.new("1.0") == Version.new("1.0.0")
+  assert Version.new("1.0-p1") < Version.new("1.0")
+  assert Version.new("1.0-foo") < Version.new("1.0")
+  assert_equal Version.new("1.0").hash, "1.0".hash
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(
+        formula,
+        config,
+        ruby=_REAL_RUBY,
+        env={"PYBREW_VERSION_LEGACY": "1"},
     )
     assert result.success is True
