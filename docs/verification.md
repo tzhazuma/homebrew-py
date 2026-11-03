@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-785 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
+786 passed, 5 skipped (CI matrix; local full suite blocked by host I/O)
 ```
 
 Breakdown of the feature slices:
@@ -898,6 +898,11 @@ local remote, commits a change, and confirms the CLI updates it.
   `#build=` compatibility accessors; `specs` returns stable/head and
   `spec_syms` matches.
 
+## Complete Utils::Curl helper surface
+
+- Added the remaining curl check/download/headers/redirect/checksum/workaround
+  helpers and Cloudflare/Incapsula predicates as safe bounded values.
+
 ## Cask fossil strategy
 
 - `Downloader.fetch_vcs` supports fossil (`clone` then `open`); cask
@@ -1446,9 +1451,9 @@ must not use AI to answer review comments.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `69f9f4a` (Cask fossil strategy)
-- CI run for `69f9f4a`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41561876547>
+- Latest feature commit: `1c96619` (complete Utils::Curl helpers)
+- CI run for `1c96619`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41562390511>
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
