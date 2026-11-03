@@ -1172,12 +1172,68 @@ def _flag_value(
     return None
 
 
-def _sanitize_assembler_options(payload: str) -> str:
-    """Filter unsafe path options out of a ``-Wa,`` assembler payload.
+_SAFE_ASSEMBLER_FLAGS = frozenset(
+    {
+        "--32",
+        "--64",
+        "--fatal-warnings",
+        "--no-warn",
+        "--noexecstack",
+        "--version",
+        "--warn",
+        "-EL",
+        "-EB",
+        "-adhln",
+        "-al",
+        "-an",
+        "-fPIC",
+        "-fpic",
+        "-g",
+        "-g0",
+        "-g1",
+        "-g2",
+        "-g3",
+        "-gdwarf-2",
+        "-gdwarf-4",
+        "-marm",
+        "-mbig-endian",
+        "-mlittle-endian",
+        "-mthumb",
+        "-mthumb-interwork",
+        "-v",
+        "-V",
+    }
+)
+_SAFE_ASSEMBLER_PREFIXES = (
+    "-a",
+    "-g",
+    "-march=",
+    "-mcpu=",
+    "-mfpu=",
+    "-mabi=",
+    "-mfloat-abi=",
+)
+_ASSEMBLER_DEFSYM_RE = re.compile(
+    r"^[A-Za-z_.$][A-Za-z0-9_.$]*=.*$"
+)
 
-    Safe assembler switches pass through unchanged.  Include/library path
-    options under the bounded system roots are dropped; unrelated paths are
-    preserved.  Commas are the option separator understood by drivers.
+
+def _is_safe_assembler_flag(part: str) -> bool:
+    return part in _SAFE_ASSEMBLER_FLAGS or any(
+        part.startswith(prefix) for prefix in _SAFE_ASSEMBLER_PREFIXES
+    )
+
+
+def _sanitize_assembler_options(
+    payload: str,
+    diagnostics: Optional[list[str]] = None,
+) -> str:
+    """Return a bounded-safe ``-Wa,`` assembler payload.
+
+    Only known-safe switches and ``--defsym`` definitions pass through.
+    Include/library paths are preserved outside the system roots.  Anything
+    else is dropped; when ``diagnostics`` is provided, a short reason is
+    appended for each dropped option.
     """
 
     parts = payload.split(",")
@@ -1193,27 +1249,67 @@ def _sanitize_assembler_options(payload: str) -> str:
                     if part == "-I"
                     else _SYSTEM_LIBRARY_ROOTS
                 )
-                if not _path_under(os.path.normpath(path_value), roots):
+                if _path_under(os.path.normpath(path_value), roots):
+                    if diagnostics is not None:
+                        diagnostics.append(
+                            f"dropped unsafe assembler path {part},{path_value}"
+                        )
+                else:
                     result.extend((part, path_value))
                 index += 2
                 continue
+            if diagnostics is not None:
+                diagnostics.append(
+                    f"dropped assembler option {part} without a path"
+                )
             index += 1
             continue
         if part.startswith("-I") and len(part) > 2:
-            if not _path_under(
-                os.path.normpath(part[2:]), _SYSTEM_INCLUDE_ROOTS
-            ):
+            if _path_under(os.path.normpath(part[2:]), _SYSTEM_INCLUDE_ROOTS):
+                if diagnostics is not None:
+                    diagnostics.append(
+                        f"dropped unsafe assembler path {part}"
+                    )
+            else:
                 result.append(part)
             index += 1
             continue
         if part.startswith("-L") and len(part) > 2:
-            if not _path_under(
-                os.path.normpath(part[2:]), _SYSTEM_LIBRARY_ROOTS
-            ):
+            if _path_under(os.path.normpath(part[2:]), _SYSTEM_LIBRARY_ROOTS):
+                if diagnostics is not None:
+                    diagnostics.append(
+                        f"dropped unsafe assembler path {part}"
+                    )
+            else:
                 result.append(part)
             index += 1
             continue
-        result.append(part)
+        if part in ("--defsym", "-defsym"):
+            if (
+                index + 1 < len(parts)
+                and _ASSEMBLER_DEFSYM_RE.match(parts[index + 1])
+            ):
+                result.extend((part, parts[index + 1]))
+                index += 2
+                continue
+            if diagnostics is not None:
+                diagnostics.append(
+                    f"dropped invalid assembler definition {part}"
+                )
+            index += 1
+            continue
+        if part.startswith("--defsym=") and _ASSEMBLER_DEFSYM_RE.match(
+            part[len("--defsym=") :]
+        ):
+            result.append(part)
+            index += 1
+            continue
+        if _is_safe_assembler_flag(part):
+            result.append(part)
+            index += 1
+            continue
+        if diagnostics is not None:
+            diagnostics.append(f"dropped unsafe assembler option {part!r}")
         index += 1
     return ",".join(result)
 
@@ -1223,6 +1319,7 @@ def sanitize_flag_list(
     prefix: Path,
     *,
     drop_prefix_flags: bool = False,
+    diagnostics: Optional[list[str]] = None,
 ) -> list[str]:
     """Return bounded-safe compiler flags.
 
@@ -1248,7 +1345,7 @@ def sanitize_flag_list(
             continue
         kind, path, consumed = parsed
         if kind == "assembler":
-            cleaned = _sanitize_assembler_options(path)
+            cleaned = _sanitize_assembler_options(path, diagnostics)
             if cleaned:
                 result.append("-Wa," + cleaned)
             index += consumed
@@ -1295,6 +1392,7 @@ def sanitize_build_flags(
     prefix: Path,
     *,
     drop_prefix_flags: bool = False,
+    diagnostics: Optional[list[str]] = None,
 ) -> str:
     """Sanitize a whitespace-separated flag string for a build environment."""
 
@@ -1307,7 +1405,10 @@ def sanitize_build_flags(
         arguments = text.split()
     return shlex.join(
         sanitize_flag_list(
-            arguments, prefix, drop_prefix_flags=drop_prefix_flags
+            arguments,
+            prefix,
+            drop_prefix_flags=drop_prefix_flags,
+            diagnostics=diagnostics,
         )
     )
 
@@ -1318,6 +1419,7 @@ def sanitize_build_flags(
 _SUPERENV_HELPER_SOURCE = '''#!/usr/bin/env python3
 """Bounded Superenv shim helper generated by pybrew."""
 import os
+import re
 import shlex
 import sys
 
@@ -1397,7 +1499,57 @@ def flag_value(args, index):
     return None
 
 
-def sanitize_assembler_options(payload):
+SAFE_ASSEMBLER_FLAGS = frozenset(
+    {
+        "--32",
+        "--64",
+        "--fatal-warnings",
+        "--no-warn",
+        "--noexecstack",
+        "--version",
+        "--warn",
+        "-EL",
+        "-EB",
+        "-adhln",
+        "-al",
+        "-an",
+        "-fPIC",
+        "-fpic",
+        "-g",
+        "-g0",
+        "-g1",
+        "-g2",
+        "-g3",
+        "-gdwarf-2",
+        "-gdwarf-4",
+        "-marm",
+        "-mbig-endian",
+        "-mlittle-endian",
+        "-mthumb",
+        "-mthumb-interwork",
+        "-v",
+        "-V",
+    }
+)
+SAFE_ASSEMBLER_PREFIXES = (
+    "-a",
+    "-g",
+    "-march=",
+    "-mcpu=",
+    "-mfpu=",
+    "-mabi=",
+    "-mfloat-abi=",
+)
+ASSEMBLER_DEFSYM_RE = re.compile(r"^[A-Za-z_.$][A-Za-z0-9_.$]*=.*$")
+
+
+def is_safe_assembler_flag(part):
+    return part in SAFE_ASSEMBLER_FLAGS or any(
+        part.startswith(prefix) for prefix in SAFE_ASSEMBLER_PREFIXES
+    )
+
+
+def sanitize_assembler_options(payload, diagnostics):
     parts = payload.split(",")
     result = []
     index = 0
@@ -1411,27 +1563,62 @@ def sanitize_assembler_options(payload):
                     if part == "-I"
                     else SYSTEM_LIBRARY_ROOTS
                 )
-                if not path_under(os.path.normpath(path_value), roots):
+                if path_under(os.path.normpath(path_value), roots):
+                    diagnostics.append(
+                        "dropped unsafe assembler path %s,%s"
+                        % (part, path_value)
+                    )
+                else:
                     result.extend((part, path_value))
                 index += 2
                 continue
+            diagnostics.append(
+                "dropped assembler option %s without a path" % part
+            )
             index += 1
             continue
         if part.startswith("-I") and len(part) > 2:
-            if not path_under(
-                os.path.normpath(part[2:]), SYSTEM_INCLUDE_ROOTS
-            ):
+            if path_under(os.path.normpath(part[2:]), SYSTEM_INCLUDE_ROOTS):
+                diagnostics.append(
+                    "dropped unsafe assembler path %s" % part
+                )
+            else:
                 result.append(part)
             index += 1
             continue
         if part.startswith("-L") and len(part) > 2:
-            if not path_under(
-                os.path.normpath(part[2:]), SYSTEM_LIBRARY_ROOTS
-            ):
+            if path_under(os.path.normpath(part[2:]), SYSTEM_LIBRARY_ROOTS):
+                diagnostics.append(
+                    "dropped unsafe assembler path %s" % part
+                )
+            else:
                 result.append(part)
             index += 1
             continue
-        result.append(part)
+        if part in ("--defsym", "-defsym"):
+            if (
+                index + 1 < len(parts)
+                and ASSEMBLER_DEFSYM_RE.match(parts[index + 1])
+            ):
+                result.extend((part, parts[index + 1]))
+                index += 2
+                continue
+            diagnostics.append(
+                "dropped invalid assembler definition %s" % part
+            )
+            index += 1
+            continue
+        if part.startswith("--defsym=") and ASSEMBLER_DEFSYM_RE.match(
+            part[len("--defsym="):]
+        ):
+            result.append(part)
+            index += 1
+            continue
+        if is_safe_assembler_flag(part):
+            result.append(part)
+            index += 1
+            continue
+        diagnostics.append("dropped unsafe assembler option %r" % part)
         index += 1
     return ",".join(result)
 
@@ -1567,6 +1754,7 @@ driver_spec = {
     "assembler-with-cpp": driver_cc,
 }.get(language, driver_cc)
 
+diagnostics = []
 filtered = []
 seen_sysroot = set()
 index = 0
@@ -1578,7 +1766,7 @@ while index < len(arguments):
         continue
     kind, path, consumed = parsed
     if kind == "assembler":
-        cleaned = sanitize_assembler_options(path)
+        cleaned = sanitize_assembler_options(path, diagnostics)
         if cleaned:
             filtered.append("-Wa," + cleaned)
         index += consumed
@@ -1609,6 +1797,9 @@ while index < len(arguments):
         seen_sysroot.add(normalised)
     filtered.extend(arguments[index:index + consumed])
     index += consumed
+
+for message in diagnostics:
+    print("pybrew superenv: %s" % message, file=sys.stderr)
 
 try:
     driver_argv = shlex.split(driver_spec)
@@ -1947,6 +2138,22 @@ _SOURCE_LANGUAGE_EXTENSIONS = {
     ".s": "assembler",
     ".asm": "assembler",
 }
+_SOURCE_EXPLICIT_LANGUAGES = {
+    "c": "c",
+    "c-header": "c",
+    "cpp-output": "c",
+    "c++": "c++",
+    "c++-header": "c++",
+    "c++-cpp-output": "c++",
+    "objective-c": "objc",
+    "objective-c-header": "objc",
+    "objective-c-cpp-output": "objc",
+    "objective-c++": "objc++",
+    "objective-c++-header": "objc++",
+    "objective-c++-cpp-output": "objc++",
+    "assembler": "assembler",
+    "assembler-with-cpp": "assembler-with-cpp",
+}
 
 
 def source_language(path: str) -> Optional[str]:
@@ -1956,6 +2163,112 @@ def source_language(path: str) -> Optional[str]:
     if suffix == ".S":
         return "assembler-with-cpp"
     return _SOURCE_LANGUAGE_EXTENSIONS.get(suffix.lower())
+
+
+_SOURCE_DRIVER_BY_LANGUAGE = {
+    "c": "cc",
+    "c++": "c++",
+    "objc": "objc",
+    "objc++": "objc++",
+    "assembler": "cc",
+    "assembler-with-cpp": "cc",
+}
+_SOURCE_OPTIONS_WITH_VALUES = frozenset(
+    {
+        "-o",
+        "-I",
+        "-L",
+        "-F",
+        "-framework",
+        "-isystem",
+        "-isysroot",
+        "-include",
+        "-imacros",
+        "-MF",
+        "-MT",
+        "-MQ",
+        "-arch",
+        "-target",
+        "--sysroot",
+        "-Xclang",
+        "-Xlinker",
+        "-u",
+        "-T",
+    }
+)
+
+
+@dataclass(frozen=True)
+class SourceCompilationUnit:
+    """Bounded per-file driver mapping for a compiler invocation."""
+
+    source: str
+    language: str
+    driver: str
+
+
+def split_mixed_language_sources(
+    arguments: Iterable[str],
+    *,
+    default_language: str = "c",
+) -> list[SourceCompilationUnit]:
+    """Map recognized source arguments to bounded driver names.
+
+    This is a planning helper, not a process splitter: a mixed invocation is
+    represented as one unit per source file so callers can drive per-file
+    compilation if they need it.  Generated shims deliberately keep a single
+    process and suppress ``-x`` for mixed sources.  Explicit ``-x`` applies to
+    every returned unit and takes precedence over filename extensions.
+    """
+
+    args = list(arguments)
+    explicit_seen = False
+    explicit_language: Optional[str] = None
+    sources: list[tuple[str, str]] = []
+    index = 0
+    while index < len(args):
+        token = args[index]
+        if token == "-x":
+            explicit_seen = True
+            if index + 1 < len(args):
+                explicit_language = _SOURCE_EXPLICIT_LANGUAGES.get(
+                    args[index + 1].strip().lower()
+                )
+            index += 2
+            continue
+        if token.startswith("-x") and len(token) > 2:
+            explicit_seen = True
+            explicit_language = _SOURCE_EXPLICIT_LANGUAGES.get(
+                token[2:].strip().lower()
+            )
+            index += 1
+            continue
+        if token in _SOURCE_OPTIONS_WITH_VALUES:
+            index += 2
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        language = source_language(token)
+        if language is not None:
+            sources.append((token, language))
+        index += 1
+
+    units: list[SourceCompilationUnit] = []
+    for source, extension_language in sources:
+        if explicit_seen:
+            language = explicit_language or default_language
+        else:
+            language = extension_language
+        driver = _SOURCE_DRIVER_BY_LANGUAGE.get(language)
+        if driver is None:
+            continue
+        units.append(
+            SourceCompilationUnit(
+                source=source, language=language, driver=driver
+            )
+        )
+    return units
 
 
 def architecture_environment(
@@ -2143,8 +2456,10 @@ def install_superenv_shims(
     source invocation the first source still selects the driver but no ``-x``
     is injected, letting the compiler infer each file by extension.  Bounded
     language flags are added only for a single known source language and no
-    explicit ``-x``.  This is a bounded compatibility layer, not Homebrew's
-    full Superenv.
+    explicit ``-x``.  Callers that need an actual per-file split can use
+    :func:`split_mixed_language_sources`, which returns a bounded driver map
+    without spawning processes.  This is a bounded compatibility layer, not
+    Homebrew's full Superenv.
     """
 
     env = dict(environment)
@@ -2164,7 +2479,12 @@ def install_superenv_shims(
         "LDFLAGS",
     ):
         if name in env:
-            env[name] = sanitize_build_flags(env[name], prefix)
+            diagnostics: list[str] = []
+            env[name] = sanitize_build_flags(
+                env[name], prefix, diagnostics=diagnostics
+            )
+            for message in diagnostics:
+                print(f"warning: {message}", file=sys.stderr)
 
     def real_driver(names: Iterable[str], fallback: str) -> str:
         for name in names:

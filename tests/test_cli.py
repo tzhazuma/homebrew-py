@@ -215,3 +215,13 @@ def test_linkage_json_structure(run_cli, sample) -> None:
     assert isinstance(payload["unsupported"], list)
     assert isinstance(payload["corrupt"], list)
     assert isinstance(payload["audit"], list)
+
+
+def test_doctor_linkage_json(run_cli, sample) -> None:
+    assert run_cli("install", "hello", bottle_tag=sample.tag).returncode == 0
+    proc = run_cli("doctor", "--linkage", "--json")
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is True
+    assert payload["linkage"]["issues"] == []
+    assert isinstance(payload["linkage"]["checked"], int)

@@ -2109,3 +2109,122 @@ def test_superenv_shims_sanitize_wa_options_and_s_pp_flags(
     )
     argv = shlex.split(_compiler_report(tmp_path / "cc-report.txt")["argv"])
     assert argv[argv.index("-x") + 1] == "assembler"
+
+
+def test_split_mixed_language_sources_maps_per_file_drivers() -> None:
+    import pybrew.source_builder as source_builder
+
+    units = source_builder.split_mixed_language_sources(
+        [
+            "-c",
+            "first.c",
+            "second.m",
+            "third.S",
+            "fourth.asm",
+            "-o",
+            "output.m",
+        ]
+    )
+    assert [
+        (unit.source, unit.language, unit.driver) for unit in units
+    ] == [
+        ("first.c", "c", "cc"),
+        ("second.m", "objc", "objc"),
+        ("third.S", "assembler-with-cpp", "cc"),
+        ("fourth.asm", "assembler", "cc"),
+    ]
+
+    explicit = source_builder.split_mixed_language_sources(
+        ["-x", "c++", "-c", "first.c", "second.m"]
+    )
+    assert [(unit.language, unit.driver) for unit in explicit] == [
+        ("c++", "c++"),
+        ("c++", "c++"),
+    ]
+
+    assert source_builder.split_mixed_language_sources(["-c"]) == []
+
+
+def test_wa_allow_list_and_diagnostics(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    diagnostics: list[str] = []
+    tokens = source_builder.sanitize_flag_list(
+        [
+            "-Wa,--noexecstack",
+            "-Wa,-alh",
+            "-Wa,--defsym,FOO=1",
+            "-Wa,--defsym=BAR=2",
+            "-Wa,-march=armv8",
+            "-Wa,-o,out",
+            "-Wa,--defsym,not-valid",
+            "-Wa,-I/usr/include",
+            "-Wa,-L/opt/assembler-lib",
+        ],
+        tmp_path / "prefix",
+        diagnostics=diagnostics,
+    )
+
+    assert "-Wa,--noexecstack" in tokens
+    assert "-Wa,-alh" in tokens
+    assert "-Wa,--defsym,FOO=1" in tokens
+    assert "-Wa,--defsym=BAR=2" in tokens
+    assert "-Wa,-march=armv8" in tokens
+    assert "-Wa,-L/opt/assembler-lib" in tokens
+    assert not any("-Wa,-o" in token for token in tokens)
+    assert not any("not-valid" in token for token in tokens)
+    assert not any("/usr/include" in token for token in tokens)
+    assert len(diagnostics) >= 3
+    assert any("unsafe assembler" in message for message in diagnostics)
+    assert any("invalid assembler definition" in message for message in diagnostics)
+
+    build_diagnostics: list[str] = []
+    assert (
+        source_builder.sanitize_build_flags(
+            "-Wa,-o,out",
+            tmp_path / "prefix",
+            diagnostics=build_diagnostics,
+        )
+        == ""
+    )
+    assert build_diagnostics
+
+
+def test_superenv_shim_reports_dropped_wa_options(tmp_path: Path) -> None:
+    import subprocess
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    fake_bin = tmp_path / "fake-bin"
+    cc = _fake_compiler(fake_bin, "clang", "cc-report.txt")
+    cxx = _fake_compiler(fake_bin, "clang++", "cxx-report.txt")
+    prepared = source_builder.build_environment(
+        config,
+        {
+            "PATH": str(fake_bin),
+            "PYBREW_SUPERENV": "1",
+            "PYBREW_CC": str(cc),
+            "PYBREW_CXX": str(cxx),
+        },
+    )
+    process = subprocess.run(
+        [
+            prepared.env["CC"],
+            "-Wa,--noexecstack",
+            "-Wa,-o,out",
+            "-Wa,--defsym,OK=1",
+            "-c",
+            "unit.s",
+        ],
+        cwd=tmp_path,
+        env=prepared.env,
+        text=True,
+        capture_output=True,
+        check=True,
+    )
+    argv = shlex.split(_compiler_report(tmp_path / "cc-report.txt")["argv"])
+    assert "-Wa,--noexecstack" in argv
+    assert "-Wa,--defsym,OK=1" in argv
+    assert not any("-Wa,-o" in token for token in argv)
+    assert "pybrew superenv" in process.stderr
+    assert "unsafe assembler option" in process.stderr

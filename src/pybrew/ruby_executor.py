@@ -3908,7 +3908,8 @@ module Sandbox
       end
 
       if strict?
-        args = ["--dev", "/dev", "--proc", "/proc"]
+        args = ["--dev", "/dev", "--proc", "/proc", "--unshare-user",
+                "--cap-drop", "ALL", "--die-with-parent"]
         sandbox_read_roots.each do |root|
           args << "--ro-bind" << root.to_s << root.to_s
         end
@@ -7114,11 +7115,13 @@ class Keg
   end
 
   def relocation_placeholder_pairs
-    {
-      HOMEBREW_PREFIX.to_s => "@@HOMEBREW_PREFIX@@",
-      HOMEBREW_CELLAR.to_s => "@@HOMEBREW_CELLAR@@",
-      relocation_repository_path.to_s => "@@HOMEBREW_REPOSITORY@@",
-    }
+    pairs = [
+      [HOMEBREW_PREFIX.to_s, "@@HOMEBREW_PREFIX@@"],
+      [HOMEBREW_CELLAR.to_s, "@@HOMEBREW_CELLAR@@"],
+    ]
+    repository = relocation_repository_path.to_s
+    pairs << [repository, "@@HOMEBREW_REPOSITORY@@"] unless repository == HOMEBREW_PREFIX.to_s
+    pairs
   end
 
   def relocation_mapping(replacements = {})
@@ -7271,10 +7274,67 @@ class Keg
     kind == :macho ? Utils.which("install_name_tool") : Utils.which("patchelf")
   end
 
+  def codesign_tool
+    if ENV.key?("PYBREW_CODESIGN") && !ENV["PYBREW_CODESIGN"].to_s.empty?
+      path = Pathname.new(ENV["PYBREW_CODESIGN"].to_s)
+      return path.file? && path.executable? ? path.to_s : nil
+    end
+
+    Utils.which("codesign")
+  end
+
+  def expand_relocation_placeholders(value)
+    text = value.to_s
+    relocation_placeholder_pairs.each { |path, placeholder| text = text.gsub(placeholder, path) }
+    text
+  end
+
+  def retarget_symlinks(mapping = {}, dry_run: false, strict: false)
+    report = { "files" => [], "changes" => [], "skipped" => [], "dry_run" => !!dry_run }
+    keg_root = @path.expand_path
+    (mapping || {}).each do |link_key, target|
+      link_path = Pathname.new(link_key.to_s)
+      link_path = @path/link_path unless link_path.absolute?
+      expanded = link_path.expand_path
+      unless expanded.to_s == keg_root.to_s || expanded.to_s.start_with?("#{keg_root}/")
+        report["skipped"] << { "file" => link_key.to_s, "reason" => "outside keg" }
+        next
+      end
+      unless File.symlink?(expanded.to_s)
+        report["skipped"] << { "file" => link_key.to_s, "reason" => "not a symlink" }
+        next
+      end
+      new_target = expand_relocation_placeholders(target)
+      report["files"] << expanded.to_s
+      report["changes"] << {
+        "file" => expanded.to_s,
+        "from" => File.readlink(expanded.to_s),
+        "to" => new_target,
+      }
+      unless dry_run
+        expanded.unlink
+        File.symlink(new_target, expanded.to_s)
+      end
+    end
+    if strict && !report["skipped"].empty?
+      skipped = report["skipped"].first
+      raise RuntimeError,
+            "symlink retargeting skipped #{skipped["file"]}: #{skipped["reason"]}"
+    end
+    report
+  end
+
   def binary_relocation_plan(replacements = {}, files: nil, rpath_additions: [],
-                             rpath_deletions: [])
+                             rpath_deletions: [], codesign: false)
     mapping = relocation_mapping(replacements)
-    plan = { "files" => [], "commands" => [], "skipped" => [] }
+    plan = {
+      "files" => [],
+      "commands" => [],
+      "skipped" => [],
+      "codesign_files" => [],
+      "codesign_commands" => [],
+      "codesign_skipped" => [],
+    }
     binary_relocation_files(files).each do |path|
       kind = binary_kind(path)
       tool = binary_relocation_tool(kind)
@@ -7299,13 +7359,29 @@ class Keg
         mapping.each do |old, new|
           commands << [tool, "--replace-needed", old, new, path.to_s]
         end
-        unless Array(rpath_additions).empty?
+        if !Array(rpath_additions).empty?
           rpath = Array(rpath_additions).map(&:to_s).join(":")
           commands << [tool, "--set-rpath", rpath, path.to_s]
+        elsif !Array(rpath_deletions).empty?
+          commands << [tool, "--remove-rpath", path.to_s]
         end
       end
       next if commands.empty?
 
+      if kind == :macho && codesign
+        sign_tool = codesign_tool
+        if sign_tool.nil?
+          plan["codesign_skipped"] << {
+            "file" => path.to_s,
+            "reason" => "codesign tool not found",
+          }
+        else
+          plan["codesign_files"] << path.to_s
+          plan["codesign_commands"] << [
+            sign_tool, "--force", "--sign", "-", path.to_s
+          ]
+        end
+      end
       plan["files"] << path.to_s
       plan["commands"].concat(commands)
     end
@@ -7313,22 +7389,25 @@ class Keg
   end
 
   def binary_relocation_report(replacements = {}, files: nil, rpath_additions: [],
-                               rpath_deletions: [])
+                               rpath_deletions: [], codesign: false)
     binary_relocation_plan(
       replacements,
       files: files,
       rpath_additions: rpath_additions,
-      rpath_deletions: rpath_deletions
+      rpath_deletions: rpath_deletions,
+      codesign: codesign
     )
   end
 
   def relocate_binary_files(replacements = {}, dry_run: false, files: nil,
-                            strict: false, rpath_additions: [], rpath_deletions: [])
+                            strict: false, rpath_additions: [], rpath_deletions: [],
+                            codesign: false)
     plan = binary_relocation_plan(
       replacements,
       files: files,
       rpath_additions: rpath_additions,
-      rpath_deletions: rpath_deletions
+      rpath_deletions: rpath_deletions,
+      codesign: codesign
     )
     if strict && !plan["skipped"].empty?
       skipped = plan["skipped"].first
@@ -7336,6 +7415,12 @@ class Keg
             "binary relocation tool unavailable for #{skipped["file"]} " \
             "(#{skipped["kind"]}); install install_name_tool/patchelf or set " \
             "PYBREW_INSTALL_NAME_TOOL/PYBREW_PATCHELF"
+    end
+    if codesign && strict && !plan["codesign_skipped"].empty?
+      skipped = plan["codesign_skipped"].first
+      raise RuntimeError,
+            "codesign tool unavailable for #{skipped["file"]}; set PYBREW_CODESIGN " \
+            "or install codesign"
     end
     executed = []
     unless dry_run
@@ -7350,11 +7435,27 @@ class Keg
         end
       end
     end
+    codesigned = []
+    unless dry_run
+      plan["codesign_commands"].each do |command|
+        begin
+          Utils.popen_read(*command.map(&:to_s), safe: true)
+          codesigned << command
+        rescue ScriptError, StandardError => error
+          raise RuntimeError,
+                "codesign failed for #{command.last}: #{error.class}: #{error.message}"
+        end
+      end
+    end
     {
       "files" => plan["files"],
       "commands" => plan["commands"],
       "executed" => executed,
       "skipped" => plan["skipped"],
+      "codesign_files" => plan["codesign_files"],
+      "codesign_commands" => plan["codesign_commands"],
+      "codesigned" => codesigned,
+      "codesign_skipped" => plan["codesign_skipped"],
       "dry_run" => !!dry_run,
     }
   end

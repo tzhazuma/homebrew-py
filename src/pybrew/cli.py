@@ -284,6 +284,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     doctor_cmd = subparsers.add_parser("doctor", parents=[common], help="check the prefix for problems")
     doctor_cmd.add_argument("--json", action="store_true")
+    doctor_cmd.add_argument(
+        "--linkage", action="store_true", help="also check dynamic linkage of installed kegs"
+    )
 
     linkage_cmd = subparsers.add_parser(
         "linkage", parents=[common], help="check an installed keg's dynamic linkage"
@@ -1328,8 +1331,37 @@ def cmd_services(args: argparse.Namespace) -> int:
 def cmd_doctor(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     issues = diagnose_issues(config)
+    linkage_payload = None
+    if getattr(args, "linkage", False):
+        installer = Installer(config, _loader(config))
+        report = installer.linkage_report(all_formulae=True)
+        linkage_payload = {
+            "checked": report.checked,
+            "skipped": report.skipped,
+            "issues": [asdict(issue) for issue in report.issues],
+            "unsupported": [asdict(problem) for problem in report.unsupported],
+            "corrupt": [asdict(problem) for problem in report.corrupt],
+            "audit": [asdict(audit) for audit in getattr(report, "audit", [])],
+        }
+        for issue in report.issues:
+            issues.append(
+                {
+                    "category": "linkage",
+                    "message": f"{issue.path}: {issue.reference} ({issue.reason})",
+                }
+            )
+        for problem in report.corrupt:
+            issues.append(
+                {
+                    "category": "linkage",
+                    "message": f"{problem.path}: corrupt ({problem.detail})",
+                }
+            )
     if args.json:
-        print(json.dumps({"ok": not issues, "issues": issues}, indent=2))
+        payload = {"ok": not issues, "issues": issues}
+        if linkage_payload is not None:
+            payload["linkage"] = linkage_payload
+        print(json.dumps(payload, indent=2))
         return 0 if not issues else 1
     if not issues:
         print("Your pybrew prefix looks healthy.")

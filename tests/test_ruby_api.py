@@ -7957,3 +7957,131 @@ def test_sandbox_strict_bwrap_args(
         "false",
         "true",
     ]
+
+
+def test_keg_codesign_symlink_retarget_and_elf_rpath(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    int_log = tmp_path / "install-name-tool.log"
+    elf_log = tmp_path / "patchelf.log"
+    sign_log = tmp_path / "codesign.log"
+
+    def fake_tool(name: str, log: Path) -> Path:
+        path = tmp_path / name
+        path.write_text(
+            "#!/bin/sh\n"
+            'printf \'%s\\n\' "$@" >> "' + str(log) + '"\n'
+            "exit 0\n"
+        )
+        path.chmod(0o755)
+        return path
+
+    install_name_tool = fake_tool("fake-install-name-tool", int_log)
+    patchelf = fake_tool("fake-patchelf", elf_log)
+    codesign = fake_tool("fake-codesign", sign_log)
+    monkeypatch.setenv("PYBREW_INSTALL_NAME_TOOL", str(install_name_tool))
+    monkeypatch.setenv("PYBREW_PATCHELF", str(patchelf))
+    monkeypatch.setenv("PYBREW_CODESIGN", str(codesign))
+    monkeypatch.setenv("FAKE_CODESIGN_LOG", str(sign_log))
+    monkeypatch.setenv("FAKE_ELF_LOG", str(elf_log))
+    keg = _run_raw_body(
+        tmp_path,
+        """
+keg_path = prefix
+(keg_path/"bin").mkpath
+macho = keg_path/"bin"/"macho"
+macho.binwrite([0xCF, 0xFA, 0xED, 0xFE].pack("C*") + "dummy")
+elf = keg_path/"bin"/"elf"
+elf.binwrite([0x7F, 0x45, 0x4C, 0x46].pack("C*") + "dummy")
+link = keg_path/"bin"/"retarget"
+link.make_symlink("/old/target") unless link.symlink?
+keg = Keg.new(keg_path)
+mapping = { "/old/lib" => "/new/lib" }
+plan = keg.binary_relocation_plan(mapping, files: [macho], codesign: true)
+real = keg.relocate_binary_files(mapping, files: [macho], codesign: true)
+elf_run = keg.relocate_binary_files({}, files: [elf], rpath_deletions: ["@loader_path"])
+dry_links = keg.retarget_symlinks(
+  { "bin/retarget" => "@@HOMEBREW_PREFIX@@/lib/new" }, dry_run: true
+)
+before_target = link.readlink.to_s
+real_links = keg.retarget_symlinks(
+  { "bin/retarget" => "@@HOMEBREW_PREFIX@@/lib/new" }
+)
+after_target = link.readlink.to_s
+strict_error = begin
+  keg.retarget_symlinks({ "bin/missing" => "/tmp/x" }, strict: true)
+  "none"
+rescue => error
+  error.class.name + "|" + error.message.include?("skipped").to_s
+end
+ENV["PYBREW_CODESIGN"] = "/nonexistent/codesign"
+missing_plan = keg.binary_relocation_plan(mapping, files: [macho], codesign: true)
+missing_strict = begin
+  keg.relocate_binary_files(mapping, files: [macho], codesign: true, strict: true)
+  "none"
+rescue => error
+  error.class.name + "|" + error.message.include?("codesign tool unavailable").to_s
+end
+sign_raw = Pathname.new(ENV["FAKE_CODESIGN_LOG"]).read
+(prefix/"codesign-symlink.txt").write [
+  plan["codesign_commands"].length.to_s,
+  real["executed"].length.to_s, real["codesigned"].length.to_s,
+  sign_raw.include?("--force").to_s, sign_raw.include?("--sign").to_s,
+  sign_raw.include?("-").to_s,
+  Pathname.new(ENV["FAKE_ELF_LOG"]).read.include?("--remove-rpath").to_s,
+  dry_links["changes"].length.to_s, before_target,
+  (after_target == "#{HOMEBREW_PREFIX}/lib/new").to_s,
+  strict_error, missing_plan["codesign_skipped"].length.to_s, missing_strict
+].join("\\n")
+""",
+        name="ruby-keg-codesign-symlink",
+    )
+    assert (keg / "codesign-symlink.txt").read_text().splitlines() == [
+        "1",
+        "1",
+        "1",
+        "true",
+        "true",
+        "true",
+        "true",
+        "1",
+        "/old/target",
+        "true",
+        "RuntimeError|true",
+        "1",
+        "RuntimeError|true",
+    ]
+
+
+def test_sandbox_strict_bwrap_hardening_flags(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    fake_bwrap = tmp_path / "bwrap"
+    fake_bwrap.write_text("#!/bin/sh\nexit 0\n")
+    fake_bwrap.chmod(0o755)
+    formula = _formula(
+        "ruby-bwrap-hardening",
+        "1.0",
+        (
+            '  ENV["PYBREW_SANDBOX"] = "1"\n'
+            '  ENV["PYBREW_SANDBOX_STRICT"] = "1"\n'
+            '  ENV["PYBREW_SANDBOX_PATH"] = "' + str(fake_bwrap) + '"\n'
+            '  args = Sandbox.bwrap_policy_args\n'
+            '  joined = args.join(",")\n'
+            '  (prefix/"bwrap-hardening.txt").write [\n'
+            '    joined.include?("--unshare-user").to_s,\n'
+            '    joined.include?("--cap-drop,ALL").to_s,\n'
+            '    joined.include?("--die-with-parent").to_s,\n'
+            '    joined.include?("--ro-bind,/,/").to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "bwrap-hardening.txt").read_text().splitlines() == [
+        "true",
+        "true",
+        "true",
+        "false",
+    ]
