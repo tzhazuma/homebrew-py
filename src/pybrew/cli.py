@@ -1075,7 +1075,7 @@ def cmd_autoremove(args: argparse.Namespace) -> int:
 
 def cmd_cleanup(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
-    removed = cleanup(config, dry_run=args.dry_run)
+    removed = cleanup(config, dry_run=args.dry_run, loader=_loader(config))
     for keg in removed:
         print(("Would remove: " if args.dry_run else "Removed: ") + str(keg))
     if args.prune_cache:

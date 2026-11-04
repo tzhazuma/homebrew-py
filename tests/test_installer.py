@@ -36,6 +36,7 @@ from pybrew.installer import (
     LinkageError,
     build_keg_sbom,
     check_linkage,
+    dylib_to_dep,
     read_bottle_manifest,
 )
 from pybrew.models import (
@@ -1708,3 +1709,17 @@ def test_write_receipt_tab_compatible_fields(tmp_path: Path) -> None:
     assert receipt["compiler"] == "clang"
     assert receipt["arch"] == "arm64"
     assert receipt["changed_files"] == ["bin/tool"]
+
+
+def test_dylib_to_dep_attributes_opt_and_cellar_paths(tmp_path: Path) -> None:
+    prefix = tmp_path / "prefix"
+    assert (
+        dylib_to_dep(str(prefix / "opt" / "openssl@3" / "lib" / "libssl.dylib"), prefix)
+        == "openssl@3"
+    )
+    assert (
+        dylib_to_dep(str(prefix / "Cellar" / "libslirp" / "4.9.6" / "lib" / "libslirp.so"), prefix)
+        == "libslirp"
+    )
+    assert dylib_to_dep("/usr/lib/libSystem.B.dylib", prefix) is None
+    assert dylib_to_dep(str(prefix / "opt" / "../escape" / "lib" / "x.dylib"), prefix) is None

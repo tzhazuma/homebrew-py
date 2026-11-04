@@ -6,7 +6,7 @@ claiming full parity with every file under `Library/Homebrew`.
 
 ## Current baseline
 
-- Full test suite: 1152 passed, 5 skipped (2026-11-04 upstream sync + follow-up after Homebrew `86e082cb08`)
+- Full test suite: 1154 passed, 5 skipped (2026-11-05 upstream sync after Homebrew `6ceeda0fc6`)
 - CI: Ubuntu 3.9 / 3.12 + macOS 3.12
 - Optional Ruby bridge remains opt-in; default parser behavior is unchanged.
 
@@ -16,7 +16,7 @@ claiming full parity with every file under `Library/Homebrew`.
 | --- | --- | --- |
 | Formulary source loader | Partial | `load_formula_from_path` plus upstream `Formulary.from_path`/`resolve_from_path`/`from_tap_path`/`from_bottle` (extracts the bottle's embedded `.brew/<name>.rb` recipe); path+mtime cache, stale reload, API-struct validation, local/channeled/remote API JSON (ETag/Last-Modified, bearer token, HS256 JWS), tap `Aliases/` plus bounded in-source `formula_alias`/`alias_name` scanning. No full multi-channel remote subsetting/embedded-key/RS256 |
 | Formulary class cache / reload semantics | Completed | Path+mtime class cache with flags/namespace keys, stale reload and `clear_cache` invalidation; covered by tests |
-| FormulaInstaller fetch/build/deps/link/cleanup | Partial | Loaded-source flow runs fetch/build/deps/link/clean/finish; Python installer has bottle manifest pre-validation/summary, source/build metadata + keg SBOM + Tab-compatible receipt fields (time/source_modified_time/compiler/arch/changed_files), formula-level/all-installed linkage reports, stale-link cleanup, hardlink handling and deterministic order. Bounded dyld/ld.so approximation |
+| FormulaInstaller fetch/build/deps/link/cleanup | Partial | Loaded-source flow runs fetch/build/deps/link/clean/finish; Python installer has bottle manifest pre-validation/summary, source/build metadata + keg SBOM + Tab-compatible receipt fields (time/source_modified_time/compiler/arch/changed_files), formula-level/all-installed linkage reports, stale-link cleanup, hardlink handling and deterministic order. Bounded dyld/ld.so approximation; `dylib_to_dep` attributes `/opt`/`Cellar` references; cleanup keeps the newest installed keg when the latest formula version is absent |
 | Compiler selection / Superenv build env | Partial | PATH-based compiler probing, opt-in Superenv shims with flag/rpath sanitization, SDKROOT/xcrun/LDFLAGS, arch/ARCHFLAGS, source-extension dispatch, bounded `-Wa,*` allow-list + diagnostics, mixed-language split API/no forced `-x`, C/C++/OBJC/OBJCXX standards/wrappers. Still not full Homebrew Superenv |
 | Sandbox execution | Partial | Default stays safe no-sandbox; opt-in backend auto-detects `sandbox-exec`/`bwrap`, collects allow/deny rules and generates `allow default`/strict deny-default profiles or stricter bwrap bind/unshare-net args via `apply!`; missing backend fails clearly. No seccomp/capability hardening; roots/ops are hand-written |
 

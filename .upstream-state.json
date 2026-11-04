@@ -1,25 +1,25 @@
 {
   "brew": {
     "default_branch": "main",
-    "head_date": "2026-11-03T22:27:59Z",
-    "head_message": "Merge pull request #24463 from Homebrew/bump-non-pypi-url-pypi-resources",
-    "head_sha": "86e082cb082ab7914d8ffd29685f9ccbdbbbcdbd",
-    "head_url": "https://github.com/Homebrew/brew/commit/86e082cb082ab7914d8ffd29685f9ccbdbbbcdbd",
+    "head_date": "2026-11-04T16:55:37Z",
+    "head_message": "Merge pull request #24478 from Homebrew/dispatch-pr-repositories",
+    "head_sha": "6ceeda0fc65e173d84a7ae8d104f222618970120",
+    "head_url": "https://github.com/Homebrew/brew/commit/6ceeda0fc65e173d84a7ae8d104f222618970120",
     "release": {
-      "name": "7.0.11",
-      "published_at": "2026-10-26T08:20:07Z",
-      "tag": "7.0.11",
-      "url": "https://github.com/Homebrew/brew/releases/tag/7.0.11"
+      "name": "7.0.12",
+      "published_at": "2026-11-02T08:36:59Z",
+      "tag": "7.0.12",
+      "url": "https://github.com/Homebrew/brew/releases/tag/7.0.12"
     },
     "repo": "Homebrew/brew"
   },
-  "checked_at": "2026-11-04T01:12:00+00:00",
+  "checked_at": "2026-11-04T19:24:18+00:00",
   "core": {
     "default_branch": "main",
-    "head_date": "2026-11-02T06:26:26Z",
-    "head_message": "Merge pull request #321634 from sghng/beszel-agent-0.21.1",
-    "head_sha": "b665a4681f55b9f228a23c01b1646dcd882ff338",
-    "head_url": "https://github.com/Homebrew/homebrew-core/commit/b665a4681f55b9f228a23c01b1646dcd882ff338",
+    "head_date": "2026-11-04T18:35:31Z",
+    "head_message": "Merge pull request #323459 from Homebrew/bump-swagger-codegen-3.0.85",
+    "head_sha": "28bbf74648e6fcff618da156073aef925dd48542",
+    "head_url": "https://github.com/Homebrew/homebrew-core/commit/28bbf74648e6fcff618da156073aef925dd48542",
     "release": null,
     "repo": "Homebrew/homebrew-core"
   }

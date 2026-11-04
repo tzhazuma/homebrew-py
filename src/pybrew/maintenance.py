@@ -92,8 +92,13 @@ def cleanup(
     config: Config,
     dry_run: bool = False,
     keep_installed: Optional[Iterable[str]] = None,
+    loader: Optional[FormulaLoader] = None,
 ) -> list[Path]:
-    """Remove old kegs, keeping the opt-linked keg (or the newest one)."""
+    """Remove old kegs, keeping the opt-linked keg (or the newest one).
+
+    Matching current Homebrew, if the latest formula version is not installed
+    we still keep the newest installed keg and only prune older ones.
+    """
 
     cellar = Cellar(config)
     linker = Linker(config)
@@ -108,6 +113,15 @@ def cleanup(
             keep = linked.name
         if keep is None or keep not in versions:
             keep = versions[-1]
+        if loader is not None:
+            try:
+                latest = loader.load(name).pkg_version
+            except Exception:
+                latest = None
+            if latest is not None and latest not in versions:
+                # The newest upstream version is absent: never delete the
+                # newest installed keg just because an older one is linked.
+                keep = versions[-1]
         for version in versions:
             if version == keep:
                 continue

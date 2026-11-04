@@ -1,5 +1,18 @@
 # Verification record
 
+## Upstream sync 2026-11-05 — Homebrew `6ceeda0fc6`
+
+- Advanced `.upstream-state.json` from `86e082cb08` to `6ceeda0fc6`
+  (Homebrew/brew `main`, release 7.0.12; core `28bbf746`).
+- Implemented the actionable upstream delta:
+  - `dylib_to_dep` attribution for missing `/opt` and `/Cellar` references,
+    exposed on `LinkageIssue.dep`.
+  - Cleanup keeps the newest installed keg when the latest formula version is
+    not installed, instead of deleting it because an older keg is opt-linked.
+- Full suite: **1154 passed, 5 skipped**.
+- Real install verification: `REAL INSTALL VERIFIED`.
+
+
 Date: 2026-10-27 (Asia/Shanghai)
 Revision: pybrew 0.1.0
 
@@ -22,7 +35,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-1152 passed, 5 skipped (local full suite, upstream sync follow-up 2026-11-04)
+1154 passed, 5 skipped (local full suite, upstream sync follow-up 2026-11-04)
 ```
 
 Breakdown of the feature slices:
@@ -1523,7 +1536,7 @@ must not use AI to answer review comments.
     `trash`, with the existing allowed-root checks.
   - `livecheck` `throttle` rate/days mutual exclusion.
   - `Keg#formula_preserve_rpath?` now honors `preserve_rpath` in an installed `.brew` recipe.
-- Full local suite: **1152 passed, 5 skipped**.
+- Full local suite: **1154 passed, 5 skipped**.
 - Real install verification: `scripts/verify_real_install.py` passes.
 
 ## Upstream API sync — 2026-11-04

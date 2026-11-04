@@ -885,6 +885,7 @@ class LinkageIssue:
     kind: str
     reason: str = "missing"
     keg: Optional[str] = None
+    dep: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -1619,6 +1620,31 @@ def _reference_exists(
     return False
 
 
+_PACKAGE_NAME_RE = re.compile(r"[A-Za-z0-9_+\-.@]+")
+
+
+def dylib_to_dep(dylib: str, prefix: Path) -> Optional[str]:
+    """Return the formula name owning a Cellar/opt dylib path.
+
+    This mirrors the attribution half of Homebrew's ``dylib_to_dep`` without
+    resolving symlinks or touching the network.  It accepts both
+    ``<prefix>/opt/<name>/...`` and ``<prefix>/Cellar/<name>/<version>/...``.
+    """
+    text = str(dylib)
+    root = str(Path(prefix).resolve())
+    for kind in ("opt", "Cellar"):
+        marker = f"{root}/{kind}/"
+        if not text.startswith(marker):
+            continue
+        remainder = text[len(marker):]
+        candidate = remainder.split("/", 1)[0]
+        if candidate in {".", ".."}:
+            return None
+        if _PACKAGE_NAME_RE.fullmatch(candidate):
+            return candidate
+    return None
+
+
 def check_linkage(
     keg: Path,
     config: Optional[Config] = None,
@@ -1698,6 +1724,7 @@ def check_linkage(
                                 reference,
                                 "elf",
                                 keg=str(keg),
+                                dep=dylib_to_dep(reference, config.prefix) if config is not None else None,
                             )
                         )
                 for tag, audit_reference in audits:
@@ -1753,6 +1780,7 @@ def check_linkage(
                             reference,
                             "macho",
                             keg=str(keg),
+                            dep=dylib_to_dep(reference, config.prefix) if config is not None else None,
                         )
                     )
     return report

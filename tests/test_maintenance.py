@@ -130,3 +130,20 @@ def test_leaves_and_uses(run_cli, sample) -> None:
     assert "hello-dep" in uses.stdout
     missing = run_cli("uses", "ghost")
     assert missing.returncode == 1
+
+
+def test_cleanup_keeps_newest_when_latest_formula_not_installed(run_cli, sample) -> None:
+    assert run_cli("install", "hello", bottle_tag=sample.tag).returncode == 0
+    old = sample.prefix / "Cellar" / "hello" / "0.9"
+    old.mkdir(parents=True)
+    (old / "old.txt").write_text("old\n")
+    opt = sample.prefix / "opt" / "hello"
+    if opt.is_symlink() or opt.exists():
+        opt.unlink()
+    opt.symlink_to(old)
+    _bump_formula(sample)
+
+    proc = run_cli("cleanup")
+    assert proc.returncode == 0, proc.stderr
+    assert not old.exists()
+    assert (sample.prefix / "Cellar" / "hello" / "1.0").is_dir()
