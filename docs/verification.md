@@ -1787,8 +1787,9 @@ edge cases), not missing method names in the audited core files.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: pending upstream-sync push
-- Previous Wave 11 CI: `41736864419`
+- Latest feature commit: `8dae5b8` (upstream Ruby API sync, Homebrew `86e082cb08`)
+- CI run for `8dae5b8`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41752470081>
 
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
