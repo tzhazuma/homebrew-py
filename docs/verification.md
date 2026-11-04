@@ -11,6 +11,7 @@
     not installed, instead of deleting it because an older keg is opt-linked.
 - Full suite: **1154 passed, 5 skipped**.
 - Real install verification: `REAL INSTALL VERIFIED`.
+- CI run `41897391401` for `1987b92`: Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12 all green.
 
 
 Date: 2026-10-27 (Asia/Shanghai)
