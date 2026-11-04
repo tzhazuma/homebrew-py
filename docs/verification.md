@@ -1803,8 +1803,9 @@ edge cases), not missing method names in the audited core files.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: pending follow-up push
-- Previous upstream-sync CI: `41752470081`
+- Latest feature commit: `19d7959` (upstream follow-up: CaskLoader/from_bottle/zap)
+- CI run for `19d7959`:
+  <https://github.com/tzhazuma/homebrew-py/actions/runs/41782789878>
 
 
   - `test (ubuntu-22.04, py3.9)` — success
