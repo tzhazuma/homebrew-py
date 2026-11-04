@@ -8189,3 +8189,25 @@ def test_formulary_from_bottle_local_recipe(
     lines = (keg / "from-bottle.txt").read_text().splitlines()
     assert lines[0] == "bottle-fixture"
     assert lines[1] == str(bottle)
+
+
+def test_keg_formula_preserve_rpath_from_installed_recipe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    body = (
+        '  keg_path = prefix/"Cellar"/"preserve-fixture"/"1.0"\n'
+        '  (keg_path/".brew").mkpath\n'
+        '  (keg_path/"INSTALL_RECEIPT.json").write(\'{"tap":""}\')\n'
+        '  (keg_path/".brew"/"preserve-fixture.rb").write(<<~RUBY)\n'
+        "    class PreserveFixture < Formula\n"
+        "      preserve_rpath\n"
+        "      def install; end\n"
+        "    end\n"
+        "  RUBY\n"
+        '  (prefix/"preserve-rpath.txt").write(\n'
+        '    Keg.new(keg_path).formula_preserve_rpath?.to_s\n'
+        '  )\n'
+    )
+    keg = _run_raw_body(tmp_path, body, name="preserve-rpath")
+    assert (keg / "preserve-rpath.txt").read_text().strip() == "true"

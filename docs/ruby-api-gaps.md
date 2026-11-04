@@ -6,7 +6,7 @@ claiming full parity with every file under `Library/Homebrew`.
 
 ## Current baseline
 
-- Full test suite: 1151 passed, 5 skipped (2026-11-04 upstream sync + follow-up after Homebrew `86e082cb08`)
+- Full test suite: 1152 passed, 5 skipped (2026-11-04 upstream sync + follow-up after Homebrew `86e082cb08`)
 - CI: Ubuntu 3.9 / 3.12 + macOS 3.12
 - Optional Ruby bridge remains opt-in; default parser behavior is unchanged.
 
@@ -37,7 +37,7 @@ claiming full parity with every file under `Library/Homebrew`.
 
 | Item | Status | Notes |
 | --- | --- | --- |
-| Keg internal path/link details | Partial | relative-path handling, optlink, alias/record cleanup, linkage, `deleted_formula?`/`formula_preserve_rpath?`, text and Mach-O/ELF binary relocation (`install_name_tool`/`patchelf`), optional ad-hoc codesign, explicit symlink retargeting, ELF `--remove-rpath` and strict bwrap hardening. Fake-tool tests; no entitlements/custom identity/signature verification |
+| Keg internal path/link details | Partial | relative-path handling, optlink, alias/record cleanup, linkage, `deleted_formula?`/`formula_preserve_rpath?` (honors recipe `preserve_rpath`), text and Mach-O/ELF binary relocation (`install_name_tool`/`patchelf`), optional ad-hoc codesign, explicit symlink retargeting, ELF `--remove-rpath` and strict bwrap hardening. Fake-tool tests; no entitlements/custom identity/signature verification |
 | MacOS SDK/Xcode/CLT detection | Partial | env overrides (developer dir/SDK/Xcode/CLT versions) and Xcode detection bug fix; broad host detection remains best-effort |
 | Utils modules | Partial | `Utils::Path`/Git/Curl/Gzip/Tar/Zip/Cp/Popen/Bottles/Svn/Analytics/SPDX exist; GitHub has GraphQL transport, GraphQL-first repository/PR/commits/labels/files/reviews/team/sponsorship with cursor pagination (10 pages) and rate-limit fields, REST fallback and Enterprise base URL; Sandbox rules/profile generation is bounded |
 | SystemConfig host details | Partial | sections exist; host-specific output is minimal |

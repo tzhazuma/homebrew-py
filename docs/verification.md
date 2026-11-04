@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-1151 passed, 5 skipped (local full suite, upstream sync follow-up 2026-11-04)
+1152 passed, 5 skipped (local full suite, upstream sync follow-up 2026-11-04)
 ```
 
 Breakdown of the feature slices:
@@ -1522,7 +1522,8 @@ must not use AI to answer review comments.
   - Cask `zap` supports `delete`, `rmdir` and `pkgutil` in addition to
     `trash`, with the existing allowed-root checks.
   - `livecheck` `throttle` rate/days mutual exclusion.
-- Full local suite: **1151 passed, 5 skipped**.
+  - `Keg#formula_preserve_rpath?` now honors `preserve_rpath` in an installed `.brew` recipe.
+- Full local suite: **1152 passed, 5 skipped**.
 - Real install verification: `scripts/verify_real_install.py` passes.
 
 ## Upstream API sync — 2026-11-04

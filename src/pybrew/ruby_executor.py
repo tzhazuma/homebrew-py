@@ -8626,6 +8626,10 @@ class PybrewLoadedFormula
   def local_bottle_path=(value)
     @local_bottle_path = value.nil? ? nil : Pathname.new(value.to_s)
   end
+  def preserve_rpath?
+    self.class.loaded_preserve_rpath?
+  end
+
 
 
   class << self
@@ -8841,8 +8845,17 @@ class PybrewLoadedFormula
       nil
     end
 
-    def preserve_rpath(*_args)
+    def preserve_rpath(value = true)
+      @loaded_preserve_rpath = !!value
       nil
+    end
+
+    def loaded_preserve_rpath?
+      !!@loaded_preserve_rpath
+    end
+
+    def preserve_rpath?
+      loaded_preserve_rpath?
     end
 
     def deny_network_access!(*_args)
