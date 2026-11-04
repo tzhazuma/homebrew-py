@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-1149 passed, 5 skipped (local full suite, upstream sync 2026-11-04)
+1151 passed, 5 skipped (local full suite, upstream sync follow-up 2026-11-04)
 ```
 
 Breakdown of the feature slices:
@@ -1509,6 +1509,22 @@ The maintainer's close is a final scope decision; no further reopen attempts
 were made. The submitting human owns any future upstream communication and
 must not use AI to answer review comments.
 
+## Upstream sync follow-up — 2026-11-04
+
+- Closed the remaining actionable upstream-audit gaps:
+  - `Formulary.from_bottle` now extracts and loads the embedded
+    `.brew/<name>.rb` recipe and records `local_bottle_path`.
+  - `CaskLoader` token traversal hardening plus explicit
+    `from_path`/`from_tap_path`/`from_content` and installed `.rb`/`.json`
+    caskfile fallback.
+  - Installer copies the cask source into `.metadata/.../Casks/<token>.rb`;
+    uninstall falls back to it when the tap has disappeared.
+  - Cask `zap` supports `delete`, `rmdir` and `pkgutil` in addition to
+    `trash`, with the existing allowed-root checks.
+  - `livecheck` `throttle` rate/days mutual exclusion.
+- Full local suite: **1151 passed, 5 skipped**.
+- Real install verification: `scripts/verify_real_install.py` passes.
+
 ## Upstream API sync — 2026-11-04
 
 - Upstream checkout: `/usr/local/Homebrew`, `origin/main` = `86e082cb08`
@@ -1787,9 +1803,9 @@ edge cases), not missing method names in the audited core files.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `8dae5b8` (upstream Ruby API sync, Homebrew `86e082cb08`)
-- CI run for `8dae5b8`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41752470081>
+- Latest feature commit: pending follow-up push
+- Previous upstream-sync CI: `41752470081`
+
 
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success

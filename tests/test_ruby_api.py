@@ -8161,3 +8161,31 @@ def test_keg_deleted_formula_and_preserve_rpath(
     assert lines[0] == "true"
     assert lines[1] == "false"
     assert lines[2] == "false"
+
+
+def test_formulary_from_bottle_local_recipe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    bottle = tmp_path / "bottle-fixture-1.0.bottle.tar.gz"
+    recipe = (
+        "class BottleFixture < Formula\n"
+        '  url "https://example.com/bottle-fixture.tar.gz"\n'
+        "  def install; end\n"
+        "end\n"
+    )
+    with tarfile.open(bottle, "w:gz") as tar:
+        data = recipe.encode()
+        info = tarfile.TarInfo("bottle-fixture/1.0/.brew/bottle-fixture.rb")
+        info.size = len(data)
+        tar.addfile(info, io.BytesIO(data))
+    body = (
+        f'  formula = Formulary.from_bottle("{bottle}")\n'
+        '  (prefix/"from-bottle.txt").write [\n'
+        '    formula.name, formula.local_bottle_path.to_s\n'
+        '  ].join("\\n")\n'
+    )
+    keg = _run_raw_body(tmp_path, body, name="from-bottle")
+    lines = (keg / "from-bottle.txt").read_text().splitlines()
+    assert lines[0] == "bottle-fixture"
+    assert lines[1] == str(bottle)

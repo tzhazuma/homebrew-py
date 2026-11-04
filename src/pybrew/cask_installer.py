@@ -3356,23 +3356,56 @@ class CaskInstaller:
             self.zap(cask)
         return removed
 
+    def _zap_path(self, path: Path) -> None:
+        resolved = path.resolve()
+        home = Path.home().resolve()
+        prefix = self.config.prefix.resolve()
+        if resolved in (Path("/"), home, prefix):
+            raise CaskError(f"refusing to zap unsafe path: {path}")
+        if not (
+            home in resolved.parents
+            or prefix in resolved.parents
+            or str(resolved).startswith(str(Path(tempfile.gettempdir()).resolve()))
+        ):
+            raise CaskError(f"refusing to zap path outside allowed roots: {path}")
+
     def zap(self, cask: Cask) -> list[Path]:
         removed: list[Path] = []
-        for pattern in cask.zap:
+        patterns = [*cask.zap, *cask.zap_directives.get("delete", [])]
+        for pattern in patterns:
             expanded = os.path.expanduser(pattern)
             for match in glob.glob(expanded):
                 path = Path(match)
-                resolved = path.resolve()
-                home = Path.home().resolve()
-                prefix = self.config.prefix.resolve()
-                if resolved in (Path("/"), home, prefix):
-                    raise CaskError(f"refusing to zap unsafe path: {path}")
-                if not (
-                    home in resolved.parents
-                    or prefix in resolved.parents
-                    or str(resolved).startswith(str(Path(tempfile.gettempdir()).resolve()))
-                ):
-                    raise CaskError(f"refusing to zap path outside allowed roots: {path}")
+                self._zap_path(path)
                 self._remove_path(path)
                 removed.append(path)
+
+        # ``rmdir`` removes empty directories only; never recurse.
+        for pattern in cask.zap_directives.get("rmdir", []):
+            expanded = os.path.expanduser(pattern)
+            for match in glob.glob(expanded):
+                path = Path(match)
+                if not path.is_dir() or path.is_symlink():
+                    continue
+                self._zap_path(path)
+                try:
+                    path.rmdir()
+                    removed.append(path)
+                except OSError:
+                    pass
+
+        # ``pkgutil`` forgets receipt IDs; tests inject PYBREW_PKGUTIL.
+        pkgutil_patterns = cask.zap_directives.get("pkgutil", [])
+        if pkgutil_patterns and (sys.platform == "darwin" or os.environ.get("PYBREW_PKGUTIL")):
+            executable = os.environ.get("PYBREW_PKGUTIL", "pkgutil")
+            for receipt in pkgutil_patterns:
+                try:
+                    subprocess.run(
+                        [executable, "--forget", str(receipt)],
+                        text=True,
+                        capture_output=True,
+                        timeout=30,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
         return removed

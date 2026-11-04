@@ -2055,3 +2055,32 @@ def test_steps_symlink_rollback(
 
     assert source.is_file()
     assert not (cask_env.config.applications / "out-link.txt").exists()
+
+
+def test_zap_delete_rmdir_and_pkgutil_directives(
+    cask_env: SimpleNamespace, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cask = parse_cask_source(
+        'cask "zappy" do\n  version "1.0"\n'
+        f'  zap delete: "{cask_env.config.prefix}/deleted.txt",\n'
+        f'      rmdir: "{cask_env.config.prefix}/empty-dir",\n'
+        '      pkgutil: "com.example.zappy"\n'
+        'end\n'
+    )
+    deleted = cask_env.config.prefix / "deleted.txt"
+    deleted.write_text("delete me\n", encoding="utf-8")
+    empty_dir = cask_env.config.prefix / "empty-dir"
+    empty_dir.mkdir()
+    log = tmp_path / "pkgutil.log"
+    fake = tmp_path / "pkgutil"
+    fake.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" >> " + str(log) + "\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PYBREW_PKGUTIL", str(fake))
+
+    removed = cask_env.installer.zap(cask)
+
+    assert deleted in removed
+    assert empty_dir in removed
+    assert not deleted.exists()
+    assert not empty_dir.exists()
+    assert log.read_text().splitlines() == ["--forget", "com.example.zappy"]

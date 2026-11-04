@@ -8619,6 +8619,14 @@ class PybrewLoadedFormula
   def follow_installed_alias=(value)
     @follow_installed_alias = !!value
   end
+  def local_bottle_path
+    @local_bottle_path
+  end
+
+  def local_bottle_path=(value)
+    @local_bottle_path = value.nil? ? nil : Pathname.new(value.to_s)
+  end
+
 
   class << self
     def loaded_classes
@@ -10191,11 +10199,26 @@ module Formulary
     from_path(path)
   end
 
-  # A local bottle cannot be evaluated as Ruby source. Keep the API present
-  # with an explicit error so callers do not silently fall back to metadata.
-  def from_bottle(path, spec = :stable, force_bottle: false, flags: [])
-    raise PybrewFormulaUnavailableError,
-          "Formulary.from_bottle is not supported by the pybrew Ruby shim: #{path}"
+  # Load a local bottle by extracting its embedded .brew/<name>.rb recipe.
+  # This mirrors Homebrew's FromBottleLoader for the pybrew shim.
+  def from_bottle(path, spec = :stable, force_bottle = false, flags = [])
+    bottle = Pathname.new(path.to_s)
+    unless bottle.file? && /\.bottle(\.tar\.gz)?\z/.match?(bottle.to_s)
+      raise PybrewFormulaUnavailableError,
+            "not a local bottle file: #{bottle}"
+    end
+    name, _full_name = Utils::Bottles.resolve_formula_names(bottle)
+    contents = Utils::Bottles.formula_contents(bottle, name)
+    if contents.to_s.empty?
+      raise PybrewFormulaUnavailableError,
+            "bottle has no readable formula source: #{bottle}"
+    end
+    formula = from_contents(
+      name, bottle.dirname/"#{name}.rb", contents, spec,
+      flags: Array(flags), from_metadata: true
+    )
+    formula.local_bottle_path = bottle if formula.respond_to?(:local_bottle_path=)
+    formula
   end
 
   def try_new(ref, **options)

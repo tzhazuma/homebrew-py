@@ -107,6 +107,8 @@ class Cask:
     renames: list[tuple[str, str]] = field(default_factory=list)
     uninstall: dict[str, Any] = field(default_factory=dict)
     zap: list[str] = field(default_factory=list)
+    #: Non-trash zap directives: ``delete``/``rmdir``/``pkgutil``.
+    zap_directives: dict[str, list[str]] = field(default_factory=dict)
     depends_on: dict[str, Any] = field(default_factory=dict)
     os: dict[str, Any] = field(default_factory=dict)
     conflicts_with: dict[str, Any] = field(default_factory=dict)
@@ -1884,6 +1886,14 @@ class CaskParser:
                 cask.zap.extend(str(item) for item in trash)
             elif trash:
                 cask.zap.append(str(trash))
+            for directive in ("delete", "rmdir", "pkgutil"):
+                value = kwargs.get(directive) or kwargs.get(f":{directive}")
+                if value is None:
+                    continue
+                values = value if isinstance(value, list) else [value]
+                cask.zap_directives.setdefault(directive, []).extend(
+                    str(item) for item in values
+                )
         elif name == "os":
             for key, value in kwargs.items():
                 if key in ("macos", "linux"):
