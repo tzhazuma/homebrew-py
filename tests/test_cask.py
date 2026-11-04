@@ -3774,3 +3774,49 @@ def test_installed_caskfile_survives_tap_removal(run_cli, sample) -> None:
     proc = run_cli("uninstall", "--cask", "testapp")
     assert proc.returncode == 0, proc.stderr
     assert not (sample.prefix / "Applications" / "Test.app").exists()
+
+
+def test_cask_loader_from_content_cleans_temp_and_keeps_source(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pybrew.cask_installer as cask_installer
+
+    scratch = tmp_path / "content-temp"
+    scratch.mkdir()
+    monkeypatch.setattr(cask_installer.tempfile, "mkdtemp", lambda **_kw: str(scratch))
+    tap_dir = tmp_path / "tap"
+    (tap_dir / "Casks").mkdir(parents=True)
+    loader = CaskLoader(discover_taps([tap_dir]))
+    source = (
+        'cask "content" do\n  version "1.0"\n  sha256 "' + "0" * 64 + '"\n'
+        '  url "file:///tmp/content.zip"\n  app "Content.app"\nend\n'
+    )
+    cask = loader.from_content(source)
+    assert cask.token == "content"
+    assert cask.path is None
+    assert cask.source_content == source
+    assert not scratch.exists()
+
+
+def test_cask_install_from_content_preserves_metadata_source(
+    tmp_path: Path,
+) -> None:
+    tap_dir = tmp_path / "tap"
+    (tap_dir / "Casks").mkdir(parents=True)
+    loader = CaskLoader(discover_taps([tap_dir]))
+    archive = tmp_path / "content-fixture.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.writestr("Content.txt", "content\n")
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    source = (
+        'cask "content-fixture" do\n  version "1.0"\n  stage_only true\n'
+        f'  url "file://{archive}"\n  sha256 "{digest}"\nend\n'
+    )
+    cask = loader.from_content(source)
+    config = Config.default(prefix=tmp_path / "prefix", taps=[tap_dir], cache=tmp_path / "cache")
+    config.ensure()
+    installer = CaskInstaller(config)
+    installer.install(cask)
+    installed = installer.installed_caskfile("content-fixture")
+    assert installed is not None
+    assert installed.read_text() == source

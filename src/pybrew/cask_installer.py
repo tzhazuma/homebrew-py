@@ -94,8 +94,12 @@ class CaskLoader:
         directory = Path(tempfile.mkdtemp(prefix="pybrew-cask-content-"))
         source = directory / "cask.rb"
         source.write_text(content, encoding="utf-8")
-        cask = self._load_path(source, tap=tap)
-        cask.path = source
+        try:
+            cask = self._load_path(source, tap=tap)
+        finally:
+            shutil.rmtree(directory, ignore_errors=True)
+        cask.source_content = content
+        cask.path = None
         return cask
 
     load_from_content = from_content
@@ -1295,10 +1299,13 @@ class CaskInstaller:
         # Preserve the installed cask definition for future uninstall/zap
         # operations even when the source tap has disappeared (Homebrew
         # installs Casks/<token>.rb under .metadata).
+        source_copy = metadata / "Casks" / f"{cask.token}.rb"
         if cask.path is not None and Path(cask.path).is_file():
-            source_copy = metadata / "Casks" / f"{cask.token}.rb"
             source_copy.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(cask.path, source_copy)
+        elif cask.source_content is not None:
+            source_copy.parent.mkdir(parents=True, exist_ok=True)
+            source_copy.write_text(cask.source_content, encoding="utf-8")
 
         receipt = {
             "token": cask.token,

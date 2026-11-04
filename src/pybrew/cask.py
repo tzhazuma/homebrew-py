@@ -92,6 +92,10 @@ class Artifact:
 class Cask:
     token: str
     path: Optional[Path] = None
+    #: Original Ruby source for a cask loaded via ``from_content``.  Kept so
+    #: installs can still preserve ``.metadata/Casks/<token>.rb`` after the
+    #: temporary source file is cleaned up.
+    source_content: Optional[str] = None
     tap: Optional[str] = None
     version: Optional[str] = None
     sha256: Optional[str] = None
