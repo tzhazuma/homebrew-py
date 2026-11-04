@@ -1,10 +1,10 @@
 {
   "brew": {
     "default_branch": "main",
-    "head_date": "2026-11-02T20:58:21Z",
-    "head_message": "Merge pull request #24448 from Homebrew/landlock-root-listing-error",
-    "head_sha": "57cac9d0f89289866fd8bbd66614e20f67a08175",
-    "head_url": "https://github.com/Homebrew/brew/commit/57cac9d0f89289866fd8bbd66614e20f67a08175",
+    "head_date": "2026-11-03T22:27:59Z",
+    "head_message": "Merge pull request #24463 from Homebrew/bump-non-pypi-url-pypi-resources",
+    "head_sha": "86e082cb082ab7914d8ffd29685f9ccbdbbbcdbd",
+    "head_url": "https://github.com/Homebrew/brew/commit/86e082cb082ab7914d8ffd29685f9ccbdbbbcdbd",
     "release": {
       "name": "7.0.11",
       "published_at": "2026-10-26T08:20:07Z",
@@ -13,7 +13,7 @@
     },
     "repo": "Homebrew/brew"
   },
-  "checked_at": "2026-11-03T01:20:00+00:00",
+  "checked_at": "2026-11-04T01:12:00+00:00",
   "core": {
     "default_branch": "main",
     "head_date": "2026-11-02T06:26:26Z",

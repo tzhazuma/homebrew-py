@@ -8085,3 +8085,79 @@ def test_sandbox_strict_bwrap_hardening_flags(
         "true",
         "false",
     ]
+
+
+def test_formulary_upstream_from_path_and_pypi(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    source = tmp_path / "pypi-fixture.rb"
+    source.write_text(
+        "class PypiFixture < Formula\n"
+        '  url "https://example.com/pypi-fixture.tar.gz"\n'
+        "  pypi_packages package_name: \"demo\", extra_packages: \"setuptools\"\n"
+        "  def install; end\n"
+        "end\n",
+        encoding="utf-8",
+    )
+    body = (
+        f'  klass = Formulary.from_path("{source}")\n'
+        "  info = klass.new.pypi_packages_info\n"
+        "  source_meta = klass.new.loaded_from_metadata?\n"
+        "  meta = Formulary.load_formula_from_struct!(\n"
+        '    "meta-fixture", {"desc" => "meta", "version" => "1.0"}\n'
+        "  )\n"
+        "  meta_flag = meta.new.loaded_from_metadata?\n"
+        "  alias_default = klass.new.follow_installed_alias?\n"
+        "  instance = klass.new\n"
+        "  instance.follow_installed_alias = false\n"
+        f'  missing = Formulary.try_new("{tmp_path}/does-not-exist.rb")\n'
+        '  bad = begin\n'
+        f'    Formulary.from_path("{tmp_path}/not-ruby.py")\n'
+        '    "no-error"\n'
+        "  rescue StandardError => e\n"
+        "    e.message\n"
+        "  end\n"
+        '  (prefix/"upstream-formulary-api.txt").write [\n'
+        '    klass.name, info.package_name, info.extra_packages.join(","),\n'
+        '    source_meta, meta_flag, alias_default, instance.follow_installed_alias?,\n'
+        '    missing.nil?, bad\n'
+        '  ].join("\\n")\n'
+    )
+    keg = _run_raw_body(tmp_path, body, name="upstream-formulary-api")
+    lines = (keg / "upstream-formulary-api.txt").read_text().splitlines()
+    assert lines[0] == "pypi-fixture"
+    assert lines[1] == "demo"
+    assert lines[2] == "setuptools"
+    assert lines[3] == "false"
+    assert lines[4] == "true"
+    assert lines[5] == "true"
+    assert lines[6] == "false"
+    assert lines[7] == "true"
+    assert "not a loadable .rb" in lines[8]
+
+
+def test_keg_deleted_formula_and_preserve_rpath(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    body = (
+        '  tap_root = prefix/"tap"\n'
+        '  (tap_root/"Formula").mkpath\n'
+        '  keg_path = prefix/"Cellar"/"deleted-fixture"/"1.0"\n'
+        '  (keg_path/".brew").mkpath\n'
+        '  (keg_path/"INSTALL_RECEIPT.json").write(\'{"tap":""}\')\n'
+        '  ENV["PYBREW_TAPS"] = tap_root.to_s\n'
+        '  before = Keg.new(keg_path).deleted_formula?\n'
+        '  preserve = Keg.new(keg_path).formula_preserve_rpath?\n'
+        '  (tap_root/"Formula"/"deleted-fixture.rb").write(\n'
+        '    "class DeletedFixture < Formula; end\\n"\n'
+        '  )\n'
+        '  after = Keg.new(keg_path).deleted_formula?\n'
+        '  (prefix/"keg-deleted.txt").write [before, preserve, after].join("\\n")\n'
+    )
+    keg = _run_raw_body(tmp_path, body, name="keg-deleted")
+    lines = (keg / "keg-deleted.txt").read_text().splitlines()
+    assert lines[0] == "true"
+    assert lines[1] == "false"
+    assert lines[2] == "false"

@@ -999,7 +999,7 @@ def test_cask_livecheck_metadata_and_source(allow_ruby: None) -> None:
             '    url "https://example.com/download"\n'
             '    regex(/demo-(\\d+(?:\\.\\d+)*)\\.zip/i)\n'
             '    strategy :page_match\n'
-            '    throttle 2, days: 5\n'
+            '    throttle 2\n'
             '  end\n'
             '  caveats "defined=#{livecheck_defined?}"\n'
         )
@@ -1011,7 +1011,7 @@ def test_cask_livecheck_metadata_and_source(allow_ruby: None) -> None:
     assert cask.livecheck["strategy"] == ":page_match"
     assert cask.livecheck["skip"] is False
     assert cask.livecheck["throttle"] == 2
-    assert cask.livecheck["throttle_days"] == 5
+    assert cask.livecheck.get("throttle_days") is None
     assert cask.caveats == "defined=true"
     assert cask.livecheck_source is not None
     assert 'url "https://example.com/download"' in cask.livecheck_source
@@ -2025,3 +2025,27 @@ def test_livecheck_status_strategy_error(allow_ruby: None) -> None:
 
     assert result["status"] == "error"
     assert "status boom" in (result["error"] or "")
+
+
+@requires_ruby
+def test_cask_livecheck_throttle_rate_and_days_mutually_exclusive(allow_ruby: None) -> None:
+    with pytest.raises(CaskError, match="Only throttle by `rate` or `days`"):
+        evaluate_cask_source(
+            _source(
+                '  version "1.0"\n'
+                '  livecheck do\n'
+                '    url "https://example.com/download"\n'
+                '    throttle 2, days: 5\n'
+                '  end\n'
+            )
+        )
+
+
+@requires_ruby
+def test_cask_content_requires_cask_result(allow_ruby: None) -> None:
+    with pytest.raises(CaskError, match="does not contain a cask"):
+        evaluate_cask_source(
+            _source('  version "1.0"\n  sha256 "' + "0" * 64 + '"\n'
+                    '  url "file:///tmp/x.zip"\n  app "X.app"')
+            + "\n1\n"
+        )

@@ -775,7 +775,14 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
                 try:
                     cask = cask_loader.load(token)
                 except CaskNotFound:
-                    pass
+                    installed_caskfile = cask_installer.installed_caskfile(token)
+                    if installed_caskfile is not None:
+                        try:
+                            cask = cask_loader.load_from_installed_caskfile(installed_caskfile)
+                        except CaskNotFound:
+                            cask = None
+                    else:
+                        cask = None
                 removed = cask_installer.uninstall(
                     token,
                     zap=args.zap,

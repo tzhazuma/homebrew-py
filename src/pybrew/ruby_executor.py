@@ -269,6 +269,9 @@ HOMEBREW_PREFIX_PLACEHOLDER = "$HOMEBREW_PREFIX"
 HOMEBREW_CELLAR_PLACEHOLDER = "$HOMEBREW_CELLAR"
 HOMEBREW_HOME_PLACEHOLDER = "$HOMEBREW_HOME"
 HOMEBREW_VERSION = "0.0.0"
+# Shared by Homebrew and the standalone compiler shim (upstream 7.0).
+HOMEBREW_PACKAGE_NAME_REGEX = /[\w+\-.@]+/
+HOMEBREW_CURL_HEADER_FILE_MIN_VERSION = "7.55.0"
 
 module OS
   def self.mac?
@@ -7034,6 +7037,41 @@ class Keg
     Tab.for_keg(self)
   end
 
+  # Whether neither the API nor a local tap provides this keg's formula any
+  # more.  Bounded: checks the configured API cache and tap Formula/ files;
+  # an installed keg with no resolvable source is considered deleted.
+  def deleted_formula?
+    tap_name = tab.tap.to_s
+    reference = tap_name.empty? ? name.to_s : "#{tap_name}/#{name}"
+    begin
+      return false unless Formulary.formula_class_get_from_api(reference).nil?
+    rescue PybrewFormulaUnavailableError
+      nil
+    end
+    return false if Formulary.tap_roots.any? do |root|
+      root = Pathname.new(root.to_s)
+      (root/"Formula"/"#{name}.rb").file? ||
+        (root/"Formula"/"#{name}.rb").symlink? ||
+        (root/"Aliases"/"#{name}.rb").exist?
+    end
+    true
+  end
+
+  # Whether the installed keg's formula opts into preserve_rpath.  Loads the
+  # keg's own recipe first (Homebrew keg_relocate semantics); falls back to
+  # the formula reference and then false.
+  def formula_preserve_rpath?
+    installed_formula = path/".brew"/"#{name}.rb"
+    formula = if installed_formula.file?
+      Formulary.from_path(installed_formula)
+    else
+      Formula[name]
+    end
+    !!formula.preserve_rpath?
+  rescue ScriptError, StandardError
+    false
+  end
+
   def version_scheme
     tab.version_scheme
   end
@@ -8544,7 +8582,44 @@ class PybrewInreplaceHelper
   end
 end
 
+class PybrewPypiPackages
+  attr_reader :package_name, :extra_packages, :exclude_packages, :dependencies
+
+  def initialize(package_name: nil, extra_packages: nil, exclude_packages: nil,
+                 dependencies: nil)
+    @package_name = package_name
+    @extra_packages = Array(extra_packages).compact.map(&:to_s)
+    @exclude_packages = Array(exclude_packages).compact.map(&:to_s)
+    @dependencies = Array(dependencies).compact.map(&:to_s)
+  end
+end
+
 class PybrewLoadedFormula
+  # Bounded metadata-origin marker. pybrew's source loader does not expose
+  # Homebrew's namespace constant directly, so this is false for normal source
+  # loads and true only for API/metadata structs (see load_formula_from_struct!).
+  def loaded_from_metadata?
+    self.class.loaded_from_metadata?
+  end
+
+  def pypi_packages_info
+    self.class.pypi_packages_info
+  end
+
+  def follow_installed_alias?
+    return @follow_installed_alias unless @follow_installed_alias.nil?
+
+    self.class.follow_installed_alias?
+  end
+
+  def follow_installed_alias
+    follow_installed_alias?
+  end
+
+  def follow_installed_alias=(value)
+    @follow_installed_alias = !!value
+  end
+
   class << self
     def loaded_classes
       @loaded_classes ||= []
@@ -8560,6 +8635,33 @@ class PybrewLoadedFormula
 
     def declared_aliases
       @declared_aliases ||= []
+    end
+
+    def loaded_from_metadata?
+      !!@loaded_from_metadata
+    end
+
+    def follow_installed_alias?
+      @follow_installed_alias.nil? ? true : !!@follow_installed_alias
+    end
+
+    def follow_installed_alias=(value)
+      @follow_installed_alias = !!value
+    end
+
+    def pypi_packages(package_name: nil, extra_packages: nil,
+                      exclude_packages: nil, dependencies: nil)
+      @pypi_packages_info = PybrewPypiPackages.new(
+        package_name: package_name,
+        extra_packages: extra_packages,
+        exclude_packages: exclude_packages,
+        dependencies: dependencies,
+      )
+      nil
+    end
+
+    def pypi_packages_info
+      @pypi_packages_info
     end
 
     def inherited(subclass)
@@ -9784,6 +9886,7 @@ module Formulary
 
     klass = Class.new(PybrewLoadedFormula)
     klass.loaded_name = name.to_s
+    klass.instance_variable_set(:@loaded_from_metadata, true)
     %i[desc homepage url sha256 version license].each do |attribute|
       next unless formula_struct_responds?(formula_struct, attribute)
 
@@ -10062,7 +10165,45 @@ module Formulary
     factory(keg.name.to_s, from: :keg, warn: false)
   end
 
+  # Load a parent-selected Ruby source file (Homebrew 4.6+/7.0 API).
+  # The pybrew shim is source-first: derive the class name from the file and
+  # evaluate it through the existing bounded path loader.
+  def from_path(path, spec = :stable, alias_path: nil, force_bottle: false,
+                flags: [], ignore_errors: false)
+    file = Pathname.new(path.to_s)
+    unless file.exist? && file.file? && file.extname == ".rb"
+      raise PybrewFormulaUnavailableError,
+            "formula source is not a loadable .rb file: #{file}"
+    end
+    name = file.basename(".rb").to_s
+    load_formula_from_path(
+      name, file, flags: Array(flags), ignore_errors: !!ignore_errors
+    )
+  end
+
+  def resolve_from_path(path, spec: nil, flags: [])
+    formula = from_path(path, spec || :stable, flags: flags)
+    formula.follow_installed_alias = false if formula.respond_to?(:follow_installed_alias=)
+    formula
+  end
+
+  def from_tap_path(path)
+    from_path(path)
+  end
+
+  # A local bottle cannot be evaluated as Ruby source. Keep the API present
+  # with an explicit error so callers do not silently fall back to metadata.
+  def from_bottle(path, spec = :stable, force_bottle: false, flags: [])
+    raise PybrewFormulaUnavailableError,
+          "Formulary.from_bottle is not supported by the pybrew Ruby shim: #{path}"
+  end
+
   def try_new(ref, **options)
+    reference = ref.to_s
+    if reference.include?("/") || reference.end_with?(".rb")
+      path = Pathname.new(reference)
+      return nil unless path.exist?
+    end
     factory(ref, **options)
   end
 

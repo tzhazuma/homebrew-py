@@ -42,10 +42,78 @@ class CaskNotFound(PybrewError):
 
 
 class CaskLoader:
+    _TOKEN_RE = re.compile(r"^[A-Za-z0-9@+_.-]+$")
+    _INVALID_CASK_BASENAMES = {"INSTALL_RECEIPT.json", "sbom.spdx.json"}
+
     def __init__(self, taps: Iterable[Tap], allow_api: bool = False):
         self.taps = list(taps)
         self.allow_api = allow_api
         self._cache: dict[str, tuple[Tap, Path]] = {}
+
+    @classmethod
+    def _valid_token(cls, token: str) -> bool:
+        return (
+            isinstance(token, str)
+            and bool(token)
+            and token not in {".", ".."}
+            and cls._TOKEN_RE.fullmatch(token) is not None
+        )
+
+    def _load_path(self, path: str | Path, tap: Optional[str] = None) -> Cask:
+        cask_path = Path(path)
+        if (
+            not cask_path.is_file()
+            or cask_path.suffix != ".rb"
+            or cask_path.name in self._INVALID_CASK_BASENAMES
+        ):
+            raise CaskNotFound(f"invalid cask source path: {cask_path}")
+        if os.environ.get("PYBREW_ALLOW_CASK_RUBY") == "1":
+            from .cask_ruby import evaluate_cask_file, merge_captured_scripts
+
+            evaluated = evaluate_cask_file(cask_path, tap=tap)
+            try:
+                parsed = parse_cask_file(cask_path, tap=tap)
+            except Exception:
+                return evaluated
+            return merge_captured_scripts(evaluated, parsed)
+        return parse_cask_file(cask_path, tap=tap)
+
+    def from_path(self, path: str | Path, tap: Optional[str] = None) -> Cask:
+        """Load an explicitly selected cask source path (Homebrew API parity)."""
+        return self._load_path(path, tap=tap)
+
+    load_from_path = from_path
+
+    def from_tap_path(self, path: str | Path) -> Cask:
+        return self.from_path(path)
+
+    def from_content(self, content: str, tap: Optional[str] = None) -> Cask:
+        """Evaluate explicitly supplied cask source content."""
+        if not isinstance(content, str) or not content.strip():
+            raise CaskNotFound("cask source content is empty")
+        directory = Path(tempfile.mkdtemp(prefix="pybrew-cask-content-"))
+        source = directory / "cask.rb"
+        source.write_text(content, encoding="utf-8")
+        cask = self._load_path(source, tap=tap)
+        cask.path = source
+        return cask
+
+    load_from_content = from_content
+
+    def load_from_installed_caskfile(self, path: str | Path) -> Cask:
+        """Load an installed cask definition (Ruby or JSON)."""
+        source = Path(path)
+        if source.suffix == ".json":
+            try:
+                payload = json.loads(source.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as error:
+                raise CaskNotFound(f"invalid installed cask JSON: {source}") from error
+            if not isinstance(payload, dict) or not payload.get("token"):
+                raise CaskNotFound(f"installed cask JSON is missing a token: {source}")
+            cask = cask_from_api(payload)
+            cask.path = source
+            return cask
+        return self.from_path(source)
 
     def names(self) -> list[str]:
         names: set[str] = set()
@@ -57,6 +125,8 @@ class CaskLoader:
         return sorted(names)
 
     def _locate(self, token: str) -> tuple[Tap, Path]:
+        if not self._valid_token(token):
+            raise CaskNotFound(f"invalid cask token: {token!r}")
         if token in self._cache:
             return self._cache[token]
         for tap in self.taps:
@@ -88,16 +158,7 @@ class CaskLoader:
             if self.allow_api:
                 return fetch_cask(token)
             raise
-        if os.environ.get("PYBREW_ALLOW_CASK_RUBY") == "1":
-            from .cask_ruby import evaluate_cask_file, merge_captured_scripts
-
-            evaluated = evaluate_cask_file(path, tap=tap.name)
-            try:
-                parsed = parse_cask_file(path, tap=tap.name)
-            except Exception:
-                return evaluated
-            return merge_captured_scripts(evaluated, parsed)
-        return parse_cask_file(path, tap=tap.name)
+        return self._load_path(path, tap=tap.name)
 
     def search(self, pattern: str) -> list[Cask]:
         regex = re.compile(pattern, re.IGNORECASE)
@@ -1107,6 +1168,14 @@ class CaskInstaller:
             return []
         return sorted(path.name for path in rack.iterdir() if path.is_dir())
 
+    def installed_caskfile(self, token: str) -> Optional[Path]:
+        """Return the newest metadata copy of an installed cask's source."""
+        rack = self.config.caskroom / token
+        if not rack.is_dir():
+            return None
+        candidates = sorted(rack.glob(f"**/Casks/{token}.rb"))
+        return candidates[-1] if candidates else None
+
     def list_installed(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         if not self.config.caskroom.is_dir():
@@ -1222,6 +1291,14 @@ class CaskInstaller:
             # artifacts, so preflight and postflight are back to back).
             self._run_preflight(cask, room, version, room)
             self._run_cask_script(cask, "postflight", room, version, room)
+
+        # Preserve the installed cask definition for future uninstall/zap
+        # operations even when the source tap has disappeared (Homebrew
+        # installs Casks/<token>.rb under .metadata).
+        if cask.path is not None and Path(cask.path).is_file():
+            source_copy = metadata / "Casks" / f"{cask.token}.rb"
+            source_copy.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(cask.path, source_copy)
 
         receipt = {
             "token": cask.token,

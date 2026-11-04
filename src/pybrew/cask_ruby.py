@@ -1325,6 +1325,11 @@ class PybrewCaskLivecheck
   end
 
   def throttle(rate = nil, days: nil)
+    if (!rate.nil? || !@data["throttle"].nil?) &&
+       (!days.nil? || !@data["throttle_days"].nil?)
+      raise ArgumentError, "Only throttle by `rate` or `days`, not both"
+    end
+
     @data["throttle"] = rate unless rate.nil?
     @data["throttle_days"] = days unless days.nil?
     @data["throttle"]
@@ -1931,6 +1936,8 @@ class PybrewCaskDSL
     collector = PybrewCaskLivecheck.new
     begin
       collector.instance_eval(&block)
+    rescue ArgumentError
+      raise
     rescue StandardError => error
       @data["warnings"] << "cask `livecheck` block could not be fully " \
                            "evaluated: #{error.class}: #{error.message}"
@@ -1997,17 +2004,20 @@ def cask(token, &block)
   collector.instance_eval(&block)
   collector.language_eval
   PybrewCaskRuntime.result = collector.data
-  nil
+  collector.data
 end
 
 begin
-  eval(
+  eval_result = eval(
     PYBREW_CASK_SOURCE,
     TOPLEVEL_BINDING,
     (PYBREW_CASK_CONFIG["filename"] || "cask.rb").to_s
   )
   if PybrewCaskRuntime.result.nil?
     raise PybrewCaskError, "no `cask \"token\" do ... end` declaration found"
+  end
+  unless eval_result.is_a?(Hash) && eval_result["token"] == PybrewCaskRuntime.result["token"]
+    raise PybrewCaskError, "source does not contain a cask"
   end
 
   File.open((PYBREW_CASK_CONFIG["output"] || "cask.json").to_s, "wb") do |file|

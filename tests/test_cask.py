@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from pybrew.cask import Artifact, Cask, CaskError, parse_cask_file, parse_cask_source
-from pybrew.cask_installer import CaskInstaller, CaskLoader
+from pybrew.cask_installer import CaskInstaller, CaskLoader, CaskNotFound
 from pybrew.paths import Config
 from pybrew.taps import discover_taps
 
@@ -3733,3 +3733,44 @@ def test_livecheck_status_offline_never_uses_default_transport(
 
     assert status["status"] == "unknown"
     assert "no network" in (status["reason"] or "")
+
+
+def test_cask_loader_from_path_content_and_traversal(tmp_path: Path) -> None:
+    tap_dir = tmp_path / "tap"
+    cask_dir = tap_dir / "Casks" / "t"
+    cask_dir.mkdir(parents=True)
+    source = cask_dir / "tiny.rb"
+    source.write_text(
+        'cask "tiny" do\n  version "1.0"\n  sha256 "' + "0" * 64 + '"\n'
+        '  url "file:///tmp/tiny.zip"\n  app "Tiny.app"\nend\n'
+    )
+    loader = CaskLoader(discover_taps([tap_dir]))
+    assert loader.from_path(source).token == "tiny"
+    assert loader.load_from_path(source).token == "tiny"
+    assert loader.from_tap_path(source).token == "tiny"
+    assert loader.from_content(
+        'cask "content" do\n  version "1.0"\n  sha256 "' + "0" * 64 + '"\n'
+        '  url "file:///tmp/content.zip"\n  app "Content.app"\nend\n'
+    ).token == "content"
+
+    for token in ("..", "../evil", "/abs/x", "a/b"):
+        with pytest.raises(CaskNotFound):
+            loader.load(token)
+
+
+def test_installed_caskfile_survives_tap_removal(run_cli, sample) -> None:
+    assert run_cli("install", "--cask", "testapp").returncode == 0
+    config = Config.default(
+        prefix=sample.prefix, taps=[sample.tap], cache=sample.cache
+    )
+    installer = CaskInstaller(config)
+    caskfile = installer.installed_caskfile("testapp")
+    assert caskfile is not None
+    loader = CaskLoader(discover_taps([sample.tap]))
+    loaded = loader.load_from_installed_caskfile(caskfile)
+    assert loaded.token == "testapp"
+
+    (sample.tap / "Casks" / "t" / "testapp.rb").unlink()
+    proc = run_cli("uninstall", "--cask", "testapp")
+    assert proc.returncode == 0, proc.stderr
+    assert not (sample.prefix / "Applications" / "Test.app").exists()

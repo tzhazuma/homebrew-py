@@ -22,7 +22,7 @@ platform-specific dependency set.
 
 ```console
 $ PYTHONPATH=src python -m pytest -o addopts='' -q
-1143 passed, 5 skipped (local full suite, 2026-11-04 wave 11)
+1149 passed, 5 skipped (local full suite, upstream sync 2026-11-04)
 ```
 
 Breakdown of the feature slices:
@@ -1509,6 +1509,24 @@ The maintainer's close is a final scope decision; no further reopen attempts
 were made. The submitting human owns any future upstream communication and
 must not use AI to answer review comments.
 
+## Upstream API sync — 2026-11-04
+
+- Upstream checkout: `/usr/local/Homebrew`, `origin/main` = `86e082cb08`
+  (previous state `57cac9d0f8`; 52 commits).
+- Implemented upstream API deltas:
+  - `Formulary.from_path` / `resolve_from_path` / `from_tap_path` /
+    `from_bottle`, path-only source loading.
+  - `Keg#deleted_formula?`, `Keg#formula_preserve_rpath?`.
+  - `Formula.loaded_from_metadata?`, `pypi_packages` DSL /
+    `pypi_packages_info`, `follow_installed_alias` shims.
+  - Livecheck `throttle` rate/days mutual exclusion (source casks).
+  - CaskLoader token traversal hardening, `from_path`/`from_tap_path`/
+    `from_content`, installed `.rb`/`.json` caskfile fallback, and installer
+    metadata source copy.
+  - Shared `HOMEBREW_PACKAGE_NAME_REGEX` constant.
+- Full local suite: **1149 passed, 5 skipped** in ~122s.
+- Real install verification: `scripts/verify_real_install.py` passes.
+
 ## Wave 11 completion batch (2026-11-04)
 
 - Full local suite: **1143 passed, 5 skipped** in ~134s.
@@ -1769,9 +1787,9 @@ edge cases), not missing method names in the audited core files.
 ## GitHub repository, CI and upstream tracking
 
 - Repository: <https://github.com/tzhazuma/homebrew-py>
-- Latest feature commit: `aa24aa4` (Wave 11 codesign/Superenv/doctor)
-- CI run for `aa24aa4`:
-  <https://github.com/tzhazuma/homebrew-py/actions/runs/41736864419>
+- Latest feature commit: pending upstream-sync push
+- Previous Wave 11 CI: `41736864419`
+
   - `test (ubuntu-22.04, py3.9)` — success
   - `test (ubuntu-latest, py3.12)` — success
   - `test (macos-latest, py3.12)` — success
