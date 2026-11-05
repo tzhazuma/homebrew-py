@@ -8602,7 +8602,8 @@ def test_macos_sdk_scan_and_system_config_host_details(
         assert lines[9].startswith("macOS 14.5")
         assert lines[10:] == ["true", "true"]
     else:
-        assert lines[10:] == ["true", "true"]
+        # Linux SystemConfig intentionally omits the macOS-only SDK section.
+        assert lines[10:] == ["true", "false"]
 
 
 def test_github_secondary_rate_limit_errors_and_sync_sleep(
