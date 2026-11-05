@@ -4139,3 +4139,148 @@ def test_literal_livecheck_full_url_options_online(
     assert request.get_header("User-agent") == "lc-agent"
     assert request.get_header("Referer") == "https://ref.example"
     assert request.get_header("Cookie") == "session=abc"
+
+
+# ---------------------------------------------------------------------------
+# Built-in livecheck strategy dispatch (no Ruby required)
+# ---------------------------------------------------------------------------
+
+
+def test_livecheck_page_match_strategy_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("PYBREW_ALLOW_CASK_RUBY", raising=False)
+    cask = Cask(
+        token="page-match",
+        version="2.0",
+        livecheck={
+            "strategy": ":page_match",
+            "regex": r"tool-(\d+(?:\.\d+)*)",
+            "url": "https://example.com/tool",
+        },
+    )
+
+    result = cask.check_livecheck(page="tool-2.0")
+    assert result["executed"] is True
+    assert result["result"] == ["2.0"]
+    assert cask.livecheck_status(page="tool-2.0")["status"] == "up_to_date"
+    outdated = cask.livecheck_status(page="tool-3.0")
+    assert outdated["status"] == "outdated"
+    assert outdated["latest_version"] == "3.0"
+
+
+def test_livecheck_page_match_requires_regex() -> None:
+    cask = Cask(
+        token="page-no-regex", version="1.0", livecheck={"strategy": ":page_match"}
+    )
+    result = cask.check_livecheck(page="anything")
+    assert result["executed"] is False
+    assert "requires a livecheck regex" in (result["error"] or "")
+
+
+def test_livecheck_sparkle_strategy_dispatch() -> None:
+    page = (
+        '<?xml version="1.0"?><rss xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">'
+        '<channel><item><title>Version 3.4.5</title>'
+        '<enclosure url="https://example.com/Tool-3.4.5.zip" '
+        'sparkle:shortVersionString="3.4.5" /></item></channel></rss>'
+    )
+    cask = Cask(
+        token="sparkle",
+        version="3.4.5",
+        livecheck={
+            "strategy": ":sparkle",
+            "url": "https://example.com/appcast.xml",
+        },
+    )
+
+    result = cask.check_livecheck(page=page)
+    assert result["executed"] is True
+    assert result["result"] == ["3.4.5"]
+    assert cask.livecheck_status(page=page)["status"] == "up_to_date"
+
+
+def test_livecheck_github_latest_strategy_dispatch() -> None:
+    cask = Cask(
+        token="github",
+        version="3.1.4",
+        livecheck={
+            "strategy": ":github_latest",
+            "url": "https://github.com/acme/tool",
+        },
+    )
+    seen: list[str] = []
+
+    def fetcher(url: str) -> str:
+        seen.append(url)
+        return '{"tag_name": "v3.1.4"}'
+
+    result = cask.check_livecheck(fetcher=fetcher)
+    assert result["executed"] is True
+    assert result["result"] == ["3.1.4"]
+    assert seen == [
+        "https://api.github.com/repos/acme/tool/releases/latest"
+    ]
+
+
+def test_livecheck_git_strategy_dispatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = tmp_path / "git"
+    fake.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' 'abc\trefs/tags/v1.2.3' 'def\trefs/tags/v2.0.0'\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    monkeypatch.setenv("PYBREW_GIT", str(fake))
+    cask = Cask(
+        token="git",
+        version="2.0.0",
+        livecheck={
+            "strategy": ":git",
+            "url": "https://example.com/tool.git",
+        },
+    )
+
+    result = cask.check_livecheck()
+    assert result["executed"] is True
+    assert result["result"] == ["1.2.3", "2.0.0"]
+    assert cask.livecheck_status()["status"] == "up_to_date"
+
+
+def test_livecheck_url_strategy_dispatch() -> None:
+    cask = Cask(
+        token="url",
+        version="2.3.4",
+        livecheck={
+            "strategy": ":url",
+            "url": "https://example.com/Tool-2.3.4.zip",
+        },
+    )
+    result = cask.check_livecheck()
+    assert result["executed"] is True
+    assert result["result"] == ["2.3.4"]
+    assert cask.livecheck_status()["status"] == "up_to_date"
+
+
+def test_livecheck_unknown_strategy_is_explicit() -> None:
+    cask = Cask(
+        token="unknown", version="1.0", livecheck={"strategy": ":extract_plist"}
+    )
+    result = cask.check_livecheck(page="x")
+    assert result["executed"] is False
+    assert "unsupported livecheck strategy" in (result["reason"] or "")
+    status = cask.livecheck_status(page="x")
+    assert status["status"] == "unknown"
+
+
+def test_livecheck_literal_strategy_symbol_dispatch() -> None:
+    cask = parse_cask_source(
+        'cask "literal-symbol" do\n  version "2.0"\n'
+        '  livecheck do\n    strategy :page_match\n'
+        '    regex(/tool-(\\d+(?:\\.\\d+)*)/)\n  end\nend\n'
+    )
+    result = cask.check_livecheck(page="tool-2.0")
+    assert result["executed"] is True
+    assert result["result"] == ["2.0"]

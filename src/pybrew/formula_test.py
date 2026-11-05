@@ -297,12 +297,15 @@ class FormulaTestContext
 
         revision.positive? ? "#{value}#{revision}" : value.to_s
       end
+      alias to_str to_s
 
       def inspect
-        "#<#{self.class.name} #{to_s.inspect}>"
+        name = self.class.name.to_s.sub(/\AFormulaTestContext::/, "")
+        "#<#{name} #{to_s.inspect}>"
       end
 
       def <=>(other)
+        other = Token.from(other)
         return nil unless other.is_a?(Token)
 
         compare(other)
@@ -376,8 +379,10 @@ class FormulaTestContext
       def ==(other)
         if other.is_a?(Token)
           compare(other).zero?
-        elsif other.is_a?(Integer) || other.is_a?(String)
-          revision.zero? && value == other
+        elsif other.is_a?(Integer)
+          numeric? && value.to_i == other
+        elsif other.is_a?(String)
+          to_s == other
         else
           false
         end
@@ -418,7 +423,7 @@ class FormulaTestContext
         text = value.to_s
         case text
         when /\A\d+\z/
-          NumericToken.new(text)
+          NumericToken.new(text.to_i)
         when /\A\.?post(\d*)\z/i
           PostToken.new("post", Regexp.last_match(1).to_i)
         when /\A([ab])(\d+)\z/i
@@ -566,6 +571,11 @@ class FormulaTestContext
         super(nil, 0)
       end
 
+      def inspect
+        name = self.class.name.to_s.sub(/\AFormulaTestContext::/, "")
+        "#<#{name}>"
+      end
+
       def class_name
         "null"
       end
@@ -672,6 +682,12 @@ class FormulaTestContext
     end
 
     def homebrew_compare(other)
+      return 1 if other.nil?
+      unless other.is_a?(Version) || other.is_a?(String) || other.is_a?(Integer) ||
+             other.is_a?(Token)
+        return nil
+      end
+
       other = self.class.new(other.to_s) unless other.is_a?(Version)
       if head? || other.head?
         return 0 if head? && other.head?
@@ -729,6 +745,12 @@ class FormulaTestContext
     alias eql? ==
 
     def <=>(other)
+      return 1 if other.nil?
+      unless other.is_a?(Version) || other.is_a?(String) || other.is_a?(Integer) ||
+             other.is_a?(Token)
+        return nil
+      end
+
       return homebrew_compare(other) if self.class.homebrew_enabled?
 
       other = self.class.new(other.to_s) unless other.is_a?(Version)
@@ -792,6 +814,37 @@ class FormulaTestContext
       end
     end
 
+    public
+
+    # Homebrew-compatible comparator helper used by the upstream version spec.
+    def compare(comparator, other)
+      other = self.class.new(other.to_s) unless other.is_a?(Version)
+      case comparator.to_s
+      when "==" then self == other
+      when "!=" then self != other
+      when ">" then self > other
+      when ">=" then self >= other
+      when "<" then self < other
+      when "<=" then self <= other
+      else raise ArgumentError, "Unknown comparator: #{comparator}"
+      end
+    end
+
+    # Commit suffix of a ``HEAD`` version (nil when there is no suffix).
+    def commit
+      text = to_s
+      text.start_with?("HEAD-") ? text.split("-", 2)[1] : nil
+    end
+
+    def update_commit(commit)
+      replace(commit.nil? ? "HEAD" : "HEAD-#{commit}")
+      @segments = nil
+      @tokens = nil
+      self
+    end
+
+    private
+
     def segment_at(index)
       segment = segments[index]
       segment.is_a?(Integer) ? segment : 0
@@ -814,6 +867,33 @@ class FormulaTestContext
         left_text <=> right_text
       end
     end
+
+    # Homebrew's null Version singleton.  It sorts below real versions, is not
+    # equal to itself (upstream Minitest table), and converts to null JSON/NaN.
+    NULL = new("")
+    class << NULL
+      def null?
+        true
+      end
+
+      def to_f
+        Float::NAN
+      end
+
+      def to_json(*_args)
+        "null"
+      end
+
+      def ==(other)
+        !equal?(other)
+      end
+      alias eql? ==
+
+      def hash
+        0.hash
+      end
+    end
+    NULL.singleton_class.send(:undef_method, :to_str)
   end
 
   # Formula version plus Homebrew's revision suffix (for example ``1.0_1``).
@@ -1258,6 +1338,7 @@ class FormulaTestContext
     end
     @formulae = config["formulae"] || {}
     @source_catalog = config["source_catalog"] || []
+    @source_roots = config["source_roots"] || []
     prefix_path = @paths["prefix"] || Pathname.new(config["prefix"].to_s)
     @formulae[name] ||= {
       "name" => name,
@@ -1300,7 +1381,7 @@ class FormulaTestContext
   # The source catalog contains paths only; sources are read (bounded prefix)
   # only when a name is actually requested at test runtime.
   def lazy_formula_info(name)
-    return nil if @source_catalog.empty?
+    return nil if @source_catalog.empty? && @source_roots.empty?
 
     qualified = name.split("/")
     requested = qualified.last.to_s
@@ -1327,6 +1408,48 @@ class FormulaTestContext
         match.is_a?(Array) ? match.first : match
       end
       return register_lazy_info(entry, entry["name"].to_s) if aliases.include?(requested)
+    end
+
+    lazy_formula_info_from_roots(requested, tap_hint)
+  end
+
+  # Last-resort on-demand filesystem lookup for taps beyond the bounded source
+  # catalog.  Only configured tap roots are searched, and only when a lookup
+  # actually misses; catalog/config work never walks these trees.
+  def lazy_formula_info_from_roots(requested, tap_hint)
+    @source_roots.each do |root|
+      tap = root["tap"].to_s
+      next if tap_hint && tap != tap_hint
+
+      base = root["path"].to_s
+      next if base.empty?
+
+      candidates = Dir.glob(File.join(base, "{Formula,HomebrewFormula}", "**", "*.rb"))
+      direct = candidates.find { |path| File.basename(path, ".rb") == requested }
+      if direct
+        return register_lazy_info(
+          {"tap" => tap, "name" => requested, "path" => direct},
+          requested
+        )
+      end
+
+      candidates.each do |path|
+        source = begin
+          File.open(path, "rb") { |handle| handle.read(LAZY_SOURCE_ALIAS_BYTES).to_s }
+        rescue StandardError
+          next
+        end
+        aliases = source.scan(/^\s*alias\s+["']([^"']+)["']/).map do |match|
+          match.is_a?(Array) ? match.first : match
+        end
+        next unless aliases.include?(requested)
+
+        canonical = File.basename(path, ".rb")
+        return register_lazy_info(
+          {"tap" => tap, "name" => canonical, "path" => path},
+          canonical
+        )
+      end
     end
     nil
   end
@@ -1601,7 +1724,7 @@ class FormulaTestContext
       out, err = capture_io { yield }
       assert_stream("stdout", expected, out, message)
       assert_stream("stderr", actual, err, message)
-      return
+      return true
     end
     @assertions = assertions + 1
     return if expected == actual
@@ -3463,6 +3586,10 @@ def run_formula_test(
             source_catalog = _formula_source_catalog(config)
     except Exception:  # noqa: BLE001 - optional lazy lookup must not break tests
         source_catalog = []
+    source_roots = [
+        {"name": tap.name, "tap": tap.name, "path": str(tap.path)}
+        for tap in _tap_index(config).taps
+    ]
     payload = {
         "name": formula.name,
         "version": formula.version or "HEAD",
@@ -3473,6 +3600,7 @@ def run_formula_test(
         "paths": _test_paths(formula.name, config, keg),
         "formulae": entries,
         "source_catalog": source_catalog,
+        "source_roots": source_roots,
     }
     config_path.write_text(json.dumps(payload), encoding="utf-8")
 

@@ -3,7 +3,7 @@
 ## Full parity batch 2026-11-05
 
 Closed the documented partial areas across all owners; full suite grew from
-1156 to **1311 passed, 6 skipped**.
+1156 to **1336 passed, 6 skipped**.
 
 - **Cask**: evaluator `zap` now captures trash/delete/rmdir/pkgutil; livecheck
   URL kwargs merge into request headers; installed caskfile falls back to JSON;
@@ -31,6 +31,25 @@ Closed the documented partial areas across all owners; full suite grew from
 - Commits `57d927e` + `54fa7c5`; CI `41973914882` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 - Inventory of the remaining 17 partial areas: `docs/parity-backlog.md`.
 
+
+## Residual parity batch 2026-11-05 (round 6)
+
+- Cask: opt-in sudo-aware `system_command` (fake-sudo tested), five common
+  livecheck strategy classes (page_match/sparkle/github_latest/git/url) with URL
+  option normalization, and modifier-aware script-body capture.
+- Test DSL: upstream version comparison table (68 pairs), Minitest 5.11 assertion
+  surface, NULL/HEAD/Token edges, and on-demand tap-root lookup beyond the 20k
+  catalog.
+- Superenv: response-file expansion, toolchain/include/linker flag families,
+  SDK version matrix/cross-target checks, bwrap namespace/capability hardening,
+  explicit seccomp-unsupported reporting.
+- Ruby shim: Mach-O/ELF relocation matrix (thin/fat, rpath/dylib-id/interpreter,
+  hardlink dedupe, restore-on-failure, codesign), exotic patch/resource metadata
+  and `stage` forms, GraphQL/REST pagination and exact rate-limit classification,
+  Xcode/CLT/SDK detection and richer SystemConfig.
+- Completed rows: Test DSL lookup/version/Minitest, Keg relocation, MacOS SDK,
+  Utils, SystemConfig, Patch/resource (plus Service earlier).
+- Full suite: **1336 passed, 6 skipped**; real install verified.
 
 ## Residual parity batch 2026-11-05 (round 4)
 

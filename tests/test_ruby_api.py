@@ -1245,7 +1245,7 @@ def test_resource_auto_stage_without_downloader_stays_metadata_only(
     ("kind", "expected"),
     [
         ("traversal", "unsafe resource tar member"),
-        ("symlink", "resource tar links are not supported"),
+        ("symlink", "unsafe resource tar symlink"),
     ],
 )
 def test_resource_auto_stage_rejects_unsafe_tar_members(
@@ -1277,7 +1277,7 @@ def test_resource_auto_stage_rejects_unsafe_tar_members(
     ("kind", "expected"),
     [
         ("traversal", "unsafe resource zip member"),
-        ("symlink", "resource zip links are not supported"),
+        ("symlink", "unsafe resource zip symlink"),
     ],
 )
 def test_resource_auto_stage_rejects_unsafe_zip_members(
@@ -9539,5 +9539,646 @@ def test_formula_installer_tab_sbom_and_metadata_fields(
         "2",
         "true",
         "true",
+        "true",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Closure wave: MacOS/SystemConfig/Utils rows — cache/reset, SDK symbols,
+# host detail sections, REST pagination + exact rate-limit edges, tap alias
+# ambiguity and channel alias resolution.
+# ---------------------------------------------------------------------------
+
+
+def test_macos_cache_reset_sdk_symbols_and_rich_system_config_details(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    sdk_prefix = tmp_path / "SDKs"
+    for version in ("14.5", "15.0"):
+        sdk_dir = sdk_prefix / f"MacOSX{version}.sdk"
+        sdk_dir.mkdir(parents=True)
+        (sdk_dir / "SDKSettings.json").write_text(json.dumps({"Version": version}))
+    tap_root = tmp_path / "taps" / "user" / "demotap"
+    (tap_root / "Formula").mkdir(parents=True)
+    for name in ("one", "two"):
+        (tap_root / "Formula" / f"{name}.rb").write_text(
+            f'class {name.capitalize()} < Formula\n  version "1.0"\n  def install; end\nend\n'
+        )
+    monkeypatch.setenv("HOMEBREW_SDK_PREFIX", str(sdk_prefix))
+    monkeypatch.setenv("HOMEBREW_MACOS_VERSION", "15.0")
+    monkeypatch.setenv("PYBREW_TAPS", str(tap_root))
+    body = (
+        '  sonoma = MacOS::SDK.sdk_for(:sonoma)\n'
+        '  fifteen = MacOS::SDK.sdk_for("15")\n'
+        '  sonoma_path = MacOS::SDK.sdk_path(:sonoma)\n'
+        '  MacOS.full_version = "14.5"\n'
+        '  simulated = MacOS.version.to_s + "|" + MacOS.version_symbol.to_s\n'
+        '  MacOS.reset_cache!\n'
+        '  host = MacOS.full_version.to_s + "|" + MacOS.version.to_s + "|" + MacOS.version_symbol.to_s\n'
+        '  config_io = StringIO.new\n'
+        '  SystemConfig.homebrew_config(config_io)\n'
+        '  env_io = StringIO.new\n'
+        '  SystemConfig.homebrew_env_config(env_io)\n'
+        '  hardware_io = StringIO.new\n'
+        '  SystemConfig.hardware_config(hardware_io)\n'
+        '  taps_io = StringIO.new\n'
+        '  SystemConfig.taps_config(taps_io)\n'
+        '  dump_tap_io = StringIO.new\n'
+        '  SystemConfig.dump_tap_config(nil, dump_tap_io)\n'
+        '  core_io = StringIO.new\n'
+        '  SystemConfig.core_tap_config(core_io)\n'
+        '  dump = SystemConfig.dump(StringIO.new).string\n'
+        '  (prefix/"macos-closure.txt").write [\n'
+        '    sonoma.nil? ? "nil" : sonoma.version.to_s,\n'
+        '    fifteen.nil? ? "nil" : fifteen.version.to_s,\n'
+        '    sonoma_path.nil? ? "nil" : sonoma_path.basename.to_s,\n'
+        '    simulated, host,\n'
+        '    MacOS::CLT.sdk_path.nil?.to_s,\n'
+        '    config_io.string.include?("HOMEBREW_VERSION:").to_s,\n'
+        '    config_io.string.include?("HOMEBREW_REPOSITORY:").to_s,\n'
+        '    env_io.string.include?("Homebrew Env:").to_s,\n'
+        '    env_io.string.include?("HOMEBREW_PREFIX=").to_s,\n'
+        '    hardware_io.string.include?("CPU Cores:").to_s,\n'
+        '    hardware_io.string.include?("CPU Features:").to_s,\n'
+        '    taps_io.string.include?("user/demotap").to_s,\n'
+        '    taps_io.string.include?("(2 formulae)").to_s,\n'
+        '    dump_tap_io.string.include?("Tap:").to_s,\n'
+        '    core_io.string.include?("Core Tap:").to_s,\n'
+        '    dump.include?("Homebrew Env:").to_s,\n'
+        '    dump.include?("Taps:").to_s,\n'
+        '    SystemConfig.describe_tap("' + str(tap_root) + '").include?("(2 formulae)").to_s\n'
+        '  ].join("\\n")\n'
+    )
+    keg = _run_raw_body(tmp_path, body, name="ruby-macos-closure")
+    lines = (keg / "macos-closure.txt").read_text().splitlines()
+    assert lines[0] == "14.5"
+    assert lines[1] == "15.0"
+    assert lines[2] == "MacOSX14.5.sdk"
+    assert lines[3] == "14|sonoma"
+    assert lines[4] == "15.0|15|sequoia"
+    if is_macos():
+        assert lines[5] == "false"
+    assert lines[6:] == [
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+    ]
+
+
+def test_github_rest_pagination_and_exact_rate_limit_edges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    rest_script = tmp_path / "rest-pagination"
+    rest_script.write_text(
+        "#!" + _RUBY + "\n"
+        'require "json"\n'
+        'url = ARGV.find { |arg| arg.start_with?("http") }.to_s\n'
+        'page = url[/(?:[?&])page=(\\d+)/, 1].to_i\n'
+        'page = 1 if page.zero?\n'
+        'items = if url.include?("/orgs/") && page == 1\n'
+        '  (1..100).map { |index| { "name" => "repo#{index}" } }\n'
+        'elsif url.include?("/orgs/") && page == 2\n'
+        '  [ { "name" => "repo101" }, { "name" => "repo102" } ]\n'
+        'elsif url.include?("/issues") && page == 1\n'
+        '  (1..100).map { |index| { "number" => index } }\n'
+        'elsif url.include?("/issues") && page == 2\n'
+        '  [ { "number" => 101 } ]\n'
+        'else\n'
+        '  []\n'
+        'end\n'
+        'puts JSON.generate({ "items" => items })\n'
+    )
+    rest_script.chmod(0o755)
+    counter = tmp_path / "rate-edge-count.txt"
+    reset_epoch = int(time.time()) + 120
+    rate_script = tmp_path / "rate-edges"
+    rate_script.write_text(
+        "#!/bin/sh\n"
+        'headers=""\n'
+        'prev=""\n'
+        'url=""\n'
+        'for arg in "$@"; do\n'
+        '  if [ "$prev" = "-D" ]; then headers="$arg"; fi\n'
+        '  case "$arg" in http*) url="$arg" ;; esac\n'
+        '  prev="$arg"\n'
+        'done\n'
+        'count_file="' + str(counter) + '"\n'
+        'count=$(cat "$count_file" 2>/dev/null || echo 0)\n'
+        'printf \'%s\' "$((count + 1))" > "$count_file"\n'
+        'case "$url" in\n'
+        "  *primary*) printf 'HTTP/1.1 403 Forbidden\\r\\nx-ratelimit-remaining: 0\\r\\n"
+        "x-ratelimit-reset: __RESET__\\r\\nx-ratelimit-resource: core\\r\\n"
+        "retry-after: 5\\r\\n\\r\\n' > \"$headers\"; "
+        "printf '%s' '{\"message\":\"API rate limit exceeded\"}' ;;\n"
+        "  *secondary*) printf 'HTTP/1.1 403 Forbidden\\r\\nretry-after: 3\\r\\n\\r\\n' > \"$headers\"; "
+        "printf '%s' '{\"message\":\"You have exceeded a secondary rate limit\"}' ;;\n"
+        "  *too-many*) printf 'HTTP/1.1 429 Too Many Requests\\r\\nx-ratelimit-remaining: 0\\r\\n"
+        "retry-after: 2\\r\\n\\r\\n' > \"$headers\"; "
+        "printf '%s' '{\"message\":\"Too many requests\"}' ;;\n"
+        "  *auth*) printf 'HTTP/1.1 401 Unauthorized\\r\\n\\r\\n' > \"$headers\"; "
+        "printf '%s' '{\"message\":\"Bad credentials\"}' ;;\n"
+        "  *validate*) printf 'HTTP/1.1 422 Unprocessable Entity\\r\\n\\r\\n' > \"$headers\"; "
+        "printf '%s' '{\"message\":\"Validation Failed\"}' ;;\n"
+        "esac\n"
+    )
+    rate_script.write_text(rate_script.read_text().replace("__RESET__", str(reset_epoch)))
+    rate_script.chmod(0o755)
+    graphql_edge = tmp_path / "graphql-edge"
+    graphql_edge.write_text(
+        "#!/bin/sh\n"
+        "printf '%s' '{\"data\":{\"repository\":{\"items\":{\"pageInfo\":"
+        "{\"hasNextPage\":true,\"endCursor\":null},\"nodes\":[{\"n\":1}]}}}}'\n"
+    )
+    graphql_edge.chmod(0o755)
+    body = (
+        '  ENV["PYBREW_GITHUB_CURL"] = "' + str(rest_script) + '"\n'
+        '  repos = Utils::GitHub.organisation_repositories("homebrew")\n'
+        '  issues = Utils::GitHub.issues(repo: "homebrew/foo", state: "open")\n'
+        '  capped = Utils::GitHub.paginate_rest(\n'
+        '    "https://api.github.com/orgs/homebrew/repos", per_page: 100, max_pages: 2\n'
+        '  )\n'
+        '  ENV["PYBREW_GITHUB_CURL"] = "' + str(rate_script) + '"\n'
+        '  counter = Pathname.new("' + str(counter) + '")\n'
+        '  primary = begin\n'
+        '    Utils::GitHub.get_json("https://api.github.com/primary")\n'
+        '    "none"\n'
+        '  rescue => error\n'
+        '    [error.class.name, error.resource, (error.reset - Time.now.to_i).between?(60, 200).to_s].join("|")\n'
+        '  end\n'
+        '  secondary = begin\n'
+        '    Utils::GitHub.get_json("https://api.github.com/secondary")\n'
+        '    "none"\n'
+        '  rescue => error\n'
+        '    [error.class.name, error.resource, (error.reset - Time.now.to_i).between?(1, 20).to_s].join("|")\n'
+        '  end\n'
+        '  too_many = begin\n'
+        '    Utils::GitHub.get_json("https://api.github.com/too-many")\n'
+        '    "none"\n'
+        '  rescue => error\n'
+        '    [error.class.name, error.resource].join("|")\n'
+        '  end\n'
+        '  before_auth = counter.read.to_i\n'
+        '  auth = begin\n'
+        '    Utils::GitHub.get_json("https://api.github.com/auth", transport_retries: 2)\n'
+        '    "none"\n'
+        '  rescue => error\n'
+        '    error.class.name\n'
+        '  end\n'
+        '  after_auth = counter.read.to_i\n'
+        '  before_validate = counter.read.to_i\n'
+        '  validate = begin\n'
+        '    Utils::GitHub.get_json("https://api.github.com/validate", transport_retries: 2)\n'
+        '    "none"\n'
+        '  rescue => error\n'
+        '    error.class.name\n'
+        '  end\n'
+        '  after_validate = counter.read.to_i\n'
+        '  ENV["PYBREW_GITHUB_CURL"] = "' + str(graphql_edge) + '"\n'
+        '  cursor_nil = Utils::GitHub.graphql_paginated_nodes(\n'
+        '    "query { repository { items } }", {}, ["repository", "items"]\n'
+        '  )\n'
+        '  cursor_nil_truncated = Utils::GitHub.graphql_pagination_truncated?.to_s\n'
+        '  capped_gql = Utils::GitHub.graphql_paginated_nodes(\n'
+        '    "query { repository { items } }", {}, ["repository", "items"], max_pages: 1\n'
+        '  )\n'
+        '  (prefix/"github-closure.txt").write [\n'
+        '    repos.length.to_s, issues.length.to_s, capped.length.to_s,\n'
+        '    primary, secondary, too_many, auth, (after_auth - before_auth).to_s,\n'
+        '    validate, (after_validate - before_validate).to_s,\n'
+        '    cursor_nil.length.to_s, cursor_nil_truncated,\n'
+        '    capped_gql.length.to_s,\n'
+        '    Utils::GitHub.graphql_pagination_truncated?.to_s\n'
+        '  ].join("\\n")\n'
+    )
+    keg = _run_raw_body(tmp_path, body, name="ruby-github-closure")
+    assert (keg / "github-closure.txt").read_text().splitlines() == [
+        "102",
+        "101",
+        "102",
+        "Utils::GitHub::API::RateLimitExceededError|core|true",
+        "Utils::GitHub::API::RateLimitExceededError|secondary|true",
+        "Utils::GitHub::API::RateLimitExceededError|secondary",
+        "Utils::GitHub::API::AuthenticationFailedError",
+        "1",
+        "Utils::GitHub::API::ValidationFailedError",
+        "1",
+        "1",
+        "false",
+        "1",
+        "true",
+    ]
+
+
+def test_formulary_tap_alias_ambiguity_keg_loader_and_channel_alias(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    taps = tmp_path / "taps"
+    alpha = taps / "user1" / "alpha"
+    beta = taps / "user2" / "beta"
+    for root, desc in ((alpha, "alpha canon"), (beta, "beta canon")):
+        (root / "Formula").mkdir(parents=True)
+        (root / "Aliases").mkdir(parents=True)
+        (root / "Formula" / "canon.rb").write_text(
+            f'class Canon < Formula\n  desc "{desc}"\n  version "1.0"\n  def install; end\nend\n'
+        )
+        (root / "Aliases" / "dup-alias.rb").symlink_to(root / "Formula" / "canon.rb")
+    (alpha / "Aliases" / "solo-alias.rb").symlink_to(alpha / "Formula" / "canon.rb")
+    monkeypatch.setenv("PYBREW_TAPS", f"{alpha}{os.pathsep}{beta}")
+    channel_file = tmp_path / "channel-alias.json"
+    channel_file.write_text(
+        json.dumps(
+            {
+                "stable": {
+                    "formulae": [
+                        {
+                            "name": "chan-target",
+                            "desc": "stable target",
+                            "version": "1.0",
+                            "homepage": "https://example.test/target",
+                            "aliases": ["chan-alias"],
+                            "oldname": "chan-old",
+                        }
+                    ]
+                },
+                "beta": {
+                    "formulae": {
+                        "chan-target": {"desc": "beta target", "version": "2.0"}
+                    }
+                },
+            }
+        )
+    )
+    monkeypatch.setenv("PYBREW_FORMULA_API_JSON", str(channel_file))
+    monkeypatch.setenv("PYBREW_FORMULA_API_CHANNELS", "stable,beta")
+    body = (
+        '  (HOMEBREW_CELLAR/"installed-only"/"1.0").mkpath\n'
+        '  ambiguous = begin\n'
+        '    Formulary.resolve_tap_alias!("dup-alias")\n'
+        '    "none"\n'
+        '  rescue => error\n'
+        '    [error.class.name, error.message.include?("multiple taps").to_s,\n'
+        '     error.message.include?("user1/alpha/canon").to_s,\n'
+        '     error.message.include?("user2/beta/canon").to_s].join("|")\n'
+        '  end\n'
+        '  ambiguous_soft = Formulary.resolve_tap_alias("dup-alias").inspect\n'
+        '  solo = Formulary.resolve_tap_alias!("solo-alias")\n'
+        '  alias_matrix = Formulary.loader_matrix("solo-alias")\n'
+        '  keg_matrix = Formulary.loader_matrix("installed-only")\n'
+        '  Formulary.ensure_api_json_loaded\n'
+        '  alias_class = Formulary.formula_class_get_from_api("chan-alias")\n'
+        '  factory = Formulary.factory("chan-alias")\n'
+        '  canonical = Formulary.canonical_name("chan-old")\n'
+        '  (prefix/"formulary-closure.txt").write [\n'
+        '    ambiguous, ambiguous_soft,\n'
+        '    solo.loaded_desc,\n'
+        '    alias_matrix[:alias].to_s, Formulary.loader_choice("solo-alias").to_s,\n'
+        '    keg_matrix[:keg].to_s, Formulary.loader_choice("installed-only").to_s,\n'
+        '    alias_class.loaded_version, alias_class.loaded_desc,\n'
+        '    alias_class.loaded_channels.join(","), factory.loaded_version,\n'
+        '    canonical\n'
+        '  ].join("\\n")\n'
+    )
+    keg = _run_raw_body(tmp_path, body, name="ruby-formulary-closure")
+    assert (keg / "formulary-closure.txt").read_text().splitlines() == [
+        "PybrewFormulaAmbiguityError|true|true|true",
+        "nil",
+        "alpha canon",
+        "true",
+        "alias",
+        "true",
+        "keg",
+        "2.0",
+        "beta target",
+        "stable,beta",
+        "2.0",
+        "chan-target",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Closure wave: Keg relocation edge matrix (thin/fat Mach-O, ELF32/64,
+# hardlinks, dylib id, interpreter, rpath, codesign, restore-on-failure) and
+# exotic patch/resource metadata.
+# ---------------------------------------------------------------------------
+
+
+def test_keg_relocation_edge_matrix_fake_tools(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    tool_log = tmp_path / "relocation-tools.log"
+    sign_log = tmp_path / "relocation-codesign.log"
+    failing_tool = tmp_path / "failing-patchelf"
+    failing_tool.write_text(
+        "#!/bin/sh\n"
+        'file=""\n'
+        'for arg in "$@"; do file="$arg"; done\n'
+        'printf "CORRUPTED" > "$file"\n'
+        "exit 1\n"
+    )
+    failing_tool.chmod(0o755)
+    codesign = tmp_path / "relocation-codesign"
+    codesign.write_text(
+        "#!/bin/sh\n"
+        'printf \'%s\\n\' "$@" >> "' + str(sign_log) + '"\n'
+        'case "$1" in\n'
+        '  -d) printf \'%s\' \'<dict><key>com.apple.security.cs.allow-jit</key><true/></dict>\' ;;\n'
+        '  --verify) exit 0 ;;\n'
+        "esac\n"
+        "exit 0\n"
+    )
+    codesign.chmod(0o755)
+
+    def fake_tool(name: str) -> Path:
+        path = tmp_path / name
+        path.write_text(
+            "#!" + _RUBY + "\n"
+            'log = ENV.fetch("FAKE_RELOCATION_LOG")\n'
+            'File.open(log, "a") { |io| io.puts(ARGV.join("\\u0001")) }\n'
+            'if ARGV[0] == "-change" || ARGV[0] == "--replace-needed"\n'
+            '  old_value, new_value, file = ARGV[1], ARGV[2], ARGV[3]\n'
+            '  File.binwrite(file, File.binread(file).gsub(old_value, new_value))\n'
+            'elsif ARGV[0] == "--set-interpreter"\n'
+            '  new_value, file = ARGV[1], ARGV[2]\n'
+            '  File.binwrite(file, File.binread(file).sub("/lib/ld-old.so", new_value))\n'
+            'end\n'
+            "exit 0\n"
+        )
+        path.chmod(0o755)
+        return path
+
+    monkeypatch.setenv("PYBREW_INSTALL_NAME_TOOL", str(fake_tool("fake-install-name-tool")))
+    monkeypatch.setenv("PYBREW_PATCHELF", str(fake_tool("fake-patchelf")))
+    monkeypatch.setenv("PYBREW_CODESIGN", str(codesign))
+    monkeypatch.setenv("PYBREW_CODESIGN_IDENTITY", "Edge Identity")
+    monkeypatch.setenv("FAKE_RELOCATION_LOG", str(tool_log))
+    body = r'''
+old = "@@HOMEBREW_PREFIX@@/lib"
+new_value = HOMEBREW_PREFIX.to_s + "/lib"
+keg_path = prefix
+(keg_path/"bin").mkpath
+(keg_path/"lib").mkpath
+macho64 = keg_path/"bin"/"macho64"
+macho64.binwrite([0xCF, 0xFA, 0xED, 0xFE, 0x07, 0x00, 0x00, 0x01].pack("C*") + "dummy" + old)
+fat = keg_path/"lib"/"fat.dylib"
+fat.binwrite([0xCA, 0xFE, 0xBA, 0xBE, 0x00, 0x00, 0x00, 0x02].pack("C*") + "fat" + old)
+elf64 = keg_path/"bin"/"elf64"
+elf64.binwrite([0x7F, 0x45, 0x4C, 0x46, 0x02, 0x01, 0x01, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x3E, 0x00].pack("C*") + "dummy" + old)
+elf32 = keg_path/"bin"/"elf32"
+elf32.binwrite([0x7F, 0x45, 0x4C, 0x46, 0x01, 0x01, 0x01, 0x00, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x03, 0x00].pack("C*") + "dummy" + old)
+linked = keg_path/"bin"/"macho64-linked"
+File.link(macho64.to_s, linked.to_s) unless linked.exist?
+symlink = keg_path/"bin"/"macho-link"
+symlink.make_symlink("macho64") unless symlink.symlink?
+retarget = keg_path/"lib"/"retarget.dylib"
+retarget.make_symlink("/old/lib/retarget.dylib") unless retarget.symlink?
+keg = Keg.new(keg_path)
+files = [macho64, fat, elf64, elf32, linked]
+plan = keg.binary_relocation_plan(
+  old => new_value, files: files, dylib_id: "libedge.dylib",
+  interpreter: "/opt/homebrew/lib/ld-edge.so",
+  rpath_additions: ["/opt/homebrew/lib"], codesign: true
+)
+result = keg.relocate_binary_files(
+  old => new_value, files: files, dylib_id: "libedge.dylib",
+  interpreter: "/opt/homebrew/lib/ld-edge.so",
+  rpath_additions: ["/opt/homebrew/lib"], codesign: true,
+  verify_placeholders: true
+)
+matrix = plan["matrix"].map do |entry|
+  {
+    "path" => entry["path"].split("/").last,
+    "kind" => entry["kind"], "format" => entry["format"],
+    "arch" => entry["arch"], "fat" => entry["fat"], "bits" => entry["bits"],
+    "commands" => entry["commands"].map { |command| command.map(&:to_s) },
+  }
+end
+retarget_report = keg.retarget_symlinks(
+  { "lib/retarget.dylib" => "@@HOMEBREW_PREFIX@@/lib/new.dylib" }
+)
+original = File.binread(elf64.to_s)
+ENV["PYBREW_PATCHELF"] = (Pathname.new(ENV.fetch("FAKE_RELOCATION_LOG")).dirname/"failing-patchelf").to_s
+restore_error = begin
+  keg.relocate_binary_files({ old => new_value }, files: [elf64])
+  "none"
+rescue => error
+  [error.class.name, File.binread(elf64.to_s) == original].join("|")
+end
+ignored = keg.relocate_binary_files(
+  { old => new_value }, files: [elf64], ignore_failures: true
+)
+placeholders = result["matrix"].select { |entry| entry.key?("placeholders_removed") }
+(keg_path/"bin"/"matrix.json").write JSON.generate({
+  "files" => plan["files"].length,
+  "hardlink_skipped" => plan["hardlink_skipped"].length,
+  "matrix" => matrix,
+  "verified" => result["matrix"].all? { |entry| entry["verified_magic"] == true },
+  "placeholder_count" => placeholders.length,
+  "placeholders_ok" => placeholders.all? { |entry| entry["placeholders_removed"] == true },
+  "codesigned" => result["codesigned"].length,
+  "codesign_verified" => result["codesign_verified"].all? { |entry| entry["verified"] },
+  "entitlements" => result["entitlements"].first["present"],
+  "identity" => result["codesign_identity"],
+  "retarget" => retarget_report["changes"].first["to"],
+  "restore_error" => restore_error,
+  "ignored_failed" => ignored["failed"].length,
+  "ignored_restored" => ignored["failed"].first["restored"],
+})
+'''
+    keg = _run_raw_body(tmp_path, body, name="ruby-relocation-matrix")
+    data = json.loads((keg / "bin" / "matrix.json").read_text())
+    assert data["files"] == 4
+    assert data["hardlink_skipped"] == 1
+    by_path = {entry["path"]: entry for entry in data["matrix"]}
+    assert by_path["macho64"]["kind"] == "macho"
+    assert by_path["macho64"]["format"] == "macho64"
+    assert by_path["macho64"]["arch"] == "x86_64"
+    assert by_path["macho64"]["bits"] == 64
+    assert by_path["fat.dylib"]["fat"] is True
+    assert by_path["fat.dylib"]["format"] == "fat32"
+    assert by_path["elf64"]["kind"] == "elf"
+    assert by_path["elf64"]["format"] == "elf64"
+    assert by_path["elf64"]["arch"] == "x86_64"
+    assert by_path["elf32"]["format"] == "elf32"
+    assert by_path["elf32"]["arch"] == "i386"
+    macho_args = [arg for command in by_path["macho64"]["commands"] for arg in command]
+    elf_args = [arg for command in by_path["elf64"]["commands"] for arg in command]
+    assert "-change" in macho_args
+    assert "-id" in macho_args
+    assert "-add_rpath" in macho_args
+    assert "--replace-needed" in elf_args
+    assert "--set-interpreter" in elf_args
+    assert "--set-rpath" in elf_args
+    assert data["verified"] is True
+    assert data["placeholder_count"] == 4
+    assert data["placeholders_ok"] is True
+    assert data["codesigned"] == 2
+    assert data["codesign_verified"] is True
+    assert data["entitlements"] is True
+    assert data["identity"] == "Edge Identity"
+    assert data["retarget"] == f"{tmp_path}/prefix/lib/new.dylib"
+    assert data["restore_error"] == "RuntimeError|true"
+    assert data["ignored_failed"] == 1
+    assert data["ignored_restored"] is True
+
+
+def test_patch_exotic_forms_metadata_and_patch_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    body = r'''
+path = prefix/"patch-forms.rb"
+path.write <<~'RUBY'
+  class PatchForms < Formula
+    version "3.0"
+    patch "https://example.test/dynamic-#{version}.diff"
+    patch :p0, "--- a/x\n+++ b/x\n"
+    patch do
+      url "https://example.test/block.diff"
+      sha256 "abc123"
+      strip :p2
+      directory "patches"
+      resolves "CVE-2024-1234", "GHSA-aaaa-bbbb-cccc"
+      type :backport
+      apply :p0
+    end
+    patch do
+      file "local.patch"
+    end
+    patch :DATA
+    def install; end
+  end
+RUBY
+klass = Formulary.load_formula_from_path("patch-forms", path)
+instance = klass.new
+patches = instance.patches
+dynamic = patches[0]
+inline = patches[1]
+block = patches[2]
+local = patches[3]
+data_patch = patches[4]
+resource = PybrewResource.new(
+  "res-patch",
+  { "url" => "https://example.test/res.tar.gz",
+    "patches" => [{ "url" => "https://example.test/res.diff" },
+                  { "file" => "res-local.diff" }] }
+)
+(prefix/"patch-forms.txt").write [
+  patches.length.to_s,
+  dynamic.url,
+  inline.strip.to_s,
+  inline.data.to_s.start_with?("--- a/x").to_s,
+  block.url, block.sha256, block.strip.to_s, block.directory.to_s,
+  block.resolves.join(","), block.type.to_s, block.apply_value.to_s,
+  block.to_hash["apply"].to_s,
+  local.file.to_s,
+  data_patch.data?.to_s,
+  instance.patch_files.join(","),
+  resource.patches.length.to_s,
+  resource.patch_files.join(","),
+  resource.patches?.to_s,
+].join("\n")
+'''
+    keg = _run_raw_body(tmp_path, body, name="ruby-patch-forms")
+    assert (keg / "patch-forms.txt").read_text().splitlines() == [
+        "5",
+        "https://example.test/dynamic-3.0.diff",
+        "p0",
+        "true",
+        "https://example.test/block.diff",
+        "abc123",
+        "p2",
+        "patches",
+        "CVE-2024-1234,GHSA-aaaa-bbbb-cccc",
+        "backport",
+        "p0",
+        "p0",
+        "local.patch",
+        "true",
+        "local.patch",
+        "2",
+        "res-local.diff",
+        "true",
+    ]
+
+
+def test_resource_stage_edge_forms_symlinks_staging_path_and_overwrite(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    archive = tmp_path / "src" / "res-edge.tar.gz"
+    archive.parent.mkdir(parents=True)
+    with tarfile.open(archive, "w:gz") as tar:
+        directory = tarfile.TarInfo("res-edge-1.0")
+        directory.type = tarfile.DIRTYPE
+        directory.mode = 0o755
+        tar.addfile(directory)
+        data = b"edge content\n"
+        entry = tarfile.TarInfo("res-edge-1.0/inner.txt")
+        entry.size = len(data)
+        entry.mode = 0o644
+        tar.addfile(entry, io.BytesIO(data))
+        link = tarfile.TarInfo("res-edge-1.0/link.txt")
+        link.type = tarfile.SYMTYPE
+        link.linkname = "inner.txt"
+        link.mode = 0o777
+        tar.addfile(link)
+    formula = _formula(
+        "ruby-resource-edge",
+        "1.0",
+        (
+            '  name = "edge" + "-res"\n'
+            '  res = resource(name)\n'
+            '  stale = prefix/"edge-target"/"res-edge-1.0"/"inner.txt"\n'
+            '  stale.dirname.mkpath\n'
+            '  stale.write("stale")\n'
+            '  target = prefix/"edge-target"\n'
+            '  res.stage(target)\n'
+            '  overwritten = (target/"res-edge-1.0"/"inner.txt").read == "edge content\\n"\n'
+            '  symlink_preserved = File.symlink?((target/"res-edge-1.0"/"link.txt").to_s)\n'
+            '  staging = prefix/"edge-staging"\n'
+            '  res.stage(staging_path: staging)\n'
+            '  staging_ok = File.symlink?((staging/"res-edge-1.0"/"link.txt").to_s)\n'
+            '  block_value = res.stage(prefix/"edge-block") do |dir|\n'
+            '    File.symlink?((dir/"res-edge-1.0"/"link.txt").to_s).to_s + "|" + dir.basename.to_s\n'
+            '  end\n'
+            '  both_error = begin\n'
+            '    res.stage(prefix/"a", staging_path: prefix/"b")\n'
+            '    "none"\n'
+            '  rescue ArgumentError => error\n'
+            '    "ArgumentError"\n'
+            '  end\n'
+            '  list_hit = resources[name].equal?(list_hit).to_s rescue "false"\n'
+            '  (prefix/"resource-edge.txt").write [\n'
+            '    res.name, overwritten.to_s, symlink_preserved.to_s,\n'
+            '    staging_ok.to_s, block_value, both_error,\n'
+            '    res.unpack.to_s == res.staged_path.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.resources["edge-res"] = SourceSpec(
+        url=archive.as_uri(), sha256=_sha256(archive)
+    )
+    keg = _build(tmp_path, formula, downloader=_downloader(tmp_path))
+    assert (keg / "resource-edge.txt").read_text().splitlines() == [
+        "edge-res",
+        "true",
+        "true",
+        "true",
+        "true|edge-block",
+        "ArgumentError",
         "true",
     ]

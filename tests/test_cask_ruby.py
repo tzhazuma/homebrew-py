@@ -2284,3 +2284,31 @@ def test_literal_brace_livecheck_strategy_executes(allow_ruby: None) -> None:
 
     assert result["executed"] is True
     assert result["result"] == ["2"]
+
+
+@requires_ruby
+def test_script_body_capture_handles_modifier_conditionals(
+    allow_ruby: None,
+) -> None:
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  preflight do\n'
+            '    puts "x" if true\n'
+            '    puts "y" unless false\n'
+            '    value = 1 while false\n'
+            '    def helper\n'
+            '      2\n'
+            '    end\n'
+            '    puts helper\n'
+            '  end\n'
+        )
+    )
+
+    assert cask.preflight is not None
+    assert 'puts "x" if true' in cask.preflight
+    assert 'puts "y" unless false' in cask.preflight
+    assert "value = 1 while false" in cask.preflight
+    assert "def helper" in cask.preflight
+    assert "puts helper" in cask.preflight
+    assert not cask.extra.get("ruby_warnings")

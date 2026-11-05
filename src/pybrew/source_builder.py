@@ -1118,6 +1118,14 @@ _SYSTEM_FRAMEWORK_ROOTS = (
     "/Library/Frameworks",
     "/usr/local/lib",
 )
+_SYSTEM_TOOLCHAIN_ROOTS = (
+    "/usr/bin",
+    "/usr/lib",
+    "/usr/libexec",
+    "/usr/share",
+    "/usr/local/bin",
+    "/usr/local/lib",
+)
 _RPATH_PREFIXES = (
     "-Wl,-rpath,",
     "-Wl,-rpath=",
@@ -1153,6 +1161,20 @@ def _flag_value(
         return "include", token[2:], 1
     if token.startswith("-isystem") and len(token) > len("-isystem"):
         return "include", token[len("-isystem") :], 1
+    if token in ("-B", "-resource-dir", "--gcc-toolchain", "-gcc-toolchain"):
+        if index + 1 < len(arguments):
+            return "toolchain", arguments[index + 1], 2
+        return None
+    for prefix in ("-B", "-resource-dir=", "--gcc-toolchain=", "-gcc-toolchain="):
+        if token.startswith(prefix) and len(token) > len(prefix):
+            return "toolchain", token[len(prefix) :], 1
+    if (
+        token == "-Xclang"
+        and index + 2 < len(arguments)
+        and arguments[index + 1] in ("-I", "-isystem", "-F")
+    ):
+        kind = "framework" if arguments[index + 1] == "-F" else "include"
+        return kind, arguments[index + 2], 3
     if token in ("-F", "-iframework"):
         if index + 1 < len(arguments):
             return "framework", arguments[index + 1], 2
@@ -1369,6 +1391,25 @@ def _sanitize_assembler_options(
     return ",".join(result)
 
 
+_MAX_RESPONSE_FILE_BYTES = 1 << 20
+_MAX_RESPONSE_EXPANSIONS = 32
+
+
+def _read_response_file(raw_path: str) -> Optional[list[str]]:
+    """Read a bounded response file; return None when it should be preserved."""
+
+    if not raw_path:
+        return None
+    path = Path(raw_path).expanduser()
+    try:
+        if not path.is_file() or path.stat().st_size > _MAX_RESPONSE_FILE_BYTES:
+            return None
+        source = path.read_text(encoding="utf-8", errors="replace")
+        return shlex.split(source)
+    except (OSError, ValueError):
+        return None
+
+
 def sanitize_flag_list(
     arguments: Iterable[str],
     prefix: Path,
@@ -1391,8 +1432,23 @@ def sanitize_flag_list(
     result: list[str] = []
     seen_prefix: set[tuple[str, str]] = set()
     seen_sysroot: set[str] = set()
+    response_expansions = 0
     index = 0
     while index < len(args):
+        token = args[index]
+        if token.startswith("@") and len(token) > 1:
+            expanded = _read_response_file(token[1:])
+            if expanded is not None:
+                if response_expansions >= _MAX_RESPONSE_EXPANSIONS:
+                    if diagnostics is not None:
+                        diagnostics.append(
+                            f"response file expansion limit reached for {token}"
+                        )
+                    index += 1
+                    continue
+                args[index:index + 1] = expanded
+                response_expansions += 1
+                continue
         parsed = _flag_value(args, index)
         if parsed is None:
             result.append(args[index])
@@ -1411,6 +1467,9 @@ def sanitize_flag_list(
             is_prefix = normalised == prefix_include
         elif kind == "framework":
             unsafe = _path_under(normalised, _SYSTEM_FRAMEWORK_ROOTS)
+            is_prefix = False
+        elif kind == "toolchain":
+            unsafe = _path_under(normalised, _SYSTEM_TOOLCHAIN_ROOTS)
             is_prefix = False
         elif kind == "library":
             unsafe = _path_under(normalised, _SYSTEM_LIBRARY_ROOTS)
@@ -1496,6 +1555,14 @@ SYSTEM_FRAMEWORK_ROOTS = (
     "/Library/Frameworks",
     "/usr/local/lib",
 )
+SYSTEM_TOOLCHAIN_ROOTS = (
+    "/usr/bin",
+    "/usr/lib",
+    "/usr/libexec",
+    "/usr/share",
+    "/usr/local/bin",
+    "/usr/local/lib",
+)
 RPATH_PREFIXES = (
     "-Wl,-rpath,",
     "-Wl,-rpath=",
@@ -1530,6 +1597,20 @@ def flag_value(args, index):
         return "include", token[2:], 1
     if token.startswith("-isystem") and len(token) > len("-isystem"):
         return "include", token[len("-isystem"):], 1
+    if token in ("-B", "-resource-dir", "--gcc-toolchain", "-gcc-toolchain"):
+        if index + 1 < len(args):
+            return "toolchain", args[index + 1], 2
+        return None
+    for flag_prefix in ("-B", "-resource-dir=", "--gcc-toolchain=", "-gcc-toolchain="):
+        if token.startswith(flag_prefix) and len(token) > len(flag_prefix):
+            return "toolchain", token[len(flag_prefix):], 1
+    if (
+        token == "-Xclang"
+        and index + 2 < len(args)
+        and args[index + 1] in ("-I", "-isystem", "-F")
+    ):
+        kind = "framework" if args[index + 1] == "-F" else "include"
+        return kind, args[index + 2], 3
     if token in ("-F", "-iframework"):
         if index + 1 < len(args):
             return "framework", args[index + 1], 2
@@ -1860,11 +1941,44 @@ driver_spec = {
     "assembler-with-cpp": driver_cc,
 }.get(language, driver_cc)
 
+MAX_RESPONSE_FILE_BYTES = 1 << 20
+MAX_RESPONSE_EXPANSIONS = 32
+
+
+def read_response_file(raw_path):
+    if not raw_path:
+        return None
+    try:
+        response_path = os.path.expanduser(raw_path)
+        if not os.path.isfile(response_path):
+            return None
+        if os.path.getsize(response_path) > MAX_RESPONSE_FILE_BYTES:
+            return None
+        with open(response_path, "r", encoding="utf-8", errors="replace") as handle:
+            return shlex.split(handle.read())
+    except (OSError, ValueError):
+        return None
+
+
 diagnostics = []
 filtered = []
 seen_sysroot = set()
+response_expansions = 0
 index = 0
 while index < len(arguments):
+    token = arguments[index]
+    if token.startswith("@") and len(token) > 1:
+        expanded = read_response_file(token[1:])
+        if expanded is not None:
+            if response_expansions >= MAX_RESPONSE_EXPANSIONS:
+                diagnostics.append(
+                    "response file expansion limit reached for %s" % token
+                )
+                index += 1
+                continue
+            arguments[index:index + 1] = expanded
+            response_expansions += 1
+            continue
     parsed = flag_value(arguments, index)
     if parsed is None:
         filtered.append(arguments[index])
@@ -1883,6 +1997,9 @@ while index < len(arguments):
         duplicate_prefix = normalised == PREFIX_INCLUDE
     elif kind == "framework":
         unsafe = path_under(normalised, SYSTEM_FRAMEWORK_ROOTS)
+        duplicate_prefix = False
+    elif kind == "toolchain":
+        unsafe = path_under(normalised, SYSTEM_TOOLCHAIN_ROOTS)
         duplicate_prefix = False
     elif kind == "library":
         unsafe = path_under(normalised, SYSTEM_LIBRARY_ROOTS)
@@ -2716,6 +2833,56 @@ def objective_language_standard_flags(
     )
 
 
+_SDK_VERSION_RE = re.compile(r"^\d+(?:\.\d+){0,2}$")
+
+
+def sdk_name_for_version(version: Optional[str]) -> str:
+    """Map an explicit SDK version to the xcrun SDK name (bounded)."""
+
+    raw = (version or "").strip()
+    if not raw:
+        return "macosx"
+    if raw.startswith("macosx"):
+        return raw
+    if not _SDK_VERSION_RE.fullmatch(raw):
+        return "macosx"
+    return f"macosx{raw}"
+
+
+def sdk_version_matrix(
+    environment: Optional[Mapping[str, str]] = None,
+    *,
+    system: Optional[str] = None,
+    machine: Optional[str] = None,
+) -> dict[str, Optional[str]]:
+    """Return the bounded SDK/deployment-target selection matrix."""
+
+    env = os.environ if environment is None else environment
+    requested = _first_environment_value(
+        env, ("PYBREW_SDK_VERSION", "SDK_VERSION")
+    )
+    valid = requested if requested and _SDK_VERSION_RE.fullmatch(requested) else None
+    return {
+        "requested": requested,
+        "sdk_name": sdk_name_for_version(valid),
+        "minimum": minimum_platform_version(env, system=system, machine=machine),
+        "deployment_target": _first_environment_value(
+            env, ("PYBREW_MIN_OS", "MACOSX_DEPLOYMENT_TARGET")
+        ),
+    }
+
+
+def sdk_version_warning(
+    environment: Optional[Mapping[str, str]] = None,
+) -> Optional[str]:
+    requested = _first_environment_value(
+        environment or os.environ, ("PYBREW_SDK_VERSION", "SDK_VERSION")
+    )
+    if requested and not _SDK_VERSION_RE.fullmatch(requested):
+        return f"invalid SDK version {requested!r}; using the default macOS SDK"
+    return None
+
+
 def detect_sdkroot(
     environment: Optional[Mapping[str, str]] = None,
     *,
@@ -2756,9 +2923,13 @@ def detect_sdkroot(
             return None
         command = [xcrun]
 
+    sdk_version = _first_environment_value(
+        env, ("PYBREW_SDK_VERSION", "SDK_VERSION")
+    )
+    sdk_name = sdk_name_for_version(sdk_version)
     try:
         result = subprocess.run(
-            [*command, "--sdk", "macosx", "--show-sdk-path"],
+            [*command, "--sdk", sdk_name, "--show-sdk-path"],
             env=dict(env),
             text=True,
             capture_output=True,
@@ -3107,6 +3278,7 @@ def sandbox_backend_capabilities(
             "available": True,
             "backend": "sandbox-exec",
             "network_isolation": True,
+            "namespace_isolation": False,
             "capability_drop": False,
             "seccomp": False,
             "seccomp_enforced": False,
@@ -3121,6 +3293,7 @@ def sandbox_backend_capabilities(
             "available": True,
             "backend": "bwrap",
             "network_isolation": True,
+            "namespace_isolation": True,
             "capability_drop": True,
             "seccomp": seccomp_available,
             "seccomp_enforced": False,
@@ -3130,6 +3303,7 @@ def sandbox_backend_capabilities(
         "available": True,
         "backend": "explicit",
         "network_isolation": False,
+        "namespace_isolation": False,
         "capability_drop": False,
         "seccomp": False,
         "seccomp_enforced": False,
@@ -3138,6 +3312,36 @@ def sandbox_backend_capabilities(
 
 
 sandbox_capabilities = sandbox_backend_capabilities
+
+
+def seccomp_status(
+    environment: Optional[Mapping[str, str]] = None,
+) -> dict[str, Any]:
+    """Report whether an explicit seccomp profile can be enforced."""
+
+    env = os.environ if environment is None else environment
+    requested = env.get("PYBREW_SECCOMP_PROFILE", "").strip()
+    if not requested:
+        return {
+            "requested": False,
+            "enforced": False,
+            "supported": False,
+            "reason": "no seccomp profile requested",
+        }
+    path = Path(requested).expanduser()
+    exists = path.is_file()
+    return {
+        "requested": True,
+        "profile": str(path),
+        "exists": exists,
+        "enforced": False,
+        "supported": False,
+        "reason": (
+            "bwrap --seccomp requires an inherited/passed file descriptor and "
+            "the Python wrapper cannot install it; sandbox-exec uses its policy "
+            "profile instead"
+        ),
+    }
 
 
 def plan_build_sandbox(
@@ -3164,6 +3368,12 @@ def plan_build_sandbox(
     env = os.environ if environment is None else environment
     if env.get("PYBREW_SANDBOX") != "1":
         return None
+    if env.get("PYBREW_SECCOMP_PROFILE", "").strip():
+        raise BuildError(
+            "PYBREW_SECCOMP_PROFILE was requested, but the Python build "
+            "sandbox cannot pass a seccomp file descriptor; remove the profile "
+            "or use an external wrapper"
+        )
     argv = [str(item) for item in command]
     executable = _sandbox_executable(env)
     if executable is None:
@@ -3227,6 +3437,11 @@ def plan_build_sandbox(
             "--proc",
             "/proc",
             "--unshare-net",
+            "--unshare-pid",
+            "--unshare-ipc",
+            "--unshare-uts",
+            "--unshare-cgroup",
+            "--new-session",
         ]
         for root in roots:
             args.extend(["--bind", root, root])
@@ -3422,6 +3637,12 @@ def build_environment(
     target_warning = cross_target_warning(env)
     if target_warning:
         warnings.append(target_warning)
+    sdk_warning = sdk_version_warning(env)
+    if sdk_warning:
+        warnings.append(sdk_warning)
+    sdk_version = _first_environment_value(env, ("PYBREW_SDK_VERSION", "SDK_VERSION"))
+    if sdk_version is not None and _SDK_VERSION_RE.fullmatch(sdk_version):
+        env.setdefault("SDK_VERSION", sdk_version)
 
     arch = architecture_flag(env)
     if arch is not None:

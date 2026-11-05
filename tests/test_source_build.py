@@ -2730,8 +2730,21 @@ def test_superenv_shim_scrubs_separated_wl_rpath_forms(tmp_path: Path) -> None:
         env=prepared.env,
         check=True,
     )
+    first_argv = shlex.split(
+        _compiler_report(tmp_path / "cc-report.txt")["argv"]
+    )
+    assert "-std=c11" in first_argv
+    response = tmp_path / "shim-flags.rsp"
+    response.write_text("-I/usr/include -DFROM_SHIM_RSP=1 -O2\n")
+    subprocess.run(
+        [prepared.env["CC"], f"@{response}", "-c", "unit.c"],
+        cwd=tmp_path,
+        env=prepared.env,
+        check=True,
+    )
     argv = shlex.split(_compiler_report(tmp_path / "cc-report.txt")["argv"])
-    assert "-std=c11" in argv
+    assert "-DFROM_SHIM_RSP=1" in argv
+    assert not any("/usr/include" in token for token in argv)
     assert not any("/usr/lib" in token for token in argv)
     assert not any("/usr/local/lib" in token for token in argv)
     assert not any("/lib64" in token for token in argv)
@@ -2951,3 +2964,126 @@ def test_sandbox_rejects_dsl_write_outside_build_root(tmp_path: Path) -> None:
     with pytest.raises(source_builder.BuildError, match="boundary rejects"):
         installer.install(formula, InstallOptions(build_from_source=True))
     assert outside.read_text() == "outside\n"
+
+
+def test_response_file_expansion_and_toolchain_flag_families(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    response = tmp_path / "flags.rsp"
+    response.write_text(
+        "-I/usr/include -DFROM_RSP=1 -Wl,-rpath,/usr/lib "
+        "-B/usr/bin -resource-dir /usr/lib/clang -Xclang -I /usr/include "
+        "-Xclang -I /opt/foreign/include -B/opt/toolchain -O2\n"
+    )
+    tokens = source_builder.sanitize_flag_list(
+        [f"@{response}"], tmp_path / "prefix"
+    )
+    text = " ".join(tokens)
+    assert "-DFROM_RSP=1" in tokens
+    assert "-O2" in tokens
+    assert "/usr/include" not in text
+    assert "/usr/lib" not in text
+    assert "/usr/bin" not in text
+    assert "/opt/foreign/include" in text
+    assert "/opt/toolchain" in text
+    missing = source_builder.sanitize_flag_list(
+        [f"@{tmp_path / 'missing.rsp'}", "-O1"], tmp_path / "prefix"
+    )
+    assert f"@{tmp_path / 'missing.rsp'}" in missing
+    assert "-O1" in missing
+
+
+def test_sdk_version_selection_matrix_and_fake_xcrun(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    sdk = tmp_path / "MacOSX14.sdk"
+    sdk.mkdir()
+    log = tmp_path / "xcrun-args.txt"
+    fake = tmp_path / "xcrun"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" > "$PYBREW_XCRUN_LOG"\n'
+        f"printf '%s\\n' {shlex.quote(str(sdk))}\n"
+    )
+    fake.chmod(0o755)
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "PYBREW_XCRUN": str(fake),
+        "PYBREW_XCRUN_LOG": str(log),
+        "PYBREW_SDK_VERSION": "14.0",
+        "PYBREW_ARCH": "arm64",
+        "PYBREW_MIN_OS": "10.9",
+    }
+    assert source_builder.sdk_name_for_version("14.0") == "macosx14.0"
+    assert source_builder.sdk_name_for_version("macosx14") == "macosx14"
+    assert source_builder.sdk_name_for_version("bogus") == "macosx"
+    assert source_builder.detect_sdkroot(env, system="Darwin") == sdk
+    assert "--sdk macosx14.0" in log.read_text()
+    matrix = source_builder.sdk_version_matrix(
+        env, system="Darwin", machine="arm64"
+    )
+    assert matrix["sdk_name"] == "macosx14.0"
+    assert matrix["minimum"] == "11.0"
+
+    config = Config.default(prefix=tmp_path / "prefix", cache=tmp_path / "cache")
+    prepared = source_builder.build_environment(
+        config,
+        {**env, "PYBREW_SDK_VERSION": "bogus"},
+    )
+    assert any("invalid SDK version" in warning for warning in prepared.warnings)
+
+
+def test_seccomp_status_and_bwrap_namespace_hardening(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    unavailable = source_builder.seccomp_status({})
+    assert unavailable["requested"] is False
+    profile = tmp_path / "seccomp.json"
+    profile.write_text("{}")
+    requested = source_builder.seccomp_status(
+        {"PYBREW_SECCOMP_PROFILE": str(profile)}
+    )
+    assert requested["requested"] is True
+    assert requested["enforced"] is False
+    assert requested["supported"] is False
+    assert "file descriptor" in requested["reason"]
+
+    fake = tmp_path / "bwrap"
+    fake.write_text("#!/bin/sh\nexit 0\n")
+    fake.chmod(0o755)
+    with pytest.raises(source_builder.BuildError, match="seccomp"):
+        source_builder.plan_build_sandbox(
+            ["cc"],
+            cwd=tmp_path,
+            environment={
+                "PYBREW_SANDBOX": "1",
+                "PYBREW_SANDBOX_BINARY": str(fake),
+                "PYBREW_SECCOMP_PROFILE": str(profile),
+            },
+            system="Linux",
+        )
+    plan = source_builder.plan_build_sandbox(
+        ["cc"],
+        cwd=tmp_path,
+        environment={
+            "PYBREW_SANDBOX": "1",
+            "PYBREW_SANDBOX_BINARY": str(fake),
+        },
+        system="Linux",
+    )
+    assert plan is not None
+    for flag in (
+        "--cap-drop",
+        "--unshare-net",
+        "--unshare-pid",
+        "--unshare-ipc",
+        "--unshare-uts",
+        "--unshare-cgroup",
+        "--new-session",
+    ):
+        assert flag in plan.command
+    capabilities = source_builder.sandbox_backend_capabilities(
+        {"PYBREW_SANDBOX_BINARY": str(fake)}, system="Linux"
+    )
+    assert capabilities["namespace_isolation"] is True
+    assert capabilities["capability_drop"] is True

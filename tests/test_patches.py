@@ -646,3 +646,68 @@ def test_dynamic_patch_filenames_and_repeated_inline_data_apply_in_order(
     )
 
     assert (keg / "bin" / "hello.txt").read_text() == "inline patch\n"
+
+
+def test_parse_exotic_patch_form_matrix() -> None:
+    """Cover the patch argument matrix the parser must preserve."""
+
+    digest_a = "a" * 64
+    digest_b = "b" * 64
+    inline_diff = "--- a/x.txt\n+++ b/x.txt\n@@ -1 +1 @@\n-a\n+b\n"
+    escaped = inline_diff.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
+    source = f'''class ExoticPatch < Formula
+  url "https://example.com/exotic-1.0.tar.gz"
+  sha256 "{digest_a}"
+  patch "{escaped}"
+  patch :p0, "{escaped}"
+  patch do
+    url "https://example.com/block.diff"
+    sha256 "{digest_b}"
+    strip :p2
+    directory "patches"
+    resolves "CVE-2024-1234"
+    type :backport
+  end
+  patch do
+    url "https://example.com/apply.diff"
+    apply :p0
+  end
+  patch do
+    file "local.patch"
+  end
+  patch do
+    url "https://example.com/#{{version}}.diff"
+    strip :p0
+  end
+  patch :DATA
+  def install
+    bin.install "x.txt"
+  end
+end
+
+__END__
+{inline_diff}'''
+    formula = parse_formula_source(source, name="exotic-patch")
+
+    patches = formula.patches
+    assert len(patches) == 7
+    # String patches are inline content (Homebrew StringPatch).
+    assert patches[0].data == inline_diff
+    assert patches[0].url is None
+    assert patches[1].strip == 0
+    assert patches[1].data == inline_diff
+    # Block patches keep metadata and the explicit strip.
+    assert patches[2].url == "https://example.com/block.diff"
+    assert patches[2].sha256 == digest_b
+    assert patches[2].strip == 2
+    # `apply` remains explicitly unsupported/recorded.
+    assert patches[3].url == "https://example.com/apply.diff"
+    assert patches[3].unsupported_reason == "patch apply is not supported"
+    # Local file patches are captured (application support is builder-level).
+    assert patches[4].file == "local.patch"
+    # Dynamic interpolation is captured literally (bounded, no evaluation).
+    assert patches[5].strip == 0
+    assert "#{version}" in (patches[5].url or "")
+    # :DATA uses the __END__ payload.
+    assert patches[6].data == inline_diff
+    assert patches[6].unsupported_reason is None

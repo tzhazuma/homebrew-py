@@ -179,7 +179,9 @@ class Token:
     def __repr__(self) -> str:
         return f"<{type(self).__name__} {self.to_s()!r}>"
 
-    def compare(self, other: "Token") -> int:
+    def compare(self, other: "Token | None") -> int:
+        if other is None:
+            return 1
         if not isinstance(other, Token):
             return NotImplemented
         if type(self) is NullToken or type(other) is NullToken:
@@ -230,11 +232,19 @@ class Token:
     def __eq__(self, other: object) -> bool:
         if isinstance(other, Token):
             return self.compare(other) == 0
-        if isinstance(other, (int, str)):
-            return self.revision == 0 and self.value == other
+        if other is None:
+            return False
+        if isinstance(other, bool):
+            return NotImplemented
+        if isinstance(other, int):
+            return isinstance(self, NumericToken) and self.value == other
+        if isinstance(other, str):
+            return not isinstance(self, NumericToken) and self.to_s() == other
         return NotImplemented
 
     def __lt__(self, other: object) -> bool:
+        if other is None:
+            return False
         if not isinstance(other, Token):
             return NotImplemented
         return self.compare(other) < 0

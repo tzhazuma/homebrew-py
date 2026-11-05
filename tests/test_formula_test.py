@@ -2411,11 +2411,15 @@ def test_source_alias_scan_is_bounded(
     formula, config = _installed_formula(
         tmp_path, 'do\n  Formula["late-alias"].name\nend', taps=[tap]
     )
-    with pytest.raises(FormulaTestError) as excinfo:
-        run_formula_test(formula, config, ruby=_REAL_RUBY)
+    index = formula_test_module._tap_index(config)
+    index._scan_source_aliases()
+    assert index.source_alias_budget_exhausted is True
+    assert "late-alias" not in index.source_aliases
 
-    assert "late-alias" in excinfo.value.stderr
-    assert "not available" in excinfo.value.stderr
+    # The bounded scan remains capped, but the runtime on-demand tap-root
+    # fallback can still resolve the alias lazily without a prior literal.
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
 
 
 @requires_ruby
@@ -3248,6 +3252,7 @@ def test_lazy_alias_and_canonical_beyond_eager_budget(
 ) -> None:
     monkeypatch.setattr(formula_test_module, "MAX_EAGER_FORMULA_ENTRIES", 3)
     monkeypatch.setattr(formula_test_module, "MAX_EAGER_SOURCE_ALIAS_ENTRIES", 3)
+    monkeypatch.setattr(formula_test_module, "MAX_TAP_FORMULA_INDEX", 3)
     tap = tmp_path / "lazy-tap"
     for index in range(6):
         _write_tap_formula(tap, f"tool-{index}", None)
@@ -3259,6 +3264,8 @@ def test_lazy_alias_and_canonical_beyond_eager_budget(
   assert_equal "zz-target", alias_ref.name
   direct = Formula[["tool", "5"].join("-")]
   assert_equal "tool-5", direct.name
+  qualified = Formula["lazy-tap/" + ["lazy", "alias"].join("-")]
+  assert_equal "zz-target", qualified.name
 end
 """,
         taps=[tap],
@@ -3321,6 +3328,216 @@ def test_dsl_version_short_aliases_and_head_edges(tmp_path: Path) -> None:
                Version::AlphaToken.new("alpha", 4).hash
   assert Version::Token.create("a4").is_a?(Version::AlphaToken)
   assert Version::Token.create("b2").is_a?(Version::BetaToken)
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_dsl_version_upstream_comparison_table(tmp_path: Path) -> None:
+    comparisons = [
+        ("0.1", "0.1.0", 0),
+        ("0.1", "0.2", -1),
+        ("1.2.3", "1.2.2", 1),
+        ("1.2.4", "1.2.4.1", -1),
+        ("1.2.3", "1.2.3alpha4", 1),
+        ("1.2.3", "1.2.3beta2", 1),
+        ("1.2.3", "1.2.3rc3", 1),
+        ("1.2.3", "1.2.3-p34", -1),
+        ("1.2.3alpha", "1.2.3", -1),
+        ("1.2.3", "1.2.3a", -1),
+        ("1.2.3alpha4", "1.2.3a4", 0),
+        ("1.2.3alpha4", "1.2.3A4", 0),
+        ("1.2.3alpha4", "1.2.3alpha3", 1),
+        ("1.2.3alpha4", "1.2.3alpha5", -1),
+        ("1.2.3alpha4", "1.2.3alpha10", -1),
+        ("1.2.3alpha4", "1.2.3beta2", -1),
+        ("1.2.3alpha4", "1.2.3rc3", -1),
+        ("1.2.3alpha4", "1.2.3-p34", -1),
+        ("1.2.3beta2", "1.2.3b2", 0),
+        ("1.2.3beta2", "1.2.3B2", 0),
+        ("1.2.3beta2", "1.2.3beta1", 1),
+        ("1.2.3beta2", "1.2.3beta3", -1),
+        ("1.2.3beta2", "1.2.3beta10", -1),
+        ("1.2.3beta2", "1.2.3alpha4", 1),
+        ("1.2.3beta2", "1.2.3rc3", -1),
+        ("1.2.3beta2", "1.2.3", -1),
+        ("1.2.3beta2", "1.2.3-p34", -1),
+        ("1.2.3pre9", "1.2.3PRE9", 0),
+        ("1.2.3pre9", "1.2.3pre8", 1),
+        ("1.2.3pre8", "1.2.3pre9", -1),
+        ("1.2.3pre9", "1.2.3pre10", -1),
+        ("1.2.3pre3", "1.2.3alpha2", 1),
+        ("1.2.3pre3", "1.2.3alpha4", 1),
+        ("1.2.3pre3", "1.2.3beta3", 1),
+        ("1.2.3pre3", "1.2.3beta5", 1),
+        ("1.2.3pre3", "1.2.3rc2", -1),
+        ("1.2.3pre3", "1.2.3", -1),
+        ("1.2.3pre3", "1.2.3-p2", -1),
+        ("1.2.3rc3", "1.2.3RC3", 0),
+        ("1.2.3rc3", "1.2.3rc2", 1),
+        ("1.2.3rc3", "1.2.3rc4", -1),
+        ("1.2.3rc3", "1.2.3rc10", -1),
+        ("1.2.3rc3", "1.2.3alpha4", 1),
+        ("1.2.3rc3", "1.2.3beta2", 1),
+        ("1.2.3rc3", "1.2.3", -1),
+        ("1.2.3rc3", "1.2.3-p34", -1),
+        ("1.2.3-p34", "1.2.3-P34", 0),
+        ("1.2.3-p34", "1.2.3-p33", 1),
+        ("1.2.3-p34", "1.2.3-p35", -1),
+        ("1.2.3-p34", "1.2.3-p9", 1),
+        ("1.2.3-p34", "1.2.3alpha4", 1),
+        ("1.2.3-p34", "1.2.3beta2", 1),
+        ("1.2.3-p34", "1.2.3rc3", 1),
+        ("1.2.3-p34", "1.2.3", 1),
+        ("1.2.3.post34", "1.2.3.post33", 1),
+        ("1.2.3.post34", "1.2.3.post35", -1),
+        ("1.2.3.post34", "1.2.3rc35", 1),
+        ("1.2.3.post34", "1.2.3alpha35", 1),
+        ("1.2.3.post34", "1.2.3beta35", 1),
+        ("1.2.3.post34", "1.2.3", 1),
+        ("2.1.0-p194", "2.1-p195", -1),
+        ("2.1-p195", "2.1.0-p194", 1),
+        ("2.1-p194", "2.1.0-p195", -1),
+        ("2.1.0-p195", "2.1-p194", 1),
+        ("2-p194", "2.1-p195", -1),
+        ("HEAD", "1.2.3", 1),
+        ("HEAD-abcdef", "1.2.3", 1),
+        ("1.2.3", "HEAD", -1),
+        ("1.2.3", "HEAD-fedcba", -1),
+        ("HEAD-abcdef", "HEAD-fedcba", 0),
+        ("HEAD", "HEAD-fedcba", 0),
+    ]
+    rows = "".join(
+        f'    ["{left}", "{right}", {expected}],\n'
+        for left, right, expected in comparisons
+    )
+    source = """do
+  comparisons = [
+""" + rows + """  ]
+  comparisons.each do |left, right, expected|
+    assert_equal expected, Version.new(left) <=> Version.new(right),
+                 "#{left} <=> #{right}"
+  end
+
+  token = Version::Token.create("2")
+  assert token > nil
+  assert token > Version::NULL_TOKEN
+  assert_equal token, "2"
+  assert_equal token, 2
+  assert_nil(token <=> Object.new)
+  begin
+    token > Object.new
+    flunk "token comparison against Object must raise"
+  rescue ArgumentError
+  end
+  assert_equal "foo", Version::Token.create("foo").to_s
+  assert_equal '#<Version::StringToken "foo">', Version::Token.create("foo").inspect
+  assert_equal "foo", String.try_convert(Version::Token.create("foo"))
+  assert_equal 1.2, Version.new("1.2.3").to_f
+  assert_equal '"1.2.3"', Version.new("1.2.3").to_json
+
+  null = Version::NULL
+  assert null < Version.new("1")
+  refute null > Version.new("0")
+  refute null.eql?(null)
+  assert_equal "", null.to_s
+  refute null.respond_to?(:to_str)
+  assert null.to_f.nan?
+  assert_equal "null", null.to_json
+  assert_equal "#<Version::NullToken>", Version::NULL_TOKEN.inspect
+  assert_equal Version::NULL_TOKEN, Version::NULL_TOKEN
+
+  head = Version.new("HEAD-abcdef")
+  assert head.head?
+  assert_equal "abcdef", head.commit
+  assert_equal nil, Version.new("HEAD").commit
+  head.update_commit("ffffff")
+  assert_equal "HEAD-ffffff", head.to_str
+  assert_equal "ffffff", head.commit
+
+  v1 = Version.new("0.1.0")
+  v2 = Version.new("0.1.0")
+  v3 = Version.new("0.1.1")
+  assert v1.eql?(v2)
+  refute v1.eql?(v3)
+  assert_equal v1.hash, v2.hash
+  refute_equal v1.hash, v3.hash
+  assert_equal :foo, { v1 => :foo }[v2]
+
+  assert Version.new("1.2.3").compare(">", Version.new("1.2.3alpha4"))
+  assert Version.new("1.2.3").compare("<", Version.new("1.2.3-p34"))
+  refute Version.new("1.2.3").compare("<=", Version.new("1.2.3alpha4"))
+
+  assert_nil(Version.new("1.0") <=> Object.new)
+  begin
+    Version.new("1.0") > Object.new
+    flunk "Version comparison against Object must raise"
+  rescue ArgumentError
+  end
+  assert Version.new("2.1.0-p194") > nil
+  assert Version.new("2.1.0-p194") > Version::NULL
+  assert Version.new("2.1.0-p194") > Version::NULL_TOKEN
+  assert Version.new("1") == Version::Token.create("1")
+
+  assert PkgVersion.parse("1.2.3_1") > PkgVersion.parse("1.2.3")
+  assert PkgVersion.parse("1.2.3_2") > PkgVersion.parse("1.2.3_1")
+  assert_equal PkgVersion.parse("1.2.3_1").hash,
+               PkgVersion.parse("1.2.3_1").hash
+  refute_equal PkgVersion.parse("1.2.3_1").hash,
+               PkgVersion.parse("1.2.3_2").hash
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_minitest_511_surface_and_output_edges(tmp_path: Path) -> None:
+    source = """do
+  before = assertions
+  output_result = assert_output(nil, nil) { $stdout.write("ignored") }
+  assert_equal 0, assertions - before
+  assert_equal true, output_result
+
+  assert_output("x", "") { print "x" }
+  assert_silent { }
+
+  assert_raises(ArgumentError, RuntimeError) { raise ArgumentError, "x" }
+  error = assert_raises(ArgumentError) { raise ArgumentError, "y" }
+  assert_equal "y", error.message
+
+  refute_output("unexpected") { print "x" }
+  assert_output(/x/) { print "x" }
+
+  assert_operator 1, :>, 0
+  assert_operator 1, :positive?
+  refute_operator 0, :positive?
+  assert_includes [1, 2], 1
+  refute_includes [1], 2
+  assert_empty []
+  refute_empty [1]
+  assert_match "a.b", "a.b"
+  refute_match(/z/, "abc")
+  assert_kind_of Integer, 1
+  assert_instance_of Integer, 1
+  refute_kind_of String, 1
+  refute_instance_of Numeric, 1
+  assert_respond_to 1, :positive?
+  refute_respond_to 1, :no_such_method
+  object = Object.new
+  assert_same object, object
+  refute_same Object.new, Object.new
+  assert_in_delta 1, 1
+  assert_in_epsilon 0, 0
+  assert_nil nil
+  refute_nil 1
+  assert_send [[1], :include?, 1]
+  assert_throws(:done) { throw :done }
+  pass
 end
 """
     formula, config = _installed_formula(tmp_path, source)

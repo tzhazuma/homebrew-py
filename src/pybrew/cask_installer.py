@@ -769,13 +769,25 @@ class PybrewCaskScriptContext
     timeout = options.delete(:timeout)
     sudo = options.delete(:sudo)
     sudo_as_root = options.delete(:sudo_as_root)
-    if sudo || sudo_as_root
+    if sudo_as_root && !sudo
       raise ArgumentError,
-        "system_command: sudo is not supported by pybrew cask scripts (sudo_as_root is also unsupported)"
+        "`sudo_as_root` cannot be set if sudo is false"
+    end
+    use_sudo = sudo || sudo_as_root
+    if use_sudo && ENV["PYBREW_ALLOW_CASK_SUDO"].to_s != "1"
+      raise ArgumentError,
+        "system_command: sudo is not supported by pybrew cask scripts " \
+        "(set PYBREW_ALLOW_CASK_SUDO=1 to opt in; sudo_as_root is also gated)"
     end
     arguments = [command, *Array(args_option), *positional]
     environment, argv, spawn_options =
       PybrewCaskSystem.normalize(arguments, options, "system_command")
+    if use_sudo
+      sudo_tool = ENV["PYBREW_SUDO"].to_s
+      sudo_tool = "sudo" if sudo_tool.empty?
+      user_flags = sudo_as_root ? ["-u", "root"] : []
+      argv = [sudo_tool, *user_flags, "-E", "--", *argv]
+    end
     if input.nil? && timeout.nil?
       stdout, stderr, status = Open3.capture3(environment, *argv, **spawn_options)
     else

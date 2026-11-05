@@ -574,6 +574,267 @@ def _run_strategy_block(source: str, page: str, timeout: float) -> dict[str, Any
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _normalize_strategy_name(value: Any) -> str:
+    return str(value or "").strip().lstrip(":").lower().replace("-", "_")
+
+
+def _strategy_url(cask: Cask, livecheck: dict[str, Any]) -> Optional[str]:
+    value = livecheck.get("url")
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if isinstance(cask.url, str) and cask.url.strip():
+        return cask.url.strip()
+    return None
+
+
+def _strategy_page_text(
+    fetcher: Optional[Callable[[str], Any]],
+    url: Optional[str],
+    page: Optional[str | bytes],
+) -> str:
+    if page is not None:
+        if isinstance(page, bytes):
+            return page.decode("utf-8", errors="replace")
+        return str(page)
+    if fetcher is None:
+        raise CaskError(
+            "no page content or fetcher supplied; no network is performed"
+        )
+    if not url:
+        raise CaskError("livecheck has no URL to fetch")
+    try:
+        fetched = fetcher(url)
+    except Exception as error:  # caller-supplied transport
+        raise CaskError(
+            f"fetcher failed: {type(error).__name__}: {error}"
+        ) from error
+    if fetched is None:
+        raise CaskError("fetcher returned no page content")
+    if isinstance(fetched, bytes):
+        return fetched.decode("utf-8", errors="replace")
+    return str(fetched)
+
+
+def _strategy_candidates(text: str, regex: Optional[str]) -> list[str]:
+    pattern = regex or r"\d+(?:\.\d+)+"
+    try:
+        compiled = re.compile(pattern)
+    except re.error as error:
+        raise CaskError(f"invalid livecheck regex: {error}") from error
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for match in compiled.findall(text):
+        if isinstance(match, tuple):
+            value = next((part for part in match if part), "")
+        else:
+            value = match
+        value = str(value).strip()
+        if value and value not in seen:
+            seen.add(value)
+            candidates.append(value)
+    return candidates
+
+
+def _sparkle_candidates(page: str, regex: Optional[str]) -> list[str]:
+    import xml.etree.ElementTree as ET
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: Any) -> None:
+        text = str(value or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            candidates.append(text)
+
+    try:
+        root = ET.fromstring(page)
+    except ET.ParseError:
+        return _strategy_candidates(page, regex)
+    for element in root.iter():
+        for key, value in element.attrib.items():
+            local = key.rsplit("}", 1)[-1]
+            if local in ("shortVersionString", "version", "shortVersion"):
+                add(value)
+        local_tag = element.tag.rsplit("}", 1)[-1]
+        if local_tag == "title" and element.text:
+            match = re.search(r"(\d+(?:\.\d+)+)", element.text)
+            if match is not None:
+                add(match.group(1))
+        if local_tag in ("enclosure", "link") and element.attrib.get("url"):
+            for candidate in _strategy_candidates(
+                element.attrib["url"], regex
+            ):
+                add(candidate)
+    if not candidates:
+        candidates = _strategy_candidates(page, regex)
+    return candidates
+
+
+def _github_latest_url(url: str) -> str:
+    import urllib.parse
+
+    parsed = urllib.parse.urlsplit(url)
+    parts = [part for part in parsed.path.split("/") if part]
+    if parsed.hostname == "api.github.com":
+        return url
+    if parsed.hostname in ("github.com", "www.github.com") and len(parts) >= 2:
+        repo = parts[1].removesuffix(".git")
+        return (
+            "https://api.github.com/repos/"
+            f"{parts[0]}/{repo}/releases/latest"
+        )
+    return url
+
+
+def _github_latest_candidates(page: str, regex: Optional[str]) -> list[str]:
+    candidates: list[str] = []
+    try:
+        payload = json.loads(page)
+    except (TypeError, ValueError):
+        payload = None
+    if isinstance(payload, dict):
+        for key in ("tag_name", "name", "version"):
+            value = payload.get(key)
+            if value is not None:
+                candidates.append(str(value))
+    if not candidates:
+        for pattern in (
+            r'"tag_name"\s*:\s*"([^"]+)"',
+            r'"name"\s*:\s*"([^"]+)"',
+        ):
+            candidates.extend(re.findall(pattern, page))
+    if not candidates:
+        candidates = _strategy_candidates(page, regex)
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in candidates:
+        text = str(value).strip()
+        if text[:1] in ("v", "V"):
+            text = text[1:]
+        if text and text not in seen:
+            seen.add(text)
+            normalized.append(text)
+    return normalized
+
+
+def _git_livecheck_candidates(
+    url: Optional[str], timeout: float
+) -> tuple[list[str], Optional[str]]:
+    executable = os.environ.get("PYBREW_GIT") or shutil.which("git")
+    if not executable:
+        return [], "git executable not available"
+    if not url:
+        return [], "livecheck has no git URL"
+    try:
+        completed = subprocess.run(
+            [executable, "ls-remote", "--tags", "--refs", url],
+            text=True,
+            capture_output=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return [], f"git ls-remote timed out after {timeout:g}s"
+    except OSError as error:
+        return [], f"could not run git: {error}"
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        return [], f"git ls-remote failed: {detail or completed.returncode}"
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for line in completed.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 2 or not parts[1].startswith("refs/tags/"):
+            continue
+        tag = parts[1][len("refs/tags/") :].removesuffix("^{}")
+        if tag[:1] in ("v", "V"):
+            tag = tag[1:]
+        if re.fullmatch(
+            r"\d+(?:\.\d+)*(?:[-+][A-Za-z0-9._-]+)?", tag
+        ):
+            if tag not in seen:
+                seen.add(tag)
+                candidates.append(tag)
+    return candidates, None
+
+
+def _execute_python_livecheck_strategy(
+    cask: Cask,
+    *,
+    strategy: str,
+    fetcher: Optional[Callable[[str], Any]],
+    page: Optional[str | bytes],
+    timeout: float,
+) -> dict[str, Any]:
+    """Dispatch Homebrew's common built-in livecheck strategy classes."""
+
+    livecheck = cask.livecheck if isinstance(cask.livecheck, dict) else {}
+    name = _normalize_strategy_name(strategy)
+    regex = livecheck.get("regex")
+    regex_text = str(regex) if regex is not None else None
+    url = _strategy_url(cask, livecheck)
+    page_size = 0
+    try:
+        if name == "page_match":
+            if regex_text is None:
+                raise CaskError("page_match requires a livecheck regex")
+            page_text = _strategy_page_text(fetcher, url, page)
+            page_size = len(page_text)
+            candidates = _strategy_candidates(page_text, regex_text)
+        elif name == "sparkle":
+            page_text = _strategy_page_text(fetcher, url, page)
+            page_size = len(page_text)
+            candidates = _sparkle_candidates(page_text, regex_text)
+        elif name == "github_latest":
+            target = _github_latest_url(url or "")
+            page_text = _strategy_page_text(fetcher, target, page)
+            page_size = len(page_text)
+            candidates = _github_latest_candidates(page_text, regex_text)
+        elif name == "git":
+            candidates, error = _git_livecheck_candidates(url, timeout)
+            if error is not None:
+                result = _strategy_result(
+                    executed=False,
+                    error=error,
+                    reason="git strategy failed",
+                    source=f"strategy:{name}",
+                )
+                cask.livecheck["strategy_result"] = result
+                return result
+        elif name == "url":
+            if not url:
+                raise CaskError(
+                    "url strategy requires a livecheck or cask URL"
+                )
+            candidates = _strategy_candidates(url, regex_text)
+        else:
+            result = _strategy_result(
+                executed=False,
+                reason=f"unsupported livecheck strategy: {name}",
+                source=f"strategy:{name}",
+            )
+            cask.livecheck["strategy_result"] = result
+            return result
+    except CaskError as error:
+        result = _strategy_result(
+            executed=False,
+            error=str(error),
+            reason="livecheck strategy failed",
+            page_size=page_size,
+            source=f"strategy:{name}",
+        )
+        cask.livecheck["strategy_result"] = result
+        return result
+    result = _strategy_result(
+        executed=True,
+        result=candidates,
+        page_size=page_size,
+        source=f"strategy:{name}",
+    )
+    cask.livecheck["strategy_result"] = result
+    return result
+
+
 def execute_livecheck_strategy(
     cask: Cask,
     *,
@@ -593,6 +854,15 @@ def execute_livecheck_strategy(
 
     livecheck = cask.livecheck if isinstance(cask.livecheck, dict) else {}
     source = livecheck.get("strategy_source")
+    strategy = livecheck.get("strategy")
+    if (not source or not str(source).strip()) and strategy:
+        return _execute_python_livecheck_strategy(
+            cask,
+            strategy=str(strategy),
+            fetcher=fetcher,
+            page=page,
+            timeout=timeout,
+        )
     if not source or not str(source).strip():
         return _strategy_result(
             executed=False, reason="no livecheck strategy block captured"

@@ -1040,8 +1040,7 @@ def test_generated_shim_rejects_sudo_as_root_at_runtime(
     )
 
     assert proc.returncode != 0
-    assert "sudo is not supported" in proc.stderr
-    assert "sudo_as_root" in proc.stderr
+    assert "`sudo_as_root` cannot be set if sudo is false" in proc.stderr
 
 
 def test_generated_shim_allows_explicit_sudo_false(tmp_path: Path) -> None:
@@ -1054,3 +1053,64 @@ def test_generated_shim_allows_explicit_sudo_false(tmp_path: Path) -> None:
 
     assert proc.returncode == 0, proc.stderr
     assert "ok" in proc.stdout
+
+
+def test_generated_shim_opt_in_sudo_uses_fake_tool(
+    tmp_path: Path,
+) -> None:
+    log = tmp_path / "sudo.log"
+    fake = tmp_path / "fake-sudo"
+    fake.write_text(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" >> " + str(log) + "\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+
+    proc = _run_shim_body(
+        tmp_path,
+        'system_command "/bin/echo", args: ["hi"], sudo: true',
+        env={
+            "PYBREW_ALLOW_CASK_SUDO": "1",
+            "PYBREW_SUDO": str(fake),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert log.read_text().splitlines() == [
+        "-E",
+        "--",
+        "/bin/echo",
+        "hi",
+    ]
+
+
+def test_generated_shim_opt_in_sudo_as_root_uses_fake_tool(
+    tmp_path: Path,
+) -> None:
+    log = tmp_path / "sudo-as-root.log"
+    fake = tmp_path / "fake-sudo"
+    fake.write_text(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" >> " + str(log) + "\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+
+    proc = _run_shim_body(
+        tmp_path,
+        'system_command "/bin/echo", args: ["root"], '
+        'sudo: true, sudo_as_root: true',
+        env={
+            "PYBREW_ALLOW_CASK_SUDO": "1",
+            "PYBREW_SUDO": str(fake),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert log.read_text().splitlines() == [
+        "-u",
+        "root",
+        "-E",
+        "--",
+        "/bin/echo",
+        "root",
+    ]

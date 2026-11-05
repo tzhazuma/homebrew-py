@@ -387,13 +387,29 @@ class Cask:
                 headers=headers if headers is not None else self._livecheck_headers(),
             )
 
+        strategy_source = livecheck.get("strategy_source")
+        strategy_name = (
+            str(livecheck.get("strategy") or "")
+            .strip()
+            .lstrip(":")
+            .lower()
+            .replace("-", "_")
+        )
+        # URL/git built-in strategies normalize/fetch their own URL; only
+        # page-based strategies (and arbitrary strategy blocks) prefetch.
+        prefetch_page = bool(strategy_source) or strategy_name in (
+            "",
+            "page_match",
+            "sparkle",
+        )
+
         page_text: Optional[str] = None
         if page is not None:
             if isinstance(page, bytes):
                 page_text = page.decode("utf-8", errors="replace")
             else:
                 page_text = str(page)
-        elif effective_fetcher is not None:
+        elif effective_fetcher is not None and prefetch_page:
             url = self._livecheck_url()
             if not url:
                 status.update(
@@ -414,11 +430,16 @@ class Cask:
                 fetched = fetched.decode("utf-8", errors="replace")
             page_text = None if fetched is None else str(fetched)
 
-        strategy_source = livecheck.get("strategy_source")
         regex_source = livecheck.get("regex")
-        if strategy_source:
+        if strategy_source or strategy_name:
             status["source"] = "strategy"
-            result = self.check_livecheck(page=page_text, timeout=timeout)
+            result = self.check_livecheck(
+                page=page_text,
+                fetcher=(
+                    effective_fetcher if page_text is None else None
+                ),
+                timeout=timeout,
+            )
             status["result"] = result
             if result.get("error"):
                 status.update(
@@ -1877,6 +1898,38 @@ class CaskParser:
     def _skip_block_body(self, opener: Optional[Token | str] = None) -> None:
         self._consume_block_body(opener)
 
+    #: Keywords that can be either a block opener or a trailing modifier.
+    _MODIFIER_KEYWORDS = frozenset({"if", "unless", "while", "until"})
+
+    def _token_starts_block(self, token: Token, index: int) -> bool:
+        """True when a block keyword actually opens a block.
+
+        Ruby allows ``puts x if cond`` style modifiers; treating those as
+        openers would consume the enclosing block's ``end``.  A modifier is
+        recognised when the keyword follows an expression-like token.
+        """
+
+        if token.kind != "kw" or token.value not in _BLOCK_KEYWORDS:
+            return False
+        if token.value not in self._MODIFIER_KEYWORDS or index <= 0:
+            return True
+        previous = self.tokens[index - 1]
+        if previous.kind in ("id", "const", "num", "str", "sym", "words"):
+            return False
+        if previous.kind == "punct" and previous.value in (")", "]", "}"):
+            return False
+        if previous.kind == "kw" and previous.value in (
+            "return",
+            "break",
+            "next",
+            "redo",
+            "retry",
+            "yield",
+            "end",
+        ):
+            return False
+        return True
+
     def _consume_block_body(
         self, opener: Optional[Token | str] = None, capture: bool = False
     ) -> str:
@@ -1907,7 +1960,7 @@ class CaskParser:
                         return self.source[body_start:body_end] if capture else ""
                     self.advance()
                     continue
-                if token.kind == "kw" and token.value in _BLOCK_KEYWORDS:
+                if self._token_starts_block(token, self.pos):
                     stack.append("end")
                 elif token.kind == "punct" and token.value == "{":
                     stack.append("}")
@@ -1920,7 +1973,7 @@ class CaskParser:
                         return self.source[body_start:body_end] if capture else ""
                     self.advance()
                     continue
-                if token.kind == "kw" and token.value in _BLOCK_KEYWORDS:
+                if self._token_starts_block(token, self.pos):
                     stack.append("end")
                 elif token.kind == "punct" and token.value == "{":
                     stack.append("}")

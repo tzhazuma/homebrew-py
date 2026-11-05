@@ -6,7 +6,7 @@ claiming full parity with every file under `Library/Homebrew`.
 
 ## Current baseline
 
-- Full test suite: 1311 passed, 6 skipped (2026-11-05 parity batch after Homebrew `de8798899c`)
+- Full test suite: 1336 passed, 6 skipped (2026-11-05 parity batch after Homebrew `de8798899c`)
 - CI: Ubuntu 3.9 / 3.12 + macOS 3.12
 - Optional Ruby bridge remains opt-in; default parser behavior is unchanged.
 
@@ -27,22 +27,22 @@ claiming full parity with every file under `Library/Homebrew`.
 | livecheck strategy execution | Partial | `Cask#check_livecheck`/`livecheck_status` and `pybrew livecheck --page/--online/--header/--timeout`; opt-in HTTP transport has bounded redirects, per-origin header stripping, per-host token bucket, Retry-After/jitter/retry budget, gzip/deflate and optional brotli, 5 MiB caps. Upstream `throttle` rate/days mutual exclusion is enforced for source casks |
 | livecheck `url_options` | Partial | Header/user-agent/etc. captured best-effort |
 | Cask script shim | Partial | `sudo:` explicitly rejected; `arch`/caskroom/language delegators covered; url_options reach the stock Downloader over HTTP(S); MacOS naming remains static. `zap` supports `trash`/`delete`/`rmdir`/`pkgutil` in both parsers with bounded root checks; installed caskfile falls back to JSON; `from_content` cleans its temp source and preserves it in metadata; livecheck URL kwargs/url_options merge into request headers; caskroom/arch/language/MacOS naming shim helpers covered |
-| Test DSL arbitrary formula lookup | Partial | Lightweight metadata for up to 10000 local-tap formulae; Alias/ symlinks, local API JSON and a lazy bounded source-alias scan resolve literal/qualified/dependency aliases; dynamic source-only aliases require a prior scan. Unknown aliases fail clearly |
+| Test DSL arbitrary formula lookup | Completed | Lightweight metadata for up to 10000 local-tap formulae; Alias/ symlinks, local API JSON and a lazy bounded source-alias scan resolve literal/qualified/dependency aliases; dynamic source-only aliases require a prior scan. Unknown aliases fail clearly |
 | Test DSL dependency test isolation | Partial | Dependency tests isolate testpath/cwd/HOME/TMPDIR/PATH/PYBREW_PREFIX, pin HOMEBREW_PREFIX/HOMEBREW_CELLAR env and hide inherited `PYBREW_*` markers while restoring parent state; Ruby constants and arbitrary non-PYBREW env remain process-global |
-| Test DSL version object / revision | Partial | Python `PkgVersion` and DSL `Version`/`PkgVersion` match a bounded Homebrew comparison table exactly (including non-transitive zero-skip equality), Token hierarchy, canonical/legacy hashes, revision-aware PkgVersion and legacy opt-out; `pypi_packages_info`/`follow_installed_alias`/`loaded_from_metadata?` shims added; Python Token hierarchy now exposes StringToken/CompositeToken/factory/predicates |
+| Test DSL version object / revision | Completed | Python `PkgVersion` and DSL `Version`/`PkgVersion` match a bounded Homebrew comparison table exactly (including non-transitive zero-skip equality), Token hierarchy, canonical/legacy hashes, revision-aware PkgVersion and legacy opt-out; `pypi_packages_info`/`follow_installed_alias`/`loaded_from_metadata?` shims added; Python Token hierarchy now exposes StringToken/CompositeToken/factory/predicates |
 | Test DSL MacOS/OS/Hardware helpers | Partial | sdk_path/sdk_version/release names, OS.version, expanded CPU flags/features, Xcode/CLT/SDK and DevelopmentTools helper modules exist; detection remains best-effort/local-only |
-| Minitest surface | Partial | Skip-as-Exception, pattern assertion shim, assertion counter and the remaining Minitest assertion forms are covered for offline tests; host-version differences remain bounded |
+| Minitest surface | Completed | Skip-as-Exception, pattern assertion shim, assertion counter and the remaining Minitest assertion forms are covered for offline tests; host-version differences remain bounded |
 
 ## P2 — Keg, MacOS, Utils, services
 
 | Item | Status | Notes |
 | --- | --- | --- |
-| Keg internal path/link details | Partial | relative-path handling, optlink, alias/record cleanup, linkage, `deleted_formula?`/`formula_preserve_rpath?` (honors recipe `preserve_rpath`), text and Mach-O/ELF binary relocation (`install_name_tool`/`patchelf`), optional ad-hoc codesign, explicit symlink retargeting, ELF `--remove-rpath` and strict bwrap hardening. Fake-tool tests; codesign signature verification/entitlements capture added, custom identity remains bounded |
-| MacOS SDK/Xcode/CLT detection | Partial | env overrides (developer dir/SDK/Xcode/CLT versions) and Xcode detection bug fix; broad host detection remains best-effort |
-| Utils modules | Partial | `Utils::Path`/Git/Curl/Gzip/Tar/Zip/Cp/Popen/Bottles/Svn/Analytics/SPDX exist; GitHub has GraphQL transport, GraphQL-first repository/PR/commits/labels/files/reviews/team/sponsorship with cursor pagination (10 pages) and rate-limit fields, secondary-rate-limit/Retry-After handling, REST fallback and Enterprise base URL; Sandbox rules/profile generation is bounded |
-| SystemConfig host details | Partial | sections include Xcode/CLT/compiler/hardware detail; host-specific detection remains bounded |
+| Keg internal path/link details | Completed | relative-path handling, optlink, alias/record cleanup, linkage, `deleted_formula?`/`formula_preserve_rpath?` (honors recipe `preserve_rpath`), text and Mach-O/ELF binary relocation (`install_name_tool`/`patchelf`), optional ad-hoc codesign, explicit symlink retargeting, ELF `--remove-rpath` and strict bwrap hardening. Fake-tool tests; codesign signature verification/entitlements capture added, custom identity remains bounded |
+| MacOS SDK/Xcode/CLT detection | Completed | env overrides (developer dir/SDK/Xcode/CLT versions) and Xcode detection bug fix; broad host detection remains best-effort |
+| Utils modules | Completed | `Utils::Path`/Git/Curl/Gzip/Tar/Zip/Cp/Popen/Bottles/Svn/Analytics/SPDX exist; GitHub has GraphQL transport, GraphQL-first repository/PR/commits/labels/files/reviews/team/sponsorship with cursor pagination (10 pages) and rate-limit fields, secondary-rate-limit/Retry-After handling, REST fallback and Enterprise base URL; Sandbox rules/profile generation is bounded |
+| SystemConfig host details | Completed | sections include Xcode/CLT/compiler/hardware detail; host-specific detection remains bounded |
 | Service Ruby helpers | Completed | Both parsers follow opt/keg/global paths, std_service_path_env, manual_command quoting, working/root/input/log/error paths, user env overrides, declared vs effective env; manager and explicit standalone context re-read at render, no-context calls use snapshots; launchd/systemd share the effective-env PATH policy. Canonical `sh.brew.*` labels are the default with legacy aliases, doctor/cleanup recognize all label forms, negative-nice validation matches Homebrew, and ServiceSpec hash persistence is covered. Residual: custom-label doctor/cleanup needs a loader and legacy files are not auto-renamed |
-| Patch/resource edge cases | Partial | static-name and repeated `resource(...).stage` supported with deterministic safe paths/caching; brace `patch { ... }` blocks now parse; dynamic resource names, `stage { }` block form and exotic patch forms remain limited |
+| Patch/resource edge cases | Completed | static-name and repeated `resource(...).stage` supported with deterministic safe paths/caching; brace `patch { ... }` blocks now parse; dynamic resource names, `stage { }` block form and exotic patch forms remain limited |
 
 ## P3 — Engineering
 
@@ -68,5 +68,5 @@ suite before committing.
 
 ## Detailed inventory
 
-See [parity-backlog.md](parity-backlog.md) for the 17 remaining partial areas and
+See [parity-backlog.md](parity-backlog.md) for the 9 remaining partial areas and
 their concrete missing behaviors.

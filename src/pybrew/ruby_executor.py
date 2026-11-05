@@ -934,6 +934,22 @@ module MacOS
     @version
   end
 
+  def self.version=(value)
+    @version = Version.new(value.to_s)
+    @version
+  end
+
+  # Clear every memoized host-detection value (tests and long-lived shims).
+  def self.reset_cache!
+    @full_version = nil
+    @version = nil
+    @sdk = nil
+    @latest_sdk_version = nil
+    @languages = nil
+    @active_developer_dir = nil
+    nil
+  end
+
   def self.mdfind(query)
     Utils.popen_read("mdfind", query.to_s).to_s
   end
@@ -1044,11 +1060,22 @@ module MacOS
         found = MacOS.sdk
         return found.nil? ? latest_sdk : found
       end
-      wanted = version.to_s
+      wanted = if version.is_a?(Symbol)
+        MacOS::RELEASES[version]
+      else
+        version.to_s
+      end
+      return latest_sdk if wanted.nil? || wanted.empty?
+
       all_sdks.find do |candidate|
         candidate.version.to_s == wanted ||
           candidate.version.to_s.start_with?("#{wanted}.")
       end || latest_sdk
+    end
+
+    def self.sdk_path(version = nil)
+      found = sdk_for(version)
+      found.nil? ? nil : found.path
     end
 
     def self.sdk_if_applicable(version = nil)
@@ -1098,6 +1125,11 @@ module MacOS
     end
 
     def self.sdk_path
+      found = MacOS::SDK.sdk_for
+      return found.path unless found.nil?
+
+      MacOS.sdk_path
+    rescue StandardError
       MacOS.sdk_path
     end
 
@@ -7714,14 +7746,99 @@ class Keg
   ].freeze
   BINARY_ELF_MAGIC = [0x7F, 0x45, 0x4C, 0x46].freeze
 
-  def binary_kind(path)
-    bytes = path.binread(4).bytes
-    return :elf if bytes == BINARY_ELF_MAGIC
-    return :macho if BINARY_MACHO_MAGICS.include?(bytes)
+  MACHO_CPU_ARCHS = {
+    0x01000007 => "x86_64", 0x0100000C => "arm64",
+    7 => "i386", 12 => "arm", 18 => "ppc", 0x01000012 => "ppc64",
+  }.freeze
+  ELF_MACHINE_ARCHS = {
+    62 => "x86_64", 183 => "aarch64", 3 => "i386", 40 => "arm",
+    20 => "ppc", 21 => "ppc64", 8 => "mips", 243 => "riscv",
+  }.freeze
 
-    :unknown
+  def binary_info(path)
+    pathname = Pathname.new(path.to_s)
+    info = {
+      "path" => pathname.to_s,
+      "kind" => "unknown",
+      "format" => nil,
+      "arch" => nil,
+      "bits" => nil,
+      "fat" => false,
+      "executable" => File.executable?(pathname.to_s),
+      "symlink" => pathname.symlink?,
+      "size" => (pathname.size rescue nil),
+    }
+    bytes = pathname.binread(64).bytes
+    if bytes[0, 4] == BINARY_ELF_MAGIC
+      info["kind"] = "elf"
+      elf_class = bytes[4]
+      info["bits"] = elf_class == 1 ? 32 : (elf_class == 2 ? 64 : nil)
+      info["format"] = elf_class == 1 ? "elf32" : "elf64"
+      info["arch"] = ELF_MACHINE_ARCHS[bytes[18].to_i | (bytes[19].to_i << 8)]
+    elsif BINARY_MACHO_MAGICS.include?(bytes[0, 4])
+      info["kind"] = "macho"
+      magic = bytes[0, 4]
+      fat = [[0xCA, 0xFE, 0xBA, 0xBE], [0xBE, 0xBA, 0xFE, 0xCA]].include?(magic)
+      info["fat"] = fat
+      if fat
+        info["format"] = magic.first == 0xCA ? "fat32" : "fat64"
+      else
+        big_endian = magic == [0xFE, 0xED, 0xFA, 0xCE] || magic == [0xFE, 0xED, 0xFA, 0xCF]
+        if big_endian
+          cputype = (bytes[4].to_i << 24) | (bytes[5].to_i << 16) | (bytes[6].to_i << 8) | bytes[7].to_i
+        else
+          cputype = bytes[4].to_i | (bytes[5].to_i << 8) | (bytes[6].to_i << 16) | (bytes[7].to_i << 24)
+        end
+        bits = magic == [0xFE, 0xED, 0xFA, 0xCF] || magic == [0xCF, 0xFA, 0xED, 0xFE] ? 64 : 32
+        info["bits"] = bits
+        info["format"] = bits == 64 ? "macho64" : "macho32"
+        info["arch"] = MACHO_CPU_ARCHS[cputype]
+      end
+    end
+    info
   rescue ScriptError, StandardError
-    :unknown
+    { "path" => path.to_s, "kind" => "unknown", "format" => nil,
+      "arch" => nil, "bits" => nil, "fat" => false, "executable" => false,
+      "symlink" => false, "size" => nil }
+  end
+
+  def binary_kind(path)
+    binary_info(path)["kind"].to_sym
+  end
+
+  # Inode-aware file list: hardlinked binaries are patched once (patching the
+  # same inode twice would duplicate install_name_tool/patchelf work).
+  def binary_relocation_targets(files = nil)
+    entries = if files.nil?
+      Dir.glob((@path/"**/*").to_s, File::FNM_DOTMATCH)
+    else
+      Array(files).map(&:to_s)
+    end
+    seen = {}
+    targets = []
+    skipped = []
+    entries.map { |entry| Pathname.new(entry) }.select do |path|
+      next false if path.symlink?
+      next false unless path.file?
+      next false if path.to_s.include?("/.git/")
+
+      %i[macho elf].include?(binary_kind(path))
+    end.sort_by(&:to_s).each do |path|
+      stat = begin
+        path.stat
+      rescue StandardError
+        nil
+      end
+      key = stat.nil? ? path.to_s : [stat.dev, stat.ino]
+      if !stat.nil? && seen.key?(key)
+        skipped << { "file" => path.to_s, "reason" => "hardlink",
+                     "hardlink_of" => seen[key] }
+        next
+      end
+      seen[key] = path.to_s unless stat.nil?
+      targets << path
+    end
+    [targets, skipped]
   end
 
   def binary_relocation_files(files = nil)
@@ -7853,31 +7970,51 @@ class Keg
   end
 
   def binary_relocation_plan(replacements = {}, files: nil, rpath_additions: [],
-                             rpath_deletions: [], codesign: false)
+                             rpath_deletions: [], codesign: false,
+                             dylib_id: nil, dylib_ids: nil, interpreter: nil,
+                             rpath_set: nil)
     mapping = relocation_mapping(replacements)
     plan = {
       "files" => [],
       "commands" => [],
       "skipped" => [],
+      "matrix" => [],
+      "hardlink_skipped" => [],
       "codesign_files" => [],
       "codesign_commands" => [],
       "codesign_verify_commands" => [],
       "codesign_skipped" => [],
     }
-    binary_relocation_files(files).each do |path|
-      kind = binary_kind(path)
+    targets, hardlink_skipped = binary_relocation_targets(files)
+    plan["hardlink_skipped"] = hardlink_skipped
+    targets.each do |path|
+      info = binary_info(path)
+      kind = info["kind"].to_sym
       tool = binary_relocation_tool(kind)
+      entry = info.merge(
+        "tool" => tool,
+        "commands" => [],
+        "codesign" => nil
+      )
       if tool.nil?
         plan["skipped"] << {
           "file" => path.to_s,
           "kind" => kind.to_s,
           "reason" => "relocation tool not found",
         }
+        entry["skipped"] = "relocation tool not found"
+        plan["matrix"] << entry
         next
       end
       commands = []
       if kind == :macho
         mapping.each { |old, new| commands << [tool, "-change", old, new, path.to_s] }
+        entry["dylib_id"] = if dylib_ids.is_a?(Hash)
+          dylib_ids[path.basename.to_s] || dylib_ids[path.basename(".dylib").to_s]
+        else
+          dylib_id
+        end
+        commands << [tool, "-id", entry["dylib_id"].to_s, path.to_s] unless entry["dylib_id"].nil?
         Array(rpath_deletions).each do |value|
           commands << [tool, "-delete_rpath", value.to_s, path.to_s]
         end
@@ -7888,13 +8025,26 @@ class Keg
         mapping.each do |old, new|
           commands << [tool, "--replace-needed", old, new, path.to_s]
         end
-        if !Array(rpath_additions).empty?
-          rpath = Array(rpath_additions).map(&:to_s).join(":")
-          commands << [tool, "--set-rpath", rpath, path.to_s]
+        entry["interpreter"] = if interpreter.is_a?(Hash)
+          interpreter[path.basename.to_s]
+        else
+          interpreter
+        end
+        commands << [tool, "--set-interpreter", entry["interpreter"].to_s, path.to_s] unless entry["interpreter"].nil?
+        if !rpath_set.nil?
+          Array(rpath_set).each do |value|
+            commands << [tool, "--set-rpath", value.to_s, path.to_s]
+          end
+        elsif !Array(rpath_additions).empty?
+          Array(rpath_additions).each do |value|
+            commands << [tool, "--set-rpath", value.to_s, path.to_s]
+          end
         elsif !Array(rpath_deletions).empty?
           commands << [tool, "--remove-rpath", path.to_s]
         end
       end
+      entry["commands"] = commands
+      plan["matrix"] << entry
       next if commands.empty?
 
       if kind == :macho && codesign
@@ -7904,10 +8054,12 @@ class Keg
             "file" => path.to_s,
             "reason" => "codesign tool not found",
           }
+          entry["codesign"] = "tool not found"
         else
           plan["codesign_files"] << path.to_s
           plan["codesign_commands"] << codesign_sign_command(path)
           plan["codesign_verify_commands"] << codesign_verify_command(path)
+          entry["codesign"] = codesign_identity
         end
       end
       plan["files"] << path.to_s
@@ -7917,25 +8069,28 @@ class Keg
   end
 
   def binary_relocation_report(replacements = {}, files: nil, rpath_additions: [],
-                               rpath_deletions: [], codesign: false)
+                               rpath_deletions: [], codesign: false, **options)
     binary_relocation_plan(
       replacements,
       files: files,
       rpath_additions: rpath_additions,
       rpath_deletions: rpath_deletions,
-      codesign: codesign
+      codesign: codesign,
+      **options
     )
   end
 
   def relocate_binary_files(replacements = {}, dry_run: false, files: nil,
                             strict: false, rpath_additions: [], rpath_deletions: [],
-                            codesign: false)
+                            codesign: false, ignore_failures: false,
+                            verify_placeholders: false, **options)
     plan = binary_relocation_plan(
       replacements,
       files: files,
       rpath_additions: rpath_additions,
       rpath_deletions: rpath_deletions,
-      codesign: codesign
+      codesign: codesign,
+      **options
     )
     if strict && !plan["skipped"].empty?
       skipped = plan["skipped"].first
@@ -7951,15 +8106,61 @@ class Keg
             "or install codesign"
     end
     executed = []
+    failed = []
     unless dry_run
-      plan["commands"].each do |command|
-        begin
-          Utils.popen_read(*command.map(&:to_s), safe: true)
-          executed << command
-        rescue ScriptError, StandardError => error
-          raise RuntimeError,
-                "binary relocation failed for #{command.last}: " \
-                "#{error.class}: #{error.message}"
+      plan["matrix"].each do |entry|
+        next if entry["commands"].empty?
+
+        path = entry["path"]
+        original = begin
+          Pathname.new(path).binread
+        rescue ScriptError, StandardError
+          nil
+        end
+        entry["commands"].each do |command|
+          begin
+            Utils.popen_read(*command.map(&:to_s), safe: true)
+            executed << command
+          rescue ScriptError, StandardError => error
+            restored = false
+            if !original.nil?
+              begin
+                Pathname.new(path).binwrite(original)
+                restored = true
+              rescue ScriptError, StandardError
+                restored = false
+              end
+            end
+            failure = {
+              "file" => path,
+              "command" => command,
+              "reason" => "#{error.class}: #{error.message}",
+              "restored" => restored,
+            }
+            failed << failure
+            entry["failed"] = failure
+            entry["restored"] = restored
+            next if ignore_failures
+
+            raise RuntimeError,
+                  "binary relocation failed for #{path}: #{error.class}: #{error.message}"
+          end
+        end
+        if entry["failed"].nil?
+          after = binary_info(path)
+          entry["verified_magic"] = after["kind"] == entry["kind"]
+          if verify_placeholders
+            bytes = begin
+              Pathname.new(path).binread
+            rescue ScriptError, StandardError
+              ""
+            end
+            remaining = relocation_mapping(replacements).keys.select do |old|
+              !old.empty? && bytes.include?(old)
+            end
+            entry["placeholders_removed"] = remaining.empty?
+            entry["remaining_placeholders"] = remaining
+          end
         end
       end
     end
@@ -7997,7 +8198,10 @@ class Keg
       "files" => plan["files"],
       "commands" => plan["commands"],
       "executed" => executed,
+      "failed" => failed,
       "skipped" => plan["skipped"],
+      "matrix" => plan["matrix"],
+      "hardlink_skipped" => plan["hardlink_skipped"],
       "codesign_files" => plan["codesign_files"],
       "codesign_commands" => plan["codesign_commands"],
       "codesign_verify_commands" => plan["codesign_verify_commands"],
@@ -8881,11 +9085,47 @@ module SystemConfig
       RUBY_VERSION.to_s
     end
 
+    def tap_paths
+      roots = Array(PYBREW_CONFIG["taps"]).map(&:to_s).reject(&:empty?)
+      ENV["PYBREW_TAPS"].to_s.split(File::PATH_SEPARATOR).each do |root|
+        roots << root unless root.to_s.strip.empty?
+      end
+      roots.map { |root| Pathname.new(root) }.select(&:directory?).map(&:expand_path).uniq
+    rescue StandardError
+      []
+    end
+
+    def describe_tap(tap)
+      path = tap.is_a?(Pathname) ? tap : Pathname.new(tap.to_s)
+      return "#{path} (not found)" unless path.directory?
+
+      formula_dir = path/"Formula"
+      count = formula_dir.directory? ? Dir.glob((formula_dir/"**/*.rb").to_s).length : 0
+      "#{path.dirname.basename}/#{path.basename} => #{path} (#{count} formulae)"
+    rescue StandardError
+      tap.to_s
+    end
+
     def describe_taps
-      taps = Array(PYBREW_CONFIG["taps"]).map(&:to_s).reject(&:empty?)
-      taps.empty? ? "(none)" : taps.join(", ")
+      paths = tap_paths
+      return "(none)" if paths.empty?
+
+      paths.map { |path| describe_tap(path) }.join(", ")
     rescue StandardError
       "(none)"
+    end
+
+    def describe_env
+      keys = %w[
+        HOMEBREW_PREFIX HOMEBREW_CELLAR HOMEBREW_REPOSITORY HOMEBREW_CACHE
+        HOMEBREW_TEMP HOMEBREW_LOGS HOMEBREW_NO_AUTO_UPDATE
+      ]
+      keys.map do |key|
+        value = key == "HOMEBREW_PREFIX" ? HOMEBREW_PREFIX.to_s : ENV[key].to_s
+        "#{key}=#{value}"
+      end.join(" ")
+    rescue StandardError
+      "N/A"
     end
 
     def describe_arch
@@ -8907,7 +9147,8 @@ module SystemConfig
     end
 
     def taps_config(out = $stdout)
-      out.puts "Taps: #{describe_taps}"
+      out.puts "Taps: #{tap_paths.empty? ? "(none)" : ""}"
+      tap_paths.each { |path| out.puts "  #{describe_tap(path)}" }
       out
     end
 
@@ -8977,17 +9218,22 @@ module SystemConfig
     def homebrew_config(out = $stdout)
       out.puts "HOMEBREW_PREFIX: #{HOMEBREW_PREFIX}"
       out.puts "HOMEBREW_CELLAR: #{HOMEBREW_CELLAR}"
+      out.puts "HOMEBREW_REPOSITORY: #{defined?(HOMEBREW_REPOSITORY) ? HOMEBREW_REPOSITORY : HOMEBREW_PREFIX}"
+      out.puts "HOMEBREW_VERSION: #{HOMEBREW_VERSION}"
       out
     end
 
     def homebrew_env_config(out = $stdout)
       out.puts "Homebrew Ruby: #{describe_homebrew_ruby}"
+      out.puts "Homebrew Env: #{describe_env}"
       out
     end
 
     def hardware_config(out = $stdout)
       out.puts "Hardware: #{describe_hardware}"
       out.puts "CPU: #{Hardware::CPU.arch}" if OS.mac? || OS.linux?
+      out.puts "CPU Cores: #{Hardware::CPU.cores} (#{Hardware::CPU.physical_cores} physical)" rescue nil
+      out.puts "CPU Features: #{Array(Hardware::CPU.features).join(" ")}" rescue nil
       out
     end
 
@@ -9002,11 +9248,18 @@ module SystemConfig
       out
     end
 
-    def dump_tap_config(_tap = nil, out = $stdout)
+    def dump_tap_config(tap = nil, out = $stdout)
+      if tap.nil?
+        tap_paths.each { |path| out.puts "Tap: #{describe_tap(path)}" }
+      else
+        out.puts "Tap: #{describe_tap(tap)}"
+      end
       out
     end
 
     def core_tap_config(out = $stdout)
+      core = tap_paths.find { |path| path.to_s.include?("homebrew-core") }
+      out.puts "Core Tap: #{core.nil? ? "(none)" : describe_tap(core)}"
       out
     end
 
@@ -9267,12 +9520,19 @@ class PybrewResourceDefinition
     super
   end
 
+  def patch(*args, &block)
+    @patches ||= []
+    @patches << PybrewPatchDefinition.new(args, block)
+    nil
+  end
+
   def respond_to_missing?(method_name, include_private = false)
     FIELDS.include?(method_name) || super
   end
 
   def to_resource
     info = {}
+    info["patches"] = Array(@patches).map(&:to_hash) unless @patches.nil?
     @attrs.each do |key, value|
       normalized = value.is_a?(Pathname) ? value.to_s : value
       normalized = normalized.map { |entry| entry.is_a?(Pathname) ? entry.to_s : entry } if normalized.is_a?(Array)
@@ -9290,7 +9550,30 @@ class PybrewPatchDefinition
     @args = Array(args)
     @attrs = {}
     @block = block
+    parse_arguments!
     capture_block! unless block.nil?
+  end
+
+  # Homebrew patch argument matrix:
+  #   patch "url" | patch "file.diff" | patch :p0, "inline diff" |
+  #   patch :DATA | patch do url ... end
+  def parse_arguments!
+    return if @args.empty?
+
+    first = @args.first
+    second = @args[1]
+    if first.is_a?(Symbol)
+      if first == :DATA
+        @attrs[:data] = true
+      else
+        @attrs[:strip] = first
+      end
+      @attrs[:data] = second if second.is_a?(String)
+    elsif first.is_a?(String)
+      @attrs[:url] = first
+    elsif first.is_a?(Pathname)
+      @attrs[:file] = first
+    end
   end
 
   def capture_block!
@@ -9317,34 +9600,75 @@ class PybrewPatchDefinition
     FIELDS.include?(method_name) || super
   end
 
-  def url
-    return @attrs[:url] if @attrs.key?(:url)
+  def url(value = nil)
+    @attrs[:url] = value unless value.nil?
+    return @attrs[:url] if @attrs.key?(:url) && !@attrs[:url].nil?
 
     @args.first if @args.first.is_a?(String)
   end
 
-  def file
-    @attrs[:file] || (@args.first if @args.first.is_a?(Pathname))
+  def file(value = nil)
+    @attrs[:file] = value unless value.nil?
+    return @attrs[:file] if @attrs.key?(:file) && !@attrs[:file].nil?
+
+    @args.first if @args.first.is_a?(Pathname)
   end
 
-  def sha256
+  def sha256(value = nil)
+    @attrs[:sha256] = value unless value.nil?
     @attrs[:sha256]
   end
 
-  def strip
-    value = @attrs.key?(:strip) ? @attrs[:strip] : @args.first
-    value.nil? || value.is_a?(String) || value == :DATA ? value : value
+  def strip(value = nil)
+    @attrs[:strip] = value unless value.nil?
+    return @attrs[:strip] unless @attrs[:strip].nil?
+    return nil if data?
+
+    @args.first.is_a?(Symbol) ? @args.first : nil
   end
 
-  def directory
+  # Inline diff data for ``patch :pN, "diff"`` forms.
+  def data
+    return @attrs[:data] if @attrs[:data].is_a?(String)
+    return @args[1] if @args[1].is_a?(String)
+
+    nil
+  end
+
+  def apply_value
+    @attrs[:apply]
+  end
+
+  def patch_files
+    [file].compact.map(&:to_s)
+  end
+
+  def to_hash
+    {
+      "url" => url,
+      "file" => (file.nil? ? nil : file.to_s),
+      "sha256" => sha256,
+      "strip" => strip,
+      "data" => data,
+      "directory" => (directory.nil? ? nil : directory.to_s),
+      "resolves" => resolves,
+      "type" => type,
+      "apply" => apply_value,
+    }
+  end
+
+  def directory(value = nil)
+    @attrs[:directory] = value unless value.nil?
     @attrs[:directory]
   end
 
-  def resolves
+  def resolves(*values)
+    @attrs[:resolves] = Array(values).flatten.compact.map(&:to_s) unless values.empty?
     Array(@attrs[:resolves])
   end
 
-  def type
+  def type(value = nil)
+    @attrs[:type] = value unless value.nil?
     @attrs[:type]
   end
 
@@ -9711,6 +10035,10 @@ class PybrewLoadedFormula
     patches
   end
 
+  def patch_files
+    patches.flat_map(&:patch_files)
+  end
+
   def fetch?
     !self.class.loaded_fetch_block.nil?
   end
@@ -10044,6 +10372,17 @@ module Formulary
     matrix[:tap] = taps.length == 1
     matrix[:tap_ambiguous] = taps.length > 1
     matrix[:path] = File.file?(raw) && File.extname(raw) == ".rb"
+    matrix[:alias] = begin
+      !tap_alias_targets(File.basename(raw, ".rb")).empty?
+    rescue ScriptError, StandardError
+      false
+    end
+    matrix[:keg] = begin
+      rack_name = File.basename(raw, ".rb").split("/").last
+      (HOMEBREW_CELLAR/rack_name).directory?
+    rescue ScriptError, StandardError
+      false
+    end
     matrix[:name] = !matrix[:path] && !matrix[:uri] && !matrix[:bottle]
     if matrix[:tap_ambiguous]
       matrix[:ambiguity] = taps.map { |tap_name, name, _path| "#{tap_name}/#{name}" }.sort
@@ -10058,6 +10397,10 @@ module Formulary
     return :api if matrix[:api]
     return :tap if matrix[:tap]
     return :path if matrix[:path]
+    return :alias if matrix[:alias]
+    return :keg if matrix[:keg] && !matrix[:api] && !matrix[:tap] && !matrix[:alias]
+    return :name if matrix[:name]
+    return :keg if matrix[:keg]
 
     :name
   end
@@ -11006,25 +11349,58 @@ module Formulary
     nil
   end
 
-  def resolve_tap_alias(alias_name)
-    found = tap_alias_target(alias_name)
-    return nil if found.nil?
+  # All distinct local tap alias targets, sorted for determinism.
+  def tap_alias_targets(alias_name)
+    wanted = alias_name.to_s.split("/").last.to_s.sub(/\.rb\z/, "")
+    return [] if wanted.empty?
 
-    canonical, target = found
+    targets = []
+    tap_alias_paths.each do |alias_path|
+      next unless alias_path.basename(".rb").to_s == wanted
+
+      target = alias_path.symlink? ? alias_path.realpath : alias_path
+      next unless target.file?
+
+      targets << [target.basename(".rb").to_s, target]
+    rescue Errno::ENOENT, Errno::EACCES
+      next
+    end
+    if targets.empty?
+      source_alias = tap_source_alias(alias_name)
+      targets << source_alias unless source_alias.nil?
+    end
+    targets.uniq { |_name, path| path.to_s }.sort_by { |_name, path| path.to_s }
+  end
+
+  def resolve_tap_alias(alias_name)
+    targets = tap_alias_targets(alias_name)
+    return nil if targets.length != 1
+
+    canonical, target = targets.first
     load_formula_from_path(canonical, target)
+  rescue PybrewFormulaAmbiguityError
+    raise
   rescue ScriptError, StandardError
     nil
   end
 
   def resolve_tap_alias!(alias_name)
-    found = tap_alias_target(alias_name)
-    if found.nil?
+    targets = tap_alias_targets(alias_name)
+    if targets.empty?
       raise PybrewFormulaUnavailableError,
             "no local tap alias named #{alias_name.inspect} in " \
             "#{tap_roots.join(", ")} (expected Aliases/<name>.rb)"
     end
+    if targets.length > 1
+      descriptions = targets.map do |canonical, path|
+        "#{tap_name_for_root(path.dirname.dirname)}/#{canonical}"
+      end.sort
+      raise PybrewFormulaAmbiguityError,
+            "Alias #{alias_name.inspect} is defined in multiple taps: " \
+            "#{descriptions.join(", ")}"
+    end
 
-    canonical, target = found
+    canonical, target = targets.first
     load_formula_from_path(canonical, target)
   end
 
@@ -11711,6 +12087,31 @@ class PybrewResource
     @info = info || {}
     @url = @info["url"]
     @sha256 = @info["sha256"]
+    @patches = Array(@info["patches"]).map do |entry|
+      next nil unless entry.is_a?(Hash)
+
+      args = if !entry["url"].nil?
+        [entry["url"]]
+      elsif !entry["file"].nil?
+        [Pathname.new(entry["file"].to_s)]
+      else
+        []
+      end
+      PybrewPatchDefinition.new(args, nil)
+    end.compact
+    @patches += @info["patch_objects"] if @info["patch_objects"].is_a?(Array)
+  end
+
+  def patches
+    @patches
+  end
+
+  def patch_files
+    patches.flat_map(&:patch_files)
+  end
+
+  def patches?
+    !patches.empty?
   end
 
   def version
@@ -11746,22 +12147,16 @@ class PybrewResource
   # positional ``target`` extracts/copies the staged tree into that directory
   # (bounded: the bridge never downloads inside Ruby).
   def stage(target = nil, debug_symbols: false, staging_path: nil, staged: false, &block)
-    path = staged_path
-    if !target.nil?
-      target_path = Pathname.new(target.to_s)
-      target_path.mkpath
-      Dir.glob((path/"**/*").to_s, File::FNM_DOTMATCH).each do |entry|
-        relative = Pathname.new(entry).relative_path_from(path)
-        next if relative.to_s == "." || relative.to_s.start_with?("..")
+    if !target.nil? && !staging_path.nil?
+      raise ArgumentError, "resource stage accepts either target or staging_path, not both"
+    end
 
-        destination = target_path/relative
-        if File.directory?(entry)
-          destination.mkpath
-        else
-          destination.dirname.mkpath
-          FileUtils.cp(entry, destination.to_s)
-        end
-      end
+    path = staged_path
+    destination = target.nil? ? staging_path : target
+    if !destination.nil?
+      target_path = Pathname.new(destination.to_s)
+      target_path.mkpath
+      copy_staged_tree(path, target_path)
       return target_path if block.nil?
 
       return block.call(target_path)
@@ -11772,12 +12167,33 @@ class PybrewResource
       entries = Dir["*"].reject { |entry| entry == "__MACOSX" }
       if @info["staged_from_archive"] == "true" &&
          entries.length == 1 &&
-         File.directory?(entries.first)
+         File.directory?(entries.first) && !File.symlink?(entries.first)
         Dir.chdir(entries.first) { block.call(Pathname.pwd) }
       else
         block.call(Pathname.pwd)
       end
     end
+  end
+
+  # Copy a staged tree preserving symlinks (and replacing stale target links).
+  def copy_staged_tree(source, destination)
+    Dir.glob((source/"**/*").to_s, File::FNM_DOTMATCH).each do |entry|
+      relative = Pathname.new(entry).relative_path_from(source)
+      next if relative.to_s == "." || relative.to_s.start_with?("..")
+
+      destination_path = destination/relative
+      if File.symlink?(entry)
+        destination_path.dirname.mkpath
+        File.unlink(destination_path.to_s) if destination_path.symlink? || destination_path.exist?
+        File.symlink(File.readlink(entry), destination_path.to_s)
+      elsif File.directory?(entry)
+        destination_path.mkpath
+      else
+        destination_path.dirname.mkpath
+        FileUtils.cp(entry, destination_path.to_s)
+      end
+    end
+    destination
   end
 
   def fetch
@@ -11866,7 +12282,7 @@ class PybrewResource
   end
 
   def unpack(*_args)
-    nil
+    staged? ? staged_path : nil
   end
 
   def apply_patches
@@ -12491,15 +12907,18 @@ module Utils
         reset = meta["x-ratelimit-reset"].to_s
         resource = meta["x-ratelimit-resource"]
         limit = meta["x-ratelimit-limit"]
-        if !retry_after.nil? && (remaining.nil? || remaining.to_i > 0)
+        secondary_message = message.match?(/secondary rate limit/i)
+        if code == "429"
           raise API::RateLimitExceededError.new(
             message,
-            reset: Time.now.to_i + retry_after,
+            reset: retry_after.nil? ? (reset.empty? ? Time.now.to_i + 60 : reset.to_i) : Time.now.to_i + retry_after,
             resource: "secondary",
             limit: limit
           )
         end
-        if code == "403" && !remaining.nil? && remaining.to_i <= 0
+        # Primary limit: the reset window is exhausted.  That is true even if
+        # a retry-after header is also present, so it takes precedence.
+        if !remaining.nil? && remaining.to_i <= 0
           raise API::RateLimitExceededError.new(
             message,
             reset: reset.empty? ? Time.now.to_i + 60 : reset.to_i,
@@ -12507,11 +12926,13 @@ module Utils
             limit: limit
           )
         end
-        if code == "429"
+        # Secondary limit: retry-after is authoritative; 429s and explicit
+        # "secondary rate limit" messages also land here.
+        if !retry_after.nil? || secondary_message
           raise API::RateLimitExceededError.new(
             message,
-            reset: reset.empty? ? Time.now.to_i + 60 : reset.to_i,
-            resource: resource.nil? ? "secondary" : resource,
+            reset: retry_after.nil? ? (reset.empty? ? Time.now.to_i + 60 : reset.to_i) : Time.now.to_i + retry_after,
+            resource: "secondary",
             limit: limit
           )
         end
@@ -12578,6 +12999,9 @@ module Utils
                           raise_errors: raise_errors, retries: remaining - 1,
                           max_backoff: max_backoff,
                           transport_retries: transport_retries)
+        rescue API::AuthenticationFailedError, API::HTTPNotFoundError,
+               API::ValidationFailedError, API::GitRepositoryIsEmptyError
+          raise
         rescue API::Error
           transport_left = if transport_retries.nil?
             github_transport_retries
@@ -12779,13 +13203,40 @@ module Utils
       get_json(url_to("orgs", org, "teams", team, "members"))
     end
 
-    def organisation_repositories(organisation, _from = nil, _to = nil, _verbose = false)
-      data = get_json("#{url_to("orgs", organisation, "repos")}?per_page=#{MAX_PER_PAGE}")
-      if data.is_a?(Hash)
-        Array(data["items"] || data["repositories"])
-      else
-        Array(data)
+    # Page through a REST list endpoint.  Stops on a short/empty page, the
+    # page cap, or an injected transport that returns fewer items.
+    def paginate_rest(url, per_page: MAX_PER_PAGE, max_pages: 20)
+      results = []
+      page = 1
+      per_page = [per_page.to_i, 1].max
+      while page <= [max_pages.to_i, 1].max
+        separator = url.to_s.include?("?") ? "&" : "?"
+        page_url = "#{url}#{separator}per_page=#{per_page}&page=#{page}"
+        data = get_json(page_url)
+        items = if data.is_a?(Hash)
+          Array(data["items"] || data["repositories"] || data["workflow_runs"])
+        else
+          Array(data)
+        end
+        break if items.empty?
+
+        results.concat(items)
+        break if items.length < per_page
+
+        page += 1
       end
+      results
+    end
+
+    def organisation_repositories(organisation, _from = nil, _to = nil, _verbose = false)
+      paginate_rest(url_to("orgs", organisation, "repos"))
+    end
+
+    def issues(repo:, **filters)
+      query = filters.map { |key, value| "#{key}=#{value}" }.join("&")
+      url = url_to("repos", repo, "issues")
+      url = "#{url}?#{query}" unless query.empty?
+      paginate_rest(url)
     end
 
     def sponsorships(user)
@@ -13510,7 +13961,8 @@ class Patch
 end
 
 class PybrewPatch
-  attr_reader :name, :url, :sha256, :strip_level
+  attr_reader :name, :url, :sha256, :strip_level, :file, :directory,
+              :resolves_list, :type_value, :apply_value, :data_value
 
   def initialize(name = nil)
     @name = name
@@ -13531,8 +13983,57 @@ class PybrewPatch
     @strip_level
   end
 
-  def apply(*_args)
-    source = @url.to_s
+  # ``apply :p0`` declares the strip level for the external patch; it must not
+  # execute anything while the (opt-in, inert) formula body is evaluated.
+  def apply(*args)
+    unless args.empty?
+      @apply_value = args.first
+      return @apply_value
+    end
+    # Bare ``apply`` on an explicitly built patch keeps the historical
+    # execution behavior; ``apply :pN`` declarations only store metadata.
+    return apply_patch! unless @url.nil? && @file.nil?
+
+    @apply_value
+  end
+
+  def file(value = nil)
+    @file = value unless value.nil?
+    @file
+  end
+
+  def directory(value = nil)
+    @directory = value unless value.nil?
+    @directory
+  end
+
+  def resolves(*values)
+    @resolves_list = Array(values).flatten.compact.map(&:to_s) unless values.empty?
+    @resolves_list || []
+  end
+
+  def type(value = nil)
+    @type_value = value unless value.nil?
+    @type_value
+  end
+
+  def data(value = nil)
+    @data_value = value unless value.nil?
+    @data_value
+  end
+
+  def data?
+    !@data_value.nil?
+  end
+
+  def patch_files
+    [@file].compact.map(&:to_s)
+  end
+
+  # Actual apply is a separate, explicit opt-in operation (kept for callers
+  # that construct patches deliberately); the bridge never invokes it.
+  def apply_patch!
+    source = (@file || @url).to_s
     text = if File.file?(source)
       File.read(source)
     elsif File.file?(File.basename(source))
@@ -13540,7 +14041,7 @@ class PybrewPatch
     else
       raise "Patch source not found: #{source}"
     end
-    strip_value = @strip_level.nil? ? "p1" : @strip_level.to_s
+    strip_value = (@strip_level || @apply_value || "p1").to_s
     strip_value = "p#{strip_value}" unless strip_value.start_with?("p")
     Patch.ensure_targets_within!(text, strip: strip_value, base: Dir.pwd)
     patch_binary = Utils.which("patch")
@@ -14624,9 +15125,12 @@ def _extract_resource_archive(archive: Path, destination: Path) -> None:
                     if not name or name.startswith(("/", "\\")) or ".." in parts:
                         raise BuildError(f"unsafe resource zip member: {name!r}")
                     if ((info.external_attr >> 16) & 0o170000) == 0o120000:
-                        raise BuildError(
-                            f"resource zip links are not supported: {name!r}"
+                        link_text = bundle.read(info).decode("utf-8", "replace")
+                        _create_safe_archive_link(
+                            destination, destination / name, link_text,
+                            kind="zip symlink", name=name
                         )
+                        continue
                     target = destination / name
                     if info.is_dir():
                         target.mkdir(parents=True, exist_ok=True)
@@ -14650,8 +15154,20 @@ def _extract_resource_archive(archive: Path, destination: Path) -> None:
                 target = destination / name
                 if member.isdir():
                     target.mkdir(parents=True, exist_ok=True)
-                elif member.issym() or member.islnk():
-                    raise BuildError(f"resource tar links are not supported: {name!r}")
+                elif member.issym():
+                    _create_safe_archive_link(
+                        destination, target, member.linkname, kind="tar symlink", name=name
+                    )
+                elif member.islnk():
+                    link_source = destination / member.linkname
+                    if not _path_within(destination, link_source) or not link_source.exists():
+                        raise BuildError(
+                            f"unsafe resource hard link: {name!r} -> {member.linkname!r}"
+                        )
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    if target.exists():
+                        target.unlink()
+                    os.link(link_source, target)
                 elif member.isfile():
                     target.parent.mkdir(parents=True, exist_ok=True)
                     source = tar.extractfile(member)
@@ -14690,6 +15206,40 @@ def _referenced_resource_names(body: str) -> Optional[set[str]]:
     if re.search(r"\bresource", without_literals):
         return None
     return literal_names
+
+
+def _path_within(root: Path, candidate: Path) -> bool:
+    """Return True when ``candidate`` stays inside ``root`` after resolution."""
+
+    try:
+        root_resolved = Path(root).resolve()
+        candidate_resolved = Path(candidate).resolve()
+    except OSError:
+        return False
+    try:
+        return os.path.commonpath([str(root_resolved), str(candidate_resolved)]) == str(
+            root_resolved
+        )
+    except ValueError:
+        return False
+
+
+def _create_safe_archive_link(
+    destination: Path, target: Path, link_text: str, *, kind: str, name: str
+) -> None:
+    """Create a relative symlink that cannot escape the staging directory."""
+
+    link_value = str(link_text or "")
+    if not link_value or os.path.isabs(link_value):
+        raise BuildError(f"unsafe resource {kind}: {name!r} -> {link_value!r}")
+    if ".." in Path(link_value).parts:
+        resolved = (target.parent / link_value).resolve()
+        if not _path_within(destination, resolved):
+            raise BuildError(f"unsafe resource {kind}: {name!r} -> {link_value!r}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists() or target.is_symlink():
+        target.unlink()
+    os.symlink(link_value, target)
 
 
 def _stage_resources(

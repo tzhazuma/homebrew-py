@@ -389,3 +389,102 @@ def test_short_alias_token_hash_is_canonical() -> None:
     assert hash(AlphaToken("a", 4)) == hash(AlphaToken("alpha", 4))
     assert BetaToken("b", 2) == BetaToken("beta", 2)
     assert hash(BetaToken("b", 2)) == hash(BetaToken("beta", 2))
+
+
+def test_version_upstream_comparison_table() -> None:
+    comparisons = [
+        ("0.1", "0.1.0", 0),
+        ("0.1", "0.2", -1),
+        ("1.2.3", "1.2.2", 1),
+        ("1.2.4", "1.2.4.1", -1),
+        ("1.2.3", "1.2.3alpha4", 1),
+        ("1.2.3", "1.2.3beta2", 1),
+        ("1.2.3", "1.2.3rc3", 1),
+        ("1.2.3", "1.2.3-p34", -1),
+        ("1.2.3alpha", "1.2.3", -1),
+        ("1.2.3", "1.2.3a", -1),
+        ("1.2.3alpha4", "1.2.3a4", 0),
+        ("1.2.3alpha4", "1.2.3A4", 0),
+        ("1.2.3alpha4", "1.2.3alpha3", 1),
+        ("1.2.3alpha4", "1.2.3alpha5", -1),
+        ("1.2.3alpha4", "1.2.3alpha10", -1),
+        ("1.2.3alpha4", "1.2.3beta2", -1),
+        ("1.2.3alpha4", "1.2.3rc3", -1),
+        ("1.2.3alpha4", "1.2.3-p34", -1),
+        ("1.2.3beta2", "1.2.3b2", 0),
+        ("1.2.3beta2", "1.2.3B2", 0),
+        ("1.2.3beta2", "1.2.3beta1", 1),
+        ("1.2.3beta2", "1.2.3beta3", -1),
+        ("1.2.3beta2", "1.2.3beta10", -1),
+        ("1.2.3beta2", "1.2.3alpha4", 1),
+        ("1.2.3beta2", "1.2.3rc3", -1),
+        ("1.2.3beta2", "1.2.3", -1),
+        ("1.2.3beta2", "1.2.3-p34", -1),
+        ("1.2.3pre9", "1.2.3PRE9", 0),
+        ("1.2.3pre9", "1.2.3pre8", 1),
+        ("1.2.3pre8", "1.2.3pre9", -1),
+        ("1.2.3pre9", "1.2.3pre10", -1),
+        ("1.2.3pre3", "1.2.3alpha2", 1),
+        ("1.2.3pre3", "1.2.3alpha4", 1),
+        ("1.2.3pre3", "1.2.3beta3", 1),
+        ("1.2.3pre3", "1.2.3beta5", 1),
+        ("1.2.3pre3", "1.2.3rc2", -1),
+        ("1.2.3pre3", "1.2.3", -1),
+        ("1.2.3pre3", "1.2.3-p2", -1),
+        ("1.2.3rc3", "1.2.3RC3", 0),
+        ("1.2.3rc3", "1.2.3rc2", 1),
+        ("1.2.3rc3", "1.2.3rc4", -1),
+        ("1.2.3rc3", "1.2.3rc10", -1),
+        ("1.2.3rc3", "1.2.3alpha4", 1),
+        ("1.2.3rc3", "1.2.3beta2", 1),
+        ("1.2.3rc3", "1.2.3", -1),
+        ("1.2.3rc3", "1.2.3-p34", -1),
+        ("1.2.3-p34", "1.2.3-P34", 0),
+        ("1.2.3-p34", "1.2.3-p33", 1),
+        ("1.2.3-p34", "1.2.3-p35", -1),
+        ("1.2.3-p34", "1.2.3-p9", 1),
+        ("1.2.3-p34", "1.2.3alpha4", 1),
+        ("1.2.3-p34", "1.2.3beta2", 1),
+        ("1.2.3-p34", "1.2.3rc3", 1),
+        ("1.2.3-p34", "1.2.3", 1),
+        ("1.2.3.post34", "1.2.3.post33", 1),
+        ("1.2.3.post34", "1.2.3.post35", -1),
+        ("1.2.3.post34", "1.2.3rc35", 1),
+        ("1.2.3.post34", "1.2.3alpha35", 1),
+        ("1.2.3.post34", "1.2.3beta35", 1),
+        ("1.2.3.post34", "1.2.3", 1),
+        ("2.1.0-p194", "2.1-p195", -1),
+        ("2.1-p195", "2.1.0-p194", 1),
+        ("2.1-p194", "2.1.0-p195", -1),
+        ("2.1.0-p195", "2.1-p194", 1),
+        ("2-p194", "2.1-p195", -1),
+        ("HEAD", "1.2.3", 1),
+        ("HEAD-abcdef", "1.2.3", 1),
+        ("1.2.3", "HEAD", -1),
+        ("1.2.3", "HEAD-fedcba", -1),
+        ("HEAD-abcdef", "HEAD-fedcba", 0),
+        ("HEAD", "HEAD-fedcba", 0),
+    ]
+    for left, right, expected in comparisons:
+        assert compare_versions(left, right) == expected, (left, right)
+    assert Version("1.2.3a4") == Version("1.2.3alpha4")
+    assert Version("1.2.3b2") == Version("1.2.3beta2")
+    assert hash(Version("1.2.3a4")) == hash(Version("1.2.3alpha4"))
+    assert Version("HEAD") > Version("1.2.3")
+    assert Version("HEAD-abcdef") == Version("HEAD-fedcba")
+    assert hash(Version("HEAD")) == hash(Version("HEAD-abcdef"))
+    assert PkgVersion.parse("1.2.3_1") > PkgVersion.parse("1.2.3")
+    assert hash(PkgVersion.parse("1.2.3_0")) == hash(Version("1.2.3"))
+    from pybrew.version import NULL_TOKEN, Token
+    assert Token.create("2") > NULL_TOKEN
+    assert Token.create("foo") == "foo"
+
+
+def test_raw_token_string_int_and_none_edges() -> None:
+    from pybrew.version import Token
+
+    assert Token.create("p194") == "p194"
+    assert Token.create("2") == 2
+    assert Token.create("2") > None
+    assert Token.create("p194") > None
+    assert not (Token.create("2") == "2")
