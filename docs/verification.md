@@ -51,6 +51,7 @@ Closed the documented partial areas across all owners; full suite grew from
 - CLI: online search index caching (`PYBREW_SEARCH_CACHE_DIR`/`TTL`), doctor
   reports installed formulae deleted from their tap.
 - Full suite: **1272 passed, 6 skipped**; real install verified.
+- Commits `310c7cd` + `84db07d`; CI `41976608255` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Scheduled upstream check 2026-11-05 09:00
 
