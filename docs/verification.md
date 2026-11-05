@@ -50,6 +50,7 @@ Closed the documented partial areas across all owners; full suite grew from
 - Completed rows: Test DSL lookup/version/Minitest, Keg relocation, MacOS SDK,
   Utils, SystemConfig, Patch/resource (plus Service earlier).
 - Full suite: **1336 passed, 6 skipped**; real install verified.
+- Commits `1a7955a` + `d136179`; CI `41989145325` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Residual parity batch 2026-11-05 (round 4)
 
