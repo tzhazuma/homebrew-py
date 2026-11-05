@@ -647,6 +647,7 @@ def _strategy_page_text(
     fetcher: Optional[Callable[[str], Any]],
     url: Optional[str],
     page: Optional[str | bytes],
+    using: Optional[str] = None,
 ) -> str:
     if page is not None:
         if isinstance(page, bytes):
@@ -659,7 +660,13 @@ def _strategy_page_text(
     if not url:
         raise CaskError("livecheck has no URL to fetch")
     try:
-        fetched = fetcher(url)
+        if using:
+            try:
+                fetched = fetcher(url, using=using)
+            except TypeError:
+                fetched = fetcher(url)
+        else:
+            fetched = fetcher(url)
     except Exception as error:  # caller-supplied transport
         raise CaskError(
             f"fetcher failed: {type(error).__name__}: {error}"
@@ -999,9 +1006,9 @@ def _strategy_page_text_with_options(
     page: Optional[str | bytes],
     options: dict[str, Any],
 ) -> str:
-    _strategy_using(options)
+    using = _strategy_using(options)
     _strategy_verify_url(options, url)
-    return _strategy_page_text(fetcher, url, page)
+    return _strategy_page_text(fetcher, url, page, using=using)
 
 
 def _strategy_remote_api(
@@ -1182,6 +1189,134 @@ def _strategy_header_candidates(page: str, regex: Optional[str]) -> list[str]:
     return normalized
 
 
+
+def _strategy_fetch_raw(
+    fetcher: Optional[Callable[[str], Any]],
+    url: Optional[str],
+    page: Optional[Any],
+    options: dict[str, Any],
+    *,
+    method: str = "GET",
+    binary: bool = False,
+) -> dict[str, Any]:
+    """Fetch a strategy resource, requesting headers/bytes when supported."""
+
+    using = _strategy_using(options)
+    _strategy_verify_url(options, url)
+    if page is not None:
+        return {"body": page, "headers": {}, "status": None, "url": url}
+    if fetcher is None:
+        raise CaskError(
+            "no page content or fetcher supplied; no network is performed"
+        )
+    if not url:
+        raise CaskError("livecheck has no URL to fetch")
+    kwargs = {
+        "include_response": True,
+        "method": method,
+        "binary": binary,
+        "using": using,
+    }
+    try:
+        fetched = fetcher(url, **kwargs)
+    except TypeError:
+        fetched = fetcher(url)
+    except Exception as error:
+        raise CaskError(
+            f"fetcher failed: {type(error).__name__}: {error}"
+        ) from error
+    if isinstance(fetched, dict):
+        body = fetched.get("body")
+        headers = fetched.get("headers") or {}
+        if not isinstance(headers, dict):
+            headers = {}
+        if body is None:
+            raise CaskError("fetcher returned no response body")
+        return {
+            "body": body,
+            "headers": {
+                str(key).lower(): str(value)
+                for key, value in headers.items()
+            },
+            "status": fetched.get("status"),
+            "url": fetched.get("url") or url,
+        }
+    if fetched is None:
+        raise CaskError("fetcher returned no page content")
+    return {"body": fetched, "headers": {}, "status": None, "url": url}
+
+
+def _extract_plist_versions_from_bytes(
+    payload: bytes, regex: Optional[str]
+) -> list[str]:
+    import io
+    import plistlib
+    import tarfile
+    import zipfile
+
+    versions: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: Any) -> None:
+        text = str(value or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            versions.append(text)
+
+    def from_plist(data: bytes) -> None:
+        try:
+            parsed = plistlib.loads(data)
+        except Exception:
+            return
+        if not isinstance(parsed, dict):
+            return
+        for key in ("CFBundleShortVersionString", "CFBundleVersion"):
+            value = parsed.get(key)
+            if value is not None:
+                add(value)
+
+    if zipfile.is_zipfile(io.BytesIO(payload)):
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            for member in archive.infolist()[:512]:
+                if not member.filename.endswith("Info.plist"):
+                    continue
+                if member.file_size > 10 * 1024 * 1024:
+                    continue
+                from_plist(archive.read(member))
+    else:
+        try:
+            with tarfile.open(fileobj=io.BytesIO(payload), mode="r:*") as archive:
+                for member in archive.getmembers()[:512]:
+                    if not member.name.endswith("Info.plist"):
+                        continue
+                    if member.size > 10 * 1024 * 1024:
+                        continue
+                    extracted = archive.extractfile(member)
+                    if extracted is not None:
+                        from_plist(extracted.read())
+        except tarfile.TarError:
+            pass
+    if not versions:
+        text = payload.decode("utf-8", errors="replace")
+        return _strategy_extract_plist_versions(text, regex)
+    return versions
+
+
+def _header_candidates(
+    headers: dict[str, str], body: str, regex: Optional[str]
+) -> list[str]:
+    if headers:
+        flattened = "\n".join(f"{key}: {value}" for key, value in headers.items())
+        if regex:
+            matches = _strategy_candidates(flattened, regex)
+            return matches
+        candidates = _strategy_candidates(flattened, r"(\d+(?:\.\d+)+)")
+        if candidates:
+            return candidates
+    return _strategy_header_candidates(body, regex)
+
+
+
 def _execute_python_livecheck_strategy(
     cask: Cask,
     *,
@@ -1218,7 +1353,9 @@ def _execute_python_livecheck_strategy(
             target = _github_latest_url(url or "")
             _strategy_using(options)
             _strategy_verify_url(options, url)
-            page_text = _strategy_page_text(fetcher, target, page)
+            page_text = _strategy_page_text(
+                fetcher, target, page, using=_strategy_using(options)
+            )
             page_size = len(page_text)
             candidates = _github_latest_candidates(page_text, regex_text)
         elif name == "git":
@@ -1249,13 +1386,21 @@ def _execute_python_livecheck_strategy(
             page_size = len(page_text)
             candidates = _strategy_electron_versions(page_text, regex_text)
         elif name == "extract_plist":
-            page_text = _strategy_page_text_with_options(
-                fetcher, url, page, options
+            response = _strategy_fetch_raw(
+                fetcher, url, page, options, binary=True
             )
-            page_size = len(page_text)
-            candidates = _strategy_extract_plist_versions(
-                page_text, regex_text
-            )
+            raw_body = response["body"]
+            if isinstance(raw_body, bytes):
+                page_size = len(raw_body)
+                candidates = _extract_plist_versions_from_bytes(
+                    raw_body, regex_text
+                )
+            else:
+                page_text = str(raw_body)
+                page_size = len(page_text)
+                candidates = _strategy_extract_plist_versions(
+                    page_text, regex_text
+                )
         elif name == "pypi":
             target = _strategy_pypi_url(url)
             if target is None:
@@ -1264,7 +1409,9 @@ def _execute_python_livecheck_strategy(
                 )
             _strategy_using(options)
             _strategy_verify_url(options, url)
-            page_text = _strategy_page_text(fetcher, target, page)
+            page_text = _strategy_page_text(
+                fetcher, target, page, using=_strategy_using(options)
+            )
             page_size = len(page_text)
             candidates = _strategy_json_versions(
                 page_text, regex_text, ("version",)
@@ -1277,7 +1424,9 @@ def _execute_python_livecheck_strategy(
                 )
             _strategy_using(options)
             _strategy_verify_url(options, url)
-            page_text = _strategy_page_text(fetcher, target, page)
+            page_text = _strategy_page_text(
+                fetcher, target, page, using=_strategy_using(options)
+            )
             page_size = len(page_text)
             candidates = _strategy_candidates(
                 page_text, regex_text or default_regex
@@ -1320,7 +1469,9 @@ def _execute_python_livecheck_strategy(
                 raise CaskError(f"{name} strategy could not derive an API URL")
             _strategy_using(options)
             _strategy_verify_url(options, url)
-            page_text = _strategy_page_text(fetcher, target, page)
+            page_text = _strategy_page_text(
+                fetcher, target, page, using=_strategy_using(options)
+            )
             page_size = len(page_text)
             candidates = _strategy_json_versions(
                 page_text, regex_text, keys
@@ -1333,18 +1484,32 @@ def _execute_python_livecheck_strategy(
                 raise CaskError(f"{name} strategy could not derive a listing URL")
             _strategy_using(options)
             _strategy_verify_url(options, url)
-            page_text = _strategy_page_text(fetcher, target, page)
+            page_text = _strategy_page_text(
+                fetcher, target, page, using=_strategy_using(options)
+            )
             page_size = len(page_text)
             candidates = _strategy_listing_candidates(
                 page_text, regex_text
             )
         elif name == "header_match":
-            _strategy_using(options)
-            _strategy_verify_url(options, url)
-            page_text = _strategy_page_text(fetcher, url, page)
+            response = _strategy_fetch_raw(
+                fetcher, url, page, options, method="HEAD"
+            )
+            headers = response["headers"]
+            page_text = (
+                response["body"]
+                if isinstance(response["body"], str)
+                else str(response["body"])
+            )
+            if not headers and not page_text.strip():
+                response = _strategy_fetch_raw(
+                    fetcher, url, page, options, method="GET"
+                )
+                headers = response["headers"]
+                page_text = str(response["body"])
             page_size = len(page_text)
-            candidates = _strategy_header_candidates(
-                page_text, regex_text
+            candidates = _header_candidates(
+                headers, page_text, regex_text
             )
         else:
             result = _strategy_result(

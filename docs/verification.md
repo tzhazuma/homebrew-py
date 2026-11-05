@@ -3,7 +3,7 @@
 ## Full parity batch 2026-11-05
 
 Closed the documented partial areas across all owners; full suite grew from
-1156 to **1371 passed, 6 skipped**.
+1156 to **1380 passed, 6 skipped**.
 
 - **Cask**: evaluator `zap` now captures trash/delete/rmdir/pkgutil; livecheck
   URL kwargs merge into request headers; installed caskfile falls back to JSON;
@@ -29,8 +29,18 @@ Closed the documented partial areas across all owners; full suite grew from
   index (file:// fixtures work).
 - Real install verification: `REAL INSTALL VERIFIED`.
 - Commits `57d927e` + `54fa7c5`; CI `41973914882` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
-- Inventory of the remaining 5 partial areas: `docs/parity-backlog.md`.
+- Inventory of the remaining 2 partial areas: `docs/parity-backlog.md`.
 
+
+## Residual parity batch 2026-11-05 (round 9)
+
+- livecheck: extract_plist now fetches/extracts zip/tar Info.plist in memory,
+  header_match uses real response headers, curl/homebrew_curl transport switching
+  with bounded redirects and sensitive-header stripping, verified/using options.
+- Sandbox: arbitrary Ruby interpreter execution now runs inside the same
+  sandbox-exec/bwrap plan (build/keg/temp writable roots), plus existing bwrap
+  BPF seccomp and capability/namespace reporting.
+- Full suite: **1380 passed, 6 skipped**; real install verified.
 
 ## Residual parity batch 2026-11-05 (round 8)
 

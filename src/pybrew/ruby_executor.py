@@ -15616,6 +15616,52 @@ def _stage_resources(
         info["staged_from_archive"] = "true"
 
 
+def _arbitrary_ruby_sandbox_plan(
+    formula: Formula,
+    config: Config,
+    build_root: Path,
+    keg: Path,
+    temporary: Path,
+    ruby: str,
+    script_path: Path,
+    environment: dict[str, str],
+    *,
+    verbose: bool = False,
+):
+    """Wrap the arbitrary-Ruby interpreter in the opt-in build sandbox.
+
+    Returns ``None`` (normal unsandboxed behavior) unless ``PYBREW_SANDBOX=1``.
+    The local import avoids the source_builder <-> ruby_executor import cycle.
+    ``build_root``, the keg, the temporary script directory and the cache are
+    the writable roots; the default read-only root is inherited from the
+   sandbox planner.
+    """
+
+    if environment.get("PYBREW_SANDBOX") != "1":
+        return None
+
+    from .source_builder import plan_build_sandbox
+
+    writable_roots = [build_root, keg, temporary, Path(config.cache)]
+    cellar = getattr(config, "cellar", None)
+    if cellar is not None:
+        writable_roots.append(Path(cellar))
+    try:
+        plan = plan_build_sandbox(
+            [ruby, str(script_path)],
+            cwd=build_root,
+            writable_roots=writable_roots,
+            environment=environment,
+        )
+    except BuildError as error:
+        raise BuildError(f"{formula.name}: {error}") from error
+    if plan is not None and verbose:
+        print(
+            f"==> {formula.name}: arbitrary Ruby sandbox backend: {plan.backend}"
+        )
+    return plan
+
+
 def execute_install_body(
     formula: Formula,
     config: Config,
@@ -15692,11 +15738,17 @@ def execute_install_body(
     with tempfile.TemporaryDirectory(prefix="pybrew-ruby-") as temporary:
         script_path = Path(temporary) / "install.rb"
         script_path.write_text(script, encoding="utf-8")
+        run_env = dict(env) if env is not None else os.environ.copy()
+        sandbox_plan = _arbitrary_ruby_sandbox_plan(
+            formula, config, build_root, keg, Path(temporary), ruby, script_path,
+            run_env, verbose=verbose
+        )
+        command = sandbox_plan.command if sandbox_plan is not None else [ruby, str(script_path)]
         try:
             result = subprocess.run(
-                [ruby, str(script_path)],
+                command,
                 cwd=str(build_root),
-                env=env if env is not None else os.environ.copy(),
+                env=run_env,
                 stdin=subprocess.DEVNULL,
                 text=True,
                 encoding="utf-8",
@@ -15712,11 +15764,15 @@ def execute_install_body(
             ) from error
 
     if result.returncode != 0:
-        raise BuildError(
-            _failure_message(
-                formula, formula.install_source or "", result, script_path=script_path
-            )
+        message = _failure_message(
+            formula, formula.install_source or "", result, script_path=script_path
         )
+        if sandbox_plan is not None:
+            message += (
+                f"\n(sandbox backend {sandbox_plan.backend!r} exited with "
+                f"{result.returncode})"
+            )
+        raise BuildError(message)
     if verbose:
         if result.stdout:
             print(result.stdout, end="")

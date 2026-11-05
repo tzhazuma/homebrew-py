@@ -10447,3 +10447,143 @@ def test_receipt_full_tab_sbom_and_bottle_pour_parity(
         "false",
         "true",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Sandbox boundary for the arbitrary-Ruby interpreter subprocess.
+# ---------------------------------------------------------------------------
+
+
+def _fake_sandbox_exec(tmp_path: Path, log: Path, *, exit_code: int = 0) -> Path:
+    path = tmp_path / "sandbox-exec"
+    path.write_text(
+        "#!/bin/sh\n"
+        'printf \'%s\\n\' "$@" >> "' + str(log) + '"\n'
+        "exit " + str(exit_code) + "\n"
+    )
+    path.chmod(0o755)
+    return path
+
+
+def test_arbitrary_ruby_subprocess_wrapped_by_fake_sandbox(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    log = tmp_path / "sandbox-exec.log"
+    fake = tmp_path / "sandbox-exec"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'printf \'%s\\n\' "$@" >> "' + str(log) + '"\n'
+        "shift 2\n"
+        'exec "$@"\n'
+    )
+    fake.chmod(0o755)
+    monkeypatch.setenv("PYBREW_SANDBOX", "1")
+    monkeypatch.setenv("PYBREW_SANDBOX_PATH", str(fake))
+    body = (
+        '  (prefix/"sandboxed.txt").write [\n'
+        '    ENV["PYBREW_SANDBOX"].to_s, "wrapped"\n'
+        '  ].join("|")\n'
+    )
+    keg = _run_raw_body(tmp_path, body, name="ruby-sandboxed-body")
+    assert (keg / "sandboxed.txt").read_text() == "1|wrapped"
+    text = log.read_text()
+    assert "-p" in text
+    assert "(allow default)" in text
+    assert "(deny network*)" in text
+    assert str(tmp_path / "build") in text
+    assert str(keg) in text
+    assert "file-write*" in text
+    assert "install.rb" in text
+    assert text.count("(allow file-write* (subpath") >= 3
+
+    log.unlink()
+    monkeypatch.delenv("PYBREW_SANDBOX")
+    keg2 = _run_raw_body(
+        tmp_path,
+        '  (prefix/"unsandboxed.txt").write "plain"\n',
+        name="ruby-unsandboxed-body",
+    )
+    assert (keg2 / "unsandboxed.txt").read_text() == "plain"
+    assert not log.exists()
+
+
+def test_arbitrary_ruby_sandbox_strict_profile_and_bwrap_backend(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    strict_log = tmp_path / "strict.log"
+    strict_sandbox = tmp_path / "sandbox-exec"
+    strict_sandbox.write_text(
+        "#!/bin/sh\n"
+        'printf \'%s\\n\' "$@" >> "' + str(strict_log) + '"\n'
+        "shift 2\n"
+        'exec "$@"\n'
+    )
+    strict_sandbox.chmod(0o755)
+    monkeypatch.setenv("PYBREW_SANDBOX", "1")
+    monkeypatch.setenv("PYBREW_SANDBOX_STRICT", "1")
+    monkeypatch.setenv("PYBREW_SANDBOX_PATH", str(strict_sandbox))
+    body = '  (prefix/"strict.txt").write "strict"\n'
+    keg = _run_raw_body(tmp_path, body, name="ruby-sandbox-strict")
+    assert (keg / "strict.txt").read_text() == "strict"
+    strict_text = strict_log.read_text()
+    assert "(deny default)" in strict_text
+    assert "(allow process-exec)" in strict_text
+    assert "(deny network*)" in strict_text
+
+    bwrap_log = tmp_path / "bwrap.log"
+    fake_bwrap = tmp_path / "bwrap"
+    fake_bwrap.write_text(
+        "#!" + _RUBY + "\n"
+        'File.open(ENV.fetch("FAKE_BWRAP_LOG"), "a") { |io| io.puts(ARGV.join("\\u0001")) }\n'
+        'index = ARGV.index("--")\n'
+        "if index\n"
+        '  exec(*ARGV[(index + 1)..-1])\n'
+        "end\n"
+        "exit 0\n"
+    )
+    fake_bwrap.chmod(0o755)
+    monkeypatch.delenv("PYBREW_SANDBOX_STRICT")
+    monkeypatch.setenv("PYBREW_SANDBOX_PATH", str(fake_bwrap))
+    monkeypatch.setenv("FAKE_BWRAP_LOG", str(bwrap_log))
+    keg2 = _run_raw_body(tmp_path, body, name="ruby-sandbox-bwrap")
+    assert (keg2 / "strict.txt").read_text() == "strict"
+    bwrap_args = bwrap_log.read_text()
+    assert "--unshare-net" in bwrap_args
+    assert "--cap-drop" in bwrap_args
+    assert "--bind" in bwrap_args
+    assert str(tmp_path / "build") in bwrap_args
+    assert "--chdir" in bwrap_args
+    assert "install.rb" in bwrap_args
+
+
+def test_arbitrary_ruby_sandbox_missing_backend_is_clear(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    monkeypatch.setenv("PYBREW_SANDBOX", "1")
+    monkeypatch.setenv("PYBREW_SANDBOX_PATH", str(tmp_path / "does-not-exist"))
+    with pytest.raises(BuildError, match="no sandbox backend is available"):
+        _run_raw_body(
+            tmp_path,
+            '  (prefix/"never.txt").write "never"\n',
+            name="ruby-sandbox-missing",
+        )
+    assert not (tmp_path / "keg" / "never.txt").exists()
+
+
+def test_arbitrary_ruby_sandbox_failure_is_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    log = tmp_path / "failing-sandbox.log"
+    fake = _fake_sandbox_exec(tmp_path, log, exit_code=7)
+    monkeypatch.setenv("PYBREW_SANDBOX", "1")
+    monkeypatch.setenv("PYBREW_SANDBOX_PATH", str(fake))
+    with pytest.raises(BuildError, match="sandbox backend 'sandbox-exec' exited with 7"):
+        _run_raw_body(
+            tmp_path,
+            '  (prefix/"never.txt").write "never"\n',
+            name="ruby-sandbox-fail",
+        )

@@ -10,39 +10,21 @@ Last inventory: 2026-11-05 (upstream `de8798899c`).
 
 | Bucket | Partial areas |
 | --- | ---: |
-| Superenv / Sandbox | 2 |
-| livecheck / Cask script | 3 |
-| **Total** | **5 open areas / 12 concrete bullets** |
+| Superenv / Cask script | 2 |
+| **Total** | **2 open areas / 5 concrete bullets** |
 
 ## Remaining partial areas
 
 ### 1. Compiler selection / Superenv build environment
 
 - complete compiler/linker flag family policy and response-file semantics;
-- full Xcode/SDK version/layout matrix;
+- full Xcode/SDK layout/version matrix;
 - formula option/build semantics not covered by the bounded shim.
 
-### 2. Sandbox execution
-
-- sandbox-exec seccomp/capability-drop parity (bwrap BPF seccomp is implemented);
-- arbitrary Ruby/in-process DSL writes outside the Python boundary;
-- complete LSM policy coverage beyond capability reporting.
-
-### 3. livecheck strategy execution
-
-- semantic fidelity for all implemented classes (extract_plist archive download,
-  real header_match headers, heuristic listing/API parsers);
-- upstream skip-status labels/fails-gatekeeper edge semantics.
-
-### 4. livecheck `url_options`
-
-- exhaustive propagation across every strategy branch and redirect rewrite;
-- complete `using` transport switching (currently validation only).
-
-### 5. Cask script shim
+### 2. Cask script shim
 
 - exact upstream interactive TTY/privileged sudo semantics;
-- exact capture fallback on non-MRI Ruby (AST path requires MRI).
+- exact script-body capture fallback on non-MRI Ruby (AST path requires MRI).
 
 ## Completed during this effort
 
@@ -58,8 +40,8 @@ Last inventory: 2026-11-05 (upstream `de8798899c`).
   restore-on-failure, codesign/entitlements (round 6).
 - **MacOS SDK/Xcode/CLT detection** — bundle/version.plist/CLT SDK root/cache
   reset (round 6).
-- **Utils modules** — GraphQL/REST pagination, exact rate-limit/transport
-  retry classification (round 6).
+- **Utils modules** — GraphQL/REST pagination, exact rate-limit/transport retry
+  classification (round 6).
 - **SystemConfig host details** — kernel/compiler/ruby/taps/SDK sections (round 6).
 - **Patch/resource edge cases** — dynamic names, stage forms, exotic patch
   metadata, safe archive links (round 6).
@@ -71,6 +53,12 @@ Last inventory: 2026-11-05 (upstream `de8798899c`).
   non-fork hosts (round 7).
 - **Test DSL MacOS/OS/Hardware helpers** — sysctl/proc/cpuinfo/xcodebuild/clang
   host detection (round 7).
+- **Sandbox execution** — bwrap BPF seccomp, capability/namespace reporting, and
+  arbitrary Ruby interpreter execution inside the shared sandbox plan (round 9).
+- **livecheck strategy execution** — all upstream strategy class names dispatch,
+  extract_plist archive extraction, real header_match headers (round 9).
+- **livecheck url_options** — header/user-agent/referer/cookies/using/verified
+  propagation and safe redirect header stripping (round 9).
 
 ## Execution rule
 

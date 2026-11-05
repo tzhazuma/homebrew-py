@@ -4619,3 +4619,165 @@ def test_livecheck_header_match_strategy() -> None:
     missing = cask.check_livecheck(page="<html>body</html>")
     assert missing["executed"] is False
     assert "response-header content" in (missing["error"] or "")
+
+
+# ---------------------------------------------------------------------------
+# Real header_match/extract_plist response handling + curl transport
+# ---------------------------------------------------------------------------
+
+
+def test_livecheck_extract_plist_fetches_archive_bytes() -> None:
+    import io
+    import plistlib
+    import zipfile
+
+    info = plistlib.dumps(
+        {
+            "CFBundleShortVersionString": "9.1.2",
+            "CFBundleVersion": "9.1.2.3",
+        }
+    )
+    payload = io.BytesIO()
+    with zipfile.ZipFile(payload, "w") as archive:
+        archive.writestr("Tool.app/Contents/Info.plist", info)
+
+    cask = Cask(
+        token="plist-archive",
+        version="9.1.2",
+        livecheck={
+            "strategy": ":extract_plist",
+            "url": "https://example.com/Tool.zip",
+        },
+    )
+    seen: list[dict[str, object]] = []
+
+    def fetcher(url: str, **kwargs: object) -> dict[str, object]:
+        seen.append({"url": url, **kwargs})
+        return {
+            "body": payload.getvalue(),
+            "headers": {"content-type": "application/zip"},
+            "status": 200,
+            "url": url,
+        }
+
+    result = cask.check_livecheck(fetcher=fetcher)
+    assert result["executed"] is True
+    assert result["result"] == ["9.1.2", "9.1.2.3"]
+    assert seen and seen[0]["binary"] is True
+
+
+def test_livecheck_header_match_uses_response_headers() -> None:
+    cask = Cask(
+        token="header-response",
+        version="4.5.6",
+        livecheck={
+            "strategy": ":header_match",
+            "url": "https://example.com/tool",
+        },
+    )
+    seen: list[dict[str, object]] = []
+
+    def fetcher(url: str, **kwargs: object) -> dict[str, object]:
+        seen.append({"url": url, **kwargs})
+        return {
+            "body": b"",
+            "headers": {"x-version": "4.5.6"},
+            "status": 200,
+            "url": url,
+        }
+
+    result = cask.check_livecheck(fetcher=fetcher)
+    assert result["executed"] is True
+    assert result["result"] == ["4.5.6"]
+    assert seen and seen[0]["method"] == "HEAD"
+
+
+def test_livecheck_curl_transport_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pybrew.cask import livecheck_http_fetcher
+
+    fake = tmp_path / "curl"
+    fake.write_text(
+        "#!/bin/sh\n"
+        "printf 'HTTP/1.1 200 OK\\r\\nX-Version: 1.2.3\\r\\n\\r\\nbody'\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    monkeypatch.setenv("PYBREW_CURL", str(fake))
+
+    response = livecheck_http_fetcher(
+        "https://example.com/tool",
+        using="curl",
+        include_response=True,
+    )
+    assert response["body"] == "body"
+    assert response["headers"]["x-version"] == "1.2.3"
+    assert response["status"] == 200
+
+
+def test_livecheck_curl_redirect_strips_sensitive_headers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pybrew.cask import livecheck_http_fetcher
+
+    counter = tmp_path / "count"
+    log = tmp_path / "args.log"
+    fake = tmp_path / "curl"
+    fake.write_text(
+        "#!/bin/sh\n"
+        f"log={log}\n"
+        "count=$(cat " + str(counter) + " 2>/dev/null || echo 0)\n"
+        "count=$((count + 1))\n"
+        "printf '%s' \"$count\" > " + str(counter) + "\n"
+        "printf '%s\\n' \"$@\" >> \"$log\"\n"
+        "if [ \"$count\" -eq 1 ]; then\n"
+        "  printf 'HTTP/1.1 302 Found\\r\\nLocation: https://other.example/x\\r\\n\\r\\n'\n"
+        "else\n"
+        "  printf 'HTTP/1.1 200 OK\\r\\n\\r\\nok'\n"
+        "fi\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    monkeypatch.setenv("PYBREW_CURL", str(fake))
+
+    response = livecheck_http_fetcher(
+        "https://example.com/tool",
+        headers={"Cookie": "secret", "X-Test": "keep"},
+        using="homebrew_curl",
+        include_response=True,
+    )
+
+    assert response["body"] == "ok"
+    logged = log.read_text()
+    # Two requests; the cross-origin follow-up must not resend Cookie but
+    # non-sensitive headers follow the redirect.
+    assert logged.count("Cookie: secret") == 1
+    assert logged.count("X-Test: keep") == 2
+
+
+def test_livecheck_status_online_uses_curl_option(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = tmp_path / "curl"
+    fake.write_text(
+        "#!/bin/sh\nprintf 'HTTP/1.1 200 OK\\r\\n\\r\\ntool-2.0'\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+    monkeypatch.setenv("PYBREW_CURL", str(fake))
+    cask = Cask(
+        token="curl-online",
+        version="2.0",
+        livecheck={
+            "strategy": ":page_match",
+            "url": "https://example.com/tool",
+            "regex": r"tool-(\d+(?:\.\d+)*)",
+            "url_options": {"using": ":curl"},
+        },
+    )
+
+    status = cask.livecheck_status(online=True)
+
+    assert status["status"] == "up_to_date"
+    assert status["source"] == "strategy"

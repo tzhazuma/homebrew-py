@@ -11,6 +11,7 @@ import os
 import platform
 import plistlib
 import re
+import subprocess
 import threading
 import time
 import urllib.error
@@ -1215,6 +1216,119 @@ def _decode_livecheck_body(
         return body.decode("utf-8", errors="replace")
 
 
+def _livecheck_curl_fetch(
+    url: str,
+    *,
+    timeout: float,
+    max_bytes: int,
+    headers: dict[str, str],
+    method: str,
+    include_response: bool,
+    binary: bool,
+) -> Any:
+    """Bounded curl transport with safe cross-origin redirect handling."""
+
+    executable = os.environ.get("PYBREW_CURL") or shutil.which("curl")
+    if not executable:
+        raise CaskError("curl transport requested but no curl executable was found")
+    current_url = url
+    current_headers = dict(headers)
+    for _redirect in range(LIVECHECK_MAX_REDIRECTS + 1):
+        parsed = urllib.parse.urlsplit(current_url)
+        if parsed.scheme not in ("http", "https"):
+            raise CaskError(
+                f"unsupported livecheck URL scheme: {parsed.scheme or '(none)'}"
+            )
+        command = [
+            executable,
+            "--silent",
+            "--show-error",
+            "--max-time",
+            f"{timeout:g}",
+            "--max-filesize",
+            str(max_bytes),
+            "--proto",
+            "=http,https",
+            "-X",
+            method,
+            "-D",
+            "-",
+        ]
+        for key, value in current_headers.items():
+            command.extend(["-H", f"{key}: {value}"])
+        command.append(current_url)
+        try:
+            completed = subprocess.run(
+                command,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                timeout=timeout + 5,
+            )
+        except subprocess.TimeoutExpired as error:
+            raise CaskError("curl livecheck request timed out") from error
+        except OSError as error:
+            raise CaskError(f"could not run curl: {error}") from error
+        if completed.returncode != 0:
+            detail = (completed.stderr or b"").decode("utf-8", errors="replace").strip()
+            raise CaskError(f"curl livecheck request failed: {detail or completed.returncode}")
+        raw = completed.stdout or b""
+        header_part, separator, body_part = raw.partition(b"\r\n\r\n")
+        if not separator:
+            header_part, separator, body_part = raw.partition(b"\n\n")
+        header_text = header_part.decode("latin-1", errors="replace")
+        response_headers: dict[str, str] = {}
+        status_code: Optional[int] = None
+        for line in header_text.splitlines():
+            if line.upper().startswith("HTTP/"):
+                parts = line.split()
+                if len(parts) >= 2 and parts[1].isdigit():
+                    status_code = int(parts[1])
+                continue
+            if ":" in line:
+                key, value = line.split(":", 1)
+                response_headers[key.strip()] = value.strip()
+        location = None
+        for key, value in response_headers.items():
+            if key.lower() == "location":
+                location = value
+                break
+        if status_code is not None and 300 <= status_code < 400 and location:
+            target = urllib.parse.urljoin(current_url, location)
+            old = urllib.parse.urlsplit(current_url)
+            new = urllib.parse.urlsplit(target)
+            if (old.scheme, old.hostname, old.port) != (
+                new.scheme,
+                new.hostname,
+                new.port,
+            ):
+                for sensitive in LIVECHECK_SENSITIVE_HEADERS:
+                    for key in list(current_headers):
+                        if key.lower() == sensitive:
+                            current_headers.pop(key)
+            current_url = target
+            continue
+        if len(body_part) > max_bytes:
+            raise CaskError(
+                f"livecheck page exceeds the {max_bytes}-byte limit"
+            )
+        if binary:
+            body: Any = body_part
+        else:
+            body = body_part.decode("utf-8", errors="replace")
+        if include_response:
+            return {
+                "body": body,
+                "headers": {
+                    key.lower(): value
+                    for key, value in response_headers.items()
+                },
+                "status": status_code,
+                "url": current_url,
+            }
+        return body
+    raise CaskError("too many livecheck redirects")
+
+
 def livecheck_http_fetcher(
     url: str,
     *,
@@ -1229,7 +1343,11 @@ def livecheck_http_fetcher(
     rate_limiter: Optional[Any] = _DEFAULT_LIVECHECK_RATE_LIMITER,
     redirect_strip_headers: Optional[Any] = None,
     redirect_preserve_headers: Optional[Any] = None,
-) -> str:
+    method: str = "GET",
+    include_response: bool = False,
+    binary: bool = False,
+    using: Optional[str] = None,
+) -> Any:
     """Bounded default HTTP transport for ``pybrew livecheck --online``.
 
     Only ``http``/``https`` URLs are accepted.  Redirects are followed through
@@ -1253,7 +1371,22 @@ def livecheck_http_fetcher(
     if headers:
         for key, value in headers.items():
             request_headers[str(key)] = str(value)
-    request = urllib.request.Request(url, headers=request_headers)
+    if using is not None and str(using).lstrip(":").lower() in (
+        "curl",
+        "homebrew_curl",
+    ):
+        return _livecheck_curl_fetch(
+            url,
+            timeout=timeout,
+            max_bytes=max_bytes,
+            headers=request_headers,
+            method=method,
+            include_response=include_response,
+            binary=binary,
+        )
+    request = urllib.request.Request(
+        url, headers=request_headers, method=method
+    )
     effective_opener = (
         opener
         if opener is not None
@@ -1269,6 +1402,9 @@ def livecheck_http_fetcher(
     body: Optional[bytes] = None
     content_encoding: Optional[str] = None
     charset = "utf-8"
+    response_headers: dict[str, str] = {}
+    response_status: Optional[int] = None
+    final_url = url
     last_error: Optional[BaseException] = None
     total_delay = 0.0
     host = urllib.parse.urlsplit(url).hostname or ""
@@ -1290,6 +1426,15 @@ def livecheck_http_fetcher(
                     response, "Content-Encoding"
                 )
                 charset = _livecheck_response_charset(response)
+                try:
+                    response_headers = {
+                        str(key).lower(): str(value)
+                        for key, value in response.headers.items()
+                    }
+                except (AttributeError, TypeError):
+                    response_headers = {}
+                response_status = getattr(response, "status", None)
+                final_url = getattr(response, "geturl", lambda: url)()
             break
         except urllib.error.HTTPError as error:
             last_error = error
@@ -1324,9 +1469,20 @@ def livecheck_http_fetcher(
         raise CaskError(
             f"livecheck page exceeds the {max_bytes}-byte limit"
         )
-    return _decode_livecheck_body(
-        body, content_encoding, charset, max_bytes
-    )
+    if binary:
+        body_value: Any = body
+    else:
+        body_value = _decode_livecheck_body(
+            body, content_encoding, charset, max_bytes
+        )
+    if include_response:
+        return {
+            "body": body_value,
+            "headers": response_headers,
+            "status": response_status,
+            "url": final_url,
+        }
+    return body_value
 
 
 def _normalize_livecheck_candidates(value: Any) -> list[str]:
