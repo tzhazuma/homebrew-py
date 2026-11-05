@@ -7972,7 +7972,12 @@ class Keg
   def binary_relocation_plan(replacements = {}, files: nil, rpath_additions: [],
                              rpath_deletions: [], codesign: false,
                              dylib_id: nil, dylib_ids: nil, interpreter: nil,
-                             rpath_set: nil)
+                             rpath_set: nil, **extra)
+    # Ruby 3 treats a bare ``"old" => "new"`` positional hash as keywords when
+    # no braces are used.  Accept those string keys on both Ruby 2.6 and 3.x.
+    replacements = (replacements || {}).merge(
+      extra.select { |key, _value| key.is_a?(String) }
+    )
     mapping = relocation_mapping(replacements)
     plan = {
       "files" => [],
@@ -8084,6 +8089,10 @@ class Keg
                             strict: false, rpath_additions: [], rpath_deletions: [],
                             codesign: false, ignore_failures: false,
                             verify_placeholders: false, **options)
+    replacements = (replacements || {}).merge(
+      options.select { |key, _value| key.is_a?(String) }
+    )
+    options = options.reject { |key, _value| key.is_a?(String) }
     plan = binary_relocation_plan(
       replacements,
       files: files,
