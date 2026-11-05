@@ -9090,6 +9090,9 @@ def test_github_graphql_pagination_beyond_ten_pages_and_secondary_backoff(
 def test_macos_broad_local_detection_with_fake_xcrun_clt_and_system_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    if not is_macos():
+        pytest.skip("macOS host detection is macOS-only")
+
     monkeypatch.setenv(ALLOW_ENV, "1")
     sdk_path = tmp_path / "MacOSX14.5.sdk"
     sdk_path.mkdir()
