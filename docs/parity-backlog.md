@@ -12,7 +12,7 @@ Last inventory: 2026-11-05 (upstream `de8798899c`).
 | --- | ---: |
 | Superenv / Sandbox | 2 |
 | livecheck / Cask script | 3 |
-| **Total** | **5 open areas / 13 concrete bullets** |
+| **Total** | **5 open areas / 12 concrete bullets** |
 
 ## Remaining partial areas
 
@@ -24,15 +24,15 @@ Last inventory: 2026-11-05 (upstream `de8798899c`).
 
 ### 2. Sandbox execution
 
-- OS-enforced seccomp/LSM policy (not just capability reporting);
-- sandbox-exec capability/namespace coverage;
-- arbitrary Ruby/in-process DSL writes outside the Python boundary.
+- sandbox-exec seccomp/capability-drop parity (bwrap BPF seccomp is implemented);
+- arbitrary Ruby/in-process DSL writes outside the Python boundary;
+- complete LSM policy coverage beyond capability reporting.
 
 ### 3. livecheck strategy execution
 
-- remaining upstream strategy classes (npm/crate/rubygems/bitbucket/launchpad/header_match/etc.);
-- extract_plist archive download/extraction and skip-status parity;
-- full strategy-specific URL option normalization.
+- semantic fidelity for all implemented classes (extract_plist archive download,
+  real header_match headers, heuristic listing/API parsers);
+- upstream skip-status labels/fails-gatekeeper edge semantics.
 
 ### 4. livecheck `url_options`
 
@@ -42,7 +42,7 @@ Last inventory: 2026-11-05 (upstream `de8798899c`).
 ### 5. Cask script shim
 
 - exact upstream interactive TTY/privileged sudo semantics;
-- fully general Ruby script-body capture beyond the token heuristic.
+- exact capture fallback on non-MRI Ruby (AST path requires MRI).
 
 ## Completed during this effort
 

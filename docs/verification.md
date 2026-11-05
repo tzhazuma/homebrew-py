@@ -3,7 +3,7 @@
 ## Full parity batch 2026-11-05
 
 Closed the documented partial areas across all owners; full suite grew from
-1156 to **1356 passed, 6 skipped**.
+1156 to **1371 passed, 6 skipped**.
 
 - **Cask**: evaluator `zap` now captures trash/delete/rmdir/pkgutil; livecheck
   URL kwargs merge into request headers; installed caskfile falls back to JSON;
@@ -31,6 +31,19 @@ Closed the documented partial areas across all owners; full suite grew from
 - Commits `57d927e` + `54fa7c5`; CI `41973914882` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 - Inventory of the remaining 5 partial areas: `docs/parity-backlog.md`.
 
+
+## Residual parity batch 2026-11-05 (round 8)
+
+- Cask/livecheck: all upstream strategy class names now dispatch with bounded
+  parsers (apache/bitbucket/cpan/crate/gnome/gnu/github_releases/header_match/
+  launchpad/npm/ruby_gems/sourceforge/xorg + existing); using/verified option
+  validation; exact script-body capture via Ruby AST block ranges.
+- Sandbox: bwrap OS-enforced seccomp via compiled BPF fd (`PYBREW_SECCOMP_BPF`,
+  `--seccomp FD`, pass_fds), capability/namespace reporting; explicit
+  sandbox-exec boundary.
+- Superenv: remaining -Xlinker/-Xpreprocessor/-Xassembler/response-file forms,
+  Xcode version matrix and SDK selection warnings.
+- Full suite: **1371 passed, 6 skipped**; real install verified.
 
 ## Residual parity batch 2026-11-05 (round 7)
 

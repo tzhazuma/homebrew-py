@@ -2343,3 +2343,37 @@ def test_script_body_capture_preserves_heredocs_and_rescue(
     assert "rescue StandardError" in cask.preflight
     assert "ensure" in cask.preflight
     assert not cask.extra.get("ruby_warnings")
+
+
+@requires_ruby
+def test_exact_script_capture_uses_ruby_ast_range(
+    allow_ruby: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pybrew.errors import FormulaParseError
+
+    def broken_parser(*_args: object, **_kwargs: object) -> str:
+        raise FormulaParseError("python lexer disabled for this test")
+
+    monkeypatch.setattr(
+        "pybrew.cask.CaskParser._consume_block_body", broken_parser
+    )
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  preflight do\n'
+            '    text = <<~TXT\n'
+            '      do end\n'
+            '    TXT\n'
+            '    puts text if true\n'
+            '    def helper(x)\n'
+            '      x\n'
+            '    end\n'
+            '  end\n'
+        )
+    )
+
+    assert cask.preflight is not None
+    assert "do end" in cask.preflight
+    assert 'puts text if true' in cask.preflight
+    assert "def helper(x)" in cask.preflight
+    assert not cask.extra.get("ruby_warnings")

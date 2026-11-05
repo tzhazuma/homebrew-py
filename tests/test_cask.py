@@ -4266,7 +4266,7 @@ def test_livecheck_url_strategy_dispatch() -> None:
 
 def test_livecheck_unknown_strategy_is_explicit() -> None:
     cask = Cask(
-        token="unknown", version="1.0", livecheck={"strategy": ":header_match"}
+        token="unknown", version="1.0", livecheck={"strategy": ":unknown_strategy"}
     )
     result = cask.check_livecheck(page="x")
     assert result["executed"] is False
@@ -4468,3 +4468,154 @@ def test_livecheck_using_option_is_validated() -> None:
     result = unsupported.check_livecheck()
     assert result["executed"] is False
     assert "using ':svn' is not supported" in (result["error"] or "")
+
+
+# ---------------------------------------------------------------------------
+# Remaining livecheck strategy classes (round 8)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("strategy", "url", "page", "expected"),
+    [
+        (
+            "apache",
+            "https://archive.apache.org/dist/httpd/httpd-2.4.58.tar.gz",
+            '<a href="httpd-2.4.58/">httpd-2.4.58</a>',
+            ["2.4.58"],
+        ),
+        (
+            "gnome",
+            "https://download.gnome.org/sources/example/1.2/example-1.2.3.tar.xz",
+            '<a href="1.2.3/">1.2.3</a>',
+            ["1.2.3"],
+        ),
+        (
+            "gnu",
+            "https://ftp.gnu.org/gnu/example/example-1.2.3.tar.gz",
+            '<a href="example-1.2.3/">1.2.3</a>',
+            ["1.2.3"],
+        ),
+        (
+            "sourceforge",
+            "https://sourceforge.net/projects/example/files/example-1.2.3/",
+            '<a href="example-1.2.3/">1.2.3</a>',
+            ["1.2.3"],
+        ),
+        (
+            "xorg",
+            "https://www.x.org/releases/individual/lib/libX11-1.8.1.tar.gz",
+            '<a href="libX11-1.8.2/">1.8.2</a>',
+            ["1.8.2"],
+        ),
+    ],
+)
+def test_livecheck_listing_strategies(
+    strategy: str, url: str, page: str, expected: list[str]
+) -> None:
+    cask = Cask(
+        token=strategy,
+        version=expected[0],
+        livecheck={"strategy": f":{strategy}", "url": url},
+    )
+    result = cask.check_livecheck(page=page)
+    assert result["executed"] is True
+    assert result["result"] == expected
+    assert cask.livecheck_status(page=page)["status"] == "up_to_date"
+
+
+@pytest.mark.parametrize(
+    ("strategy", "url", "api_url", "payload", "expected"),
+    [
+        (
+            "bitbucket",
+            "https://bitbucket.org/acme/tool",
+            "https://api.bitbucket.org/2.0/repositories/acme/tool/tags",
+            '{"values": [{"name": "v2.1.0"}]}',
+            ["2.1.0"],
+        ),
+        (
+            "crate",
+            "https://crates.io/crates/example",
+            "https://crates.io/api/v1/crates/example",
+            '{"crate": {"max_version": "1.2.3"}}',
+            ["1.2.3"],
+        ),
+        (
+            "cpan",
+            "https://cpan.metacpan.org/authors/id/A/AC/ACME/Example-1.2.3.tar.gz",
+            "https://fastapi.metacpan.org/v1/release/Example",
+            '{"version": "1.2.3"}',
+            ["1.2.3"],
+        ),
+        (
+            "github_releases",
+            "https://github.com/acme/tool",
+            "https://api.github.com/repos/acme/tool/releases",
+            '[{"tag_name": "v3.1.4"}]',
+            ["3.1.4"],
+        ),
+        (
+            "launchpad",
+            "https://launchpad.net/example",
+            "https://api.launchpad.net/1.0/example",
+            '{"latest_version": "5.0"}',
+            ["5.0"],
+        ),
+        (
+            "npm",
+            "https://www.npmjs.com/package/example",
+            "https://registry.npmjs.org/example",
+            '{"dist-tags": {"latest": "6.1.0"}}',
+            ["6.1.0"],
+        ),
+        (
+            "ruby_gems",
+            "https://rubygems.org/gems/example-1.2.3.gem",
+            "https://rubygems.org/api/v1/versions/example/latest.json",
+            '{"version": "7.2.1"}',
+            ["7.2.1"],
+        ),
+    ],
+)
+def test_livecheck_remote_json_strategies(
+    strategy: str,
+    url: str,
+    api_url: str,
+    payload: str,
+    expected: list[str],
+) -> None:
+    cask = Cask(
+        token=strategy,
+        version=expected[0],
+        livecheck={"strategy": f":{strategy}", "url": url},
+    )
+    seen: list[str] = []
+
+    def fetcher(fetch_url: str) -> str:
+        seen.append(fetch_url)
+        return payload
+
+    result = cask.check_livecheck(fetcher=fetcher)
+    assert result["executed"] is True
+    assert result["result"] == expected
+    assert seen == [api_url]
+
+
+def test_livecheck_header_match_strategy() -> None:
+    cask = Cask(
+        token="header-match",
+        version="4.5.6",
+        livecheck={
+            "strategy": ":header_match",
+            "url": "https://example.com/tool",
+        },
+    )
+    page = "x-version: 4.5.6\ncontent-type: text/plain\n"
+    result = cask.check_livecheck(page=page)
+    assert result["executed"] is True
+    assert result["result"] == ["4.5.6"]
+
+    missing = cask.check_livecheck(page="<html>body</html>")
+    assert missing["executed"] is False
+    assert "response-header content" in (missing["error"] or "")

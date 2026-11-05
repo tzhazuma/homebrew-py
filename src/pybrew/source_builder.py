@@ -1228,6 +1228,9 @@ def _flag_value(
         if following.startswith("-Wl,"):
             following = following[len("-Wl,") :]
         return "framework", following, 2
+    for prefix in ("-Wl,-F,", "-Wl,-F="):
+        if token.startswith(prefix) and len(token) > len(prefix):
+            return "framework", token[len(prefix) :], 1
     for prefix in ("-Wl,-L,", "-Wl,-L="):
         if token.startswith(prefix) and len(token) > len(prefix):
             return "library", token[len(prefix) :], 1
@@ -1714,6 +1717,9 @@ def flag_value(args, index):
         if following.startswith("-Wl,"):
             following = following[len("-Wl,"):]
         return "framework", following, 2
+    for flag_prefix in ("-Wl,-F,", "-Wl,-F="):
+        if token.startswith(flag_prefix) and len(token) > len(flag_prefix):
+            return "framework", token[len(flag_prefix):], 1
     for flag_prefix in ("-Wl,-L,", "-Wl,-L="):
         if token.startswith(flag_prefix) and len(token) > len(flag_prefix):
             return "library", token[len(flag_prefix):], 1
@@ -3364,6 +3370,7 @@ class BuildSandboxPlan:
     backend: str
     command: list[str]
     profile: Optional[str] = None
+    seccomp_bpf: Optional[Path] = None
 
 
 def _sandbox_escape(path: str) -> str:
@@ -3476,6 +3483,23 @@ def seccomp_status(
     """Report whether an explicit seccomp profile can be enforced."""
 
     env = os.environ if environment is None else environment
+    bpf = env.get("PYBREW_SECCOMP_BPF", "").strip()
+    if bpf:
+        path = Path(bpf).expanduser()
+        exists = path.is_file()
+        return {
+            "requested": True,
+            "mode": "bwrap-fd",
+            "bpf": str(path),
+            "exists": exists,
+            "enforced": exists,
+            "supported": exists,
+            "reason": (
+                "compiled BPF will be passed to bwrap via --seccomp FD/pass_fds"
+                if exists
+                else "compiled BPF file does not exist"
+            ),
+        }
     requested = env.get("PYBREW_SECCOMP_PROFILE", "").strip()
     if not requested:
         return {
@@ -3488,14 +3512,15 @@ def seccomp_status(
     exists = path.is_file()
     return {
         "requested": True,
+        "mode": "unsupported-profile",
         "profile": str(path),
         "exists": exists,
         "enforced": False,
         "supported": False,
         "reason": (
-            "bwrap --seccomp requires an inherited/passed file descriptor and "
-            "the Python wrapper cannot install it; sandbox-exec uses its policy "
-            "profile instead"
+            "a JSON/seccomp profile is not accepted; use PYBREW_SECCOMP_BPF "
+            "for bwrap --seccomp with a compiled BPF file descriptor, or an "
+            "external wrapper"
         ),
     }
 
@@ -3526,10 +3551,15 @@ def plan_build_sandbox(
         return None
     if env.get("PYBREW_SECCOMP_PROFILE", "").strip():
         raise BuildError(
-            "PYBREW_SECCOMP_PROFILE was requested, but the Python build "
-            "sandbox cannot pass a seccomp file descriptor; remove the profile "
-            "or use an external wrapper"
+            "PYBREW_SECCOMP_PROFILE is not a compiled BPF file; set "
+            "PYBREW_SECCOMP_BPF for bwrap --seccomp"
         )
+    seccomp_bpf: Optional[Path] = None
+    raw_bpf = env.get("PYBREW_SECCOMP_BPF", "").strip()
+    if raw_bpf:
+        seccomp_bpf = Path(raw_bpf).expanduser()
+        if not seccomp_bpf.is_file():
+            raise BuildError(f"seccomp BPF file not found: {seccomp_bpf}")
     argv = [str(item) for item in command]
     executable = _sandbox_executable(env)
     if executable is None:
@@ -3574,6 +3604,11 @@ def plan_build_sandbox(
                 lines.append(
                     f'(allow file-write* (subpath "{_sandbox_escape(root)}"))'
                 )
+        if seccomp_bpf is not None:
+            raise BuildError(
+                "PYBREW_SECCOMP_BPF requires the bwrap backend "
+                "(--seccomp FD); sandbox-exec uses its policy profile"
+            )
         return BuildSandboxPlan(
             backend="sandbox-exec",
             command=[executable, "-p", "\n".join(lines), *argv],
@@ -3601,8 +3636,17 @@ def plan_build_sandbox(
         ]
         for root in roots:
             args.extend(["--bind", root, root])
+        if seccomp_bpf is not None:
+            args.extend(["--seccomp", "FD"])
         args.extend(["--chdir", str(Path(cwd).resolve()), "--", *argv])
-        return BuildSandboxPlan(backend="bwrap", command=args)
+        return BuildSandboxPlan(
+            backend="bwrap", command=args, seccomp_bpf=seccomp_bpf
+        )
+    if seccomp_bpf is not None:
+        raise BuildError(
+            "PYBREW_SECCOMP_BPF requires the bwrap backend; the selected "
+            "sandbox backend is explicit"
+        )
     # Explicit custom backends receive the command unchanged after their path.
     return BuildSandboxPlan(backend="explicit", command=[executable, *argv])
 
@@ -4432,10 +4476,22 @@ class SourceBuilder:
             ),
             environment=ctx.env,
         )
-        execution_command = sandbox.command if sandbox else command
-        if self.verbose:
-            print(f"==> {ctx.formula.name}: system {' '.join(execution_command)}")
+        execution_command = list(sandbox.command) if sandbox else command
+        seccomp_fd: Optional[int] = None
+        pass_fds: tuple[int, ...] = ()
         try:
+            if sandbox is not None and sandbox.seccomp_bpf is not None:
+                seccomp_fd = os.open(sandbox.seccomp_bpf, os.O_RDONLY)
+                pass_fds = (seccomp_fd,)
+                execution_command = [
+                    str(seccomp_fd) if part == "FD" else part
+                    for part in execution_command
+                ]
+            if self.verbose:
+                print(
+                    f"==> {ctx.formula.name}: system "
+                    f"{' '.join(execution_command)}"
+                )
             result = subprocess.run(
                 execution_command,
                 cwd=ctx.cwd,
@@ -4443,11 +4499,18 @@ class SourceBuilder:
                 text=True,
                 capture_output=True,
                 timeout=1800,
+                pass_fds=pass_fds,
             )
         except FileNotFoundError as error:
             raise BuildError(f"{self.formula.name}: command not found: {command[0]}") from error
         except subprocess.TimeoutExpired as error:
             raise BuildError(f"{self.formula.name}: build timed out running {command[0]}") from error
+        finally:
+            if seccomp_fd is not None:
+                try:
+                    os.close(seccomp_fd)
+                except OSError:
+                    pass
         if result.returncode != 0:
             output = (result.stdout or "") + (result.stderr or "")
             tail = "\n".join(output.strip().splitlines()[-40:])

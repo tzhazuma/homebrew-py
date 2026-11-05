@@ -331,19 +331,75 @@ _SCRIPT_SOURCE_WARNING = (
 )
 
 
+def _source_offset(source: str, line: int, column: int) -> int:
+    """Convert a Ruby byte line/column position into a Python char offset."""
+
+    lines = source.splitlines(keepends=True)
+    if line < 1 or line > len(lines):
+        return -1
+    prefix = "".join(lines[: line - 1])
+    prefix_bytes = prefix.encode("utf-8")
+    offset = len(prefix_bytes) + max(0, column)
+    full_bytes = source.encode("utf-8")
+    return len(full_bytes[:offset].decode("utf-8", errors="ignore"))
+
+
+def _slice_block_range(source: str, range_info: Any) -> Optional[str]:
+    """Slice an exact Ruby block range reported by the AST.
+
+    ``range_info`` is ``[first_line, first_column, last_line, last_column]``
+    covering the opener (``do``/``{``) through the closing ``end``/``}``.
+    """
+
+    if not isinstance(range_info, (list, tuple)) or len(range_info) < 4:
+        return None
+    try:
+        first_line, first_col, last_line, last_col = (
+            int(range_info[0]),
+            int(range_info[1]),
+            int(range_info[2]),
+            int(range_info[3]),
+        )
+    except (TypeError, ValueError):
+        return None
+    start = _source_offset(source, first_line, first_col)
+    end = _source_offset(source, last_line, last_col)
+    if start < 0 or end < 0 or end <= start:
+        return None
+    segment = source[start:end]
+    if segment.startswith("do"):
+        body_start = start + 2
+    elif segment.startswith("{"):
+        body_start = start + 1
+    else:
+        return None
+    if segment.endswith("end"):
+        body_end = end - 3
+    elif segment.endswith("}"):
+        body_end = end - 1
+    else:
+        return None
+    if body_end < body_start:
+        return None
+    return source[body_start:body_end].strip() or None
+
+
 def _extract_stanza_source(
     source: str, location: Any, stanza: str
 ) -> Optional[str]:
     """Best-effort recovery of a ``stanza do ... end`` block body.
 
-    The Ruby shim reports the block's ``source_location``; this helper maps the
-    reported line back onto the original source with the same lexer the default
-    parser uses, then reuses its block scanner.  Ruby constructs the lexer does
-    not understand (for example method definitions inside the block) can defeat
-    the scan, in which case ``None`` is returned and the caller records a
-    warning instead of failing evaluation.
+    The Ruby shim reports the block's ``source_location``; the exact block
+    range from Ruby's AST is preferred when available (it handles exotic Ruby
+    bodies), otherwise this helper maps the reported line back onto the
+    original source with the Python lexer.
     """
 
+    if isinstance(location, dict):
+        exact = _slice_block_range(source, location.get("range"))
+        if exact is not None:
+            return exact
+        location = location.get("location")
     if not isinstance(location, (list, tuple)) or len(location) < 2:
         return None
     try:
@@ -895,11 +951,13 @@ def _strategy_json_versions(
     if not candidates:
         candidates = _strategy_candidates(page, None)
     normalized: list[str] = []
-    seen: set[str] = set()
+    output_seen: set[str] = set()
     for value in candidates:
         text = str(value).strip()
-        if text and text not in seen:
-            seen.add(text)
+        if len(text) > 1 and text[0] in ("v", "V") and text[1].isdigit():
+            text = text[1:]
+        if text and text not in output_seen:
+            output_seen.add(text)
             normalized.append(text)
     return normalized
 
@@ -944,6 +1002,184 @@ def _strategy_page_text_with_options(
     _strategy_using(options)
     _strategy_verify_url(options, url)
     return _strategy_page_text(fetcher, url, page)
+
+
+def _strategy_remote_api(
+    name: str, url: Optional[str]
+) -> tuple[Optional[str], tuple[str, ...], bool]:
+    """Return (generated API URL, JSON version keys, html_fallback)."""
+
+    if not url:
+        return None, ("version",), True
+    import urllib.parse
+
+    parsed = urllib.parse.urlsplit(url)
+    parts = [part for part in parsed.path.split("/") if part]
+    host = parsed.hostname or ""
+    if name == "github_releases":
+        if host == "api.github.com":
+            return url, ("tag_name", "name"), False
+        if host in ("github.com", "www.github.com") and len(parts) >= 2:
+            repo = parts[1].removesuffix(".git")
+            return (
+                f"https://api.github.com/repos/{parts[0]}/{repo}/releases",
+                ("tag_name", "name"),
+                False,
+            )
+        return url, ("tag_name", "name"), True
+    if name == "bitbucket":
+        if host == "api.bitbucket.org":
+            return url, ("name", "tag", "version"), False
+        if host in ("bitbucket.org", "www.bitbucket.org") and len(parts) >= 2:
+            return (
+                "https://api.bitbucket.org/2.0/repositories/"
+                f"{parts[0]}/{parts[1]}/tags",
+                ("name", "tag", "version"),
+                False,
+            )
+        return url, ("name", "tag", "version"), True
+    if name == "crate":
+        crate = None
+        if host in ("crates.io", "www.crates.io"):
+            if len(parts) >= 2 and parts[0] == "crates":
+                crate = parts[1]
+        if crate is None:
+            basename = parts[-1] if parts else ""
+            match = re.match(r"^(.+?)-\d", basename)
+            crate = match.group(1) if match else None
+        if crate is None:
+            return None, ("num", "version"), True
+        return (
+            f"https://crates.io/api/v1/crates/{crate}",
+            ("max_version", "num", "newest_version"),
+            False,
+        )
+    if name == "npm":
+        package = None
+        if host in ("registry.npmjs.org", "www.npmjs.com", "npmjs.com"):
+            if parts:
+                if parts[0] == "package" and len(parts) >= 2:
+                    package = parts[1]
+                else:
+                    package = parts[0]
+        if package is None:
+            return None, ("latest", "version"), True
+        return (
+            f"https://registry.npmjs.org/{package}",
+            ("latest", "version"),
+            False,
+        )
+    if name == "ruby_gems":
+        gem = None
+        basename = parts[-1] if parts else ""
+        match = re.match(r"^(.+?)-\d", basename)
+        if match:
+            gem = match.group(1)
+        elif host in ("rubygems.org", "www.rubygems.org") and len(parts) >= 2:
+            gem = parts[1]
+        if gem is None:
+            return None, ("version",), True
+        return (
+            f"https://rubygems.org/api/v1/versions/{gem}/latest.json",
+            ("version",),
+            False,
+        )
+    if name == "cpan":
+        basename = parts[-1] if parts else ""
+        match = re.match(r"^(.+?)-\d", basename)
+        dist = match.group(1) if match else None
+        if dist is None:
+            return None, ("version",), True
+        return (
+            f"https://fastapi.metacpan.org/v1/release/{dist}",
+            ("version",),
+            False,
+        )
+    if name == "launchpad":
+        project = None
+        if host in ("launchpad.net", "www.launchpad.net") and parts:
+            project = parts[0]
+        if project is None:
+            return url, ("latest_version", "version"), True
+        return (
+            f"https://api.launchpad.net/1.0/{project}",
+            ("latest_version", "version"),
+            False,
+        )
+    return url, ("version",), True
+
+
+def _strategy_listing_url(name: str, url: Optional[str]) -> Optional[str]:
+    if not url:
+        return None
+    import urllib.parse
+
+    parsed = urllib.parse.urlsplit(url)
+    parts = [part for part in parsed.path.split("/") if part]
+    basename = parts[-1] if parts else ""
+    package_match = re.match(r"^(.+?)-\d", basename)
+    package = package_match.group(1) if package_match else None
+    if name == "apache":
+        project = parts[0] if parts else package
+        if project:
+            return f"https://archive.apache.org/dist/{project}/"
+    if name == "gnu":
+        package = parts[0] if parts else package
+        if package:
+            return f"https://ftp.gnu.org/gnu/{package}/"
+    if name == "gnome":
+        package = parts[0] if parts else package
+        if package:
+            return f"https://download.gnome.org/sources/{package}/"
+    if name == "sourceforge":
+        project = parts[0] if parts else package
+        if project:
+            return f"https://sourceforge.net/projects/{project}/files/"
+    if name == "xorg":
+        if package:
+            parent = parsed.path.rsplit("/", 1)[0]
+            return f"https://www.x.org{parent}/{package}/"
+        return url
+    return url
+
+
+def _strategy_listing_candidates(page: str, regex: Optional[str]) -> list[str]:
+    pattern = regex or r'href="[^"]*?[/-](\d+(?:\.\d+)+)(?:[/"]|\.)'
+    candidates = _strategy_candidates(page, pattern)
+    if not candidates:
+        candidates = _strategy_candidates(page, None)
+    return candidates
+
+
+def _strategy_header_candidates(page: str, regex: Optional[str]) -> list[str]:
+    candidates: list[str] = []
+    seen: set[str] = set()
+    headers = [
+        line for line in page.splitlines() if ":" in line and not line.startswith("<")
+    ]
+    if not headers:
+        raise CaskError(
+            "header_match requires response-header content, not a body"
+        )
+    if regex:
+        candidates.extend(_strategy_candidates(page, regex))
+    else:
+        for line in headers:
+            value = line.split(":", 1)[1].strip()
+            match = re.search(r"(\d+(?:\.\d+)+)", value)
+            if match:
+                text = match.group(1)
+                if text not in seen:
+                    seen.add(text)
+                    candidates.append(text)
+    normalized: list[str] = []
+    output_seen: set[str] = set()
+    for value in candidates:
+        text = str(value).strip()
+        if text and text not in output_seen:
+            output_seen.add(text)
+            normalized.append(text)
+    return normalized
 
 
 def _execute_python_livecheck_strategy(
@@ -1070,6 +1306,46 @@ def _execute_python_livecheck_strategy(
             )
             page_size = len(page_text)
             candidates = _strategy_yaml_versions(page_text)
+        elif name in (
+            "github_releases",
+            "bitbucket",
+            "crate",
+            "npm",
+            "ruby_gems",
+            "cpan",
+            "launchpad",
+        ):
+            target, keys, html_fallback = _strategy_remote_api(name, url)
+            if target is None:
+                raise CaskError(f"{name} strategy could not derive an API URL")
+            _strategy_using(options)
+            _strategy_verify_url(options, url)
+            page_text = _strategy_page_text(fetcher, target, page)
+            page_size = len(page_text)
+            candidates = _strategy_json_versions(
+                page_text, regex_text, keys
+            )
+            if not candidates and html_fallback:
+                candidates = _strategy_candidates(page_text, regex_text)
+        elif name in ("apache", "gnu", "gnome", "sourceforge", "xorg"):
+            target = _strategy_listing_url(name, url)
+            if target is None:
+                raise CaskError(f"{name} strategy could not derive a listing URL")
+            _strategy_using(options)
+            _strategy_verify_url(options, url)
+            page_text = _strategy_page_text(fetcher, target, page)
+            page_size = len(page_text)
+            candidates = _strategy_listing_candidates(
+                page_text, regex_text
+            )
+        elif name == "header_match":
+            _strategy_using(options)
+            _strategy_verify_url(options, url)
+            page_text = _strategy_page_text(fetcher, url, page)
+            page_size = len(page_text)
+            candidates = _strategy_header_candidates(
+                page_text, regex_text
+            )
         else:
             result = _strategy_result(
                 executed=False,
@@ -1250,6 +1526,8 @@ def _evaluate(source: str, path: Optional[Path]) -> dict[str, Any]:
     root = Path(tempfile.mkdtemp(prefix="pybrew-cask-ruby-"))
     try:
         script_path = root / "cask_evaluator.rb"
+        source_path = root / "cask.rb"
+        source_path.write_text(source, encoding="utf-8")
         output_path = root / "cask.json"
         artifacts = {kind: kind for kind in sorted(ARTIFACT_KINDS)}
         artifacts.update(ARTIFACT_ALIASES)
@@ -1260,6 +1538,7 @@ def _evaluate(source: str, path: Optional[Path]) -> dict[str, Any]:
             "arch": _target_arch(),
             "artifacts": artifacts,
             "filename": filename,
+            "eval_filename": str(source_path),
             "macos_language": _target_macos_language(),
             "macos_version": _target_macos_version(),
             "output": str(output_path),
@@ -1703,6 +1982,16 @@ module PybrewCaskJSON
       [args, {}]
     end
   end
+
+  # Exact AST block range when the host Ruby exposes it (MRI).  Returns nil
+  # on interpreters or eval contexts where the block has no source file.
+  def block_range(block)
+    return nil if block.nil? || !defined?(RubyVM::AbstractSyntaxTree)
+    node = RubyVM::AbstractSyntaxTree.of(block)
+    [node.first_lineno, node.first_column, node.last_lineno, node.last_column]
+  rescue StandardError
+    nil
+  end
 end
 
 module PybrewCaskRuntime
@@ -1877,7 +2166,12 @@ class PybrewCaskLivecheck
   # source in Python); it is never executed here.
   def strategy(symbol = nil, &block)
     @data["strategy"] = PybrewCaskJSON.value(symbol) unless symbol.nil?
-    @strategy_location = block.source_location unless block.nil?
+    unless block.nil?
+      @strategy_location = {
+        "location" => block.source_location,
+        "range" => PybrewCaskJSON.block_range(block),
+      }
+    end
     @data["strategy"]
   end
 
@@ -2543,7 +2837,9 @@ class PybrewCaskDSL
     return @data["livecheck"] if block.nil?
 
     location = block.source_location
-    @data["livecheck_location"] = location unless location.nil?
+    @data["livecheck_location"] = unless location.nil?
+      { "location" => location, "range" => PybrewCaskJSON.block_range(block) }
+    end
     collector = PybrewCaskLivecheck.new
     begin
       collector.instance_eval(&block)
@@ -2573,7 +2869,10 @@ class PybrewCaskDSL
   %w[preflight postflight uninstall_preflight uninstall_postflight].each do |name|
     define_method(name.to_sym) do |*_args, &block|
       @data["script_locations"][name] =
-        block.nil? ? nil : block.source_location
+        block.nil? ? nil : {
+          "location" => block.source_location,
+          "range" => PybrewCaskJSON.block_range(block),
+        }
       nil
     end
   end

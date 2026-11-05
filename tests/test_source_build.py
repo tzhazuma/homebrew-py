@@ -3172,3 +3172,86 @@ def test_xcode_version_matrix_with_fake_xcodebuild(tmp_path: Path) -> None:
     )
     assert capabilities["lsm"] == "seatbelt"
     assert capabilities["user_namespace"] is False
+
+
+def test_bwrap_seccomp_bpf_fd_plan_and_fake_execution(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    bpf = tmp_path / "seccomp.bpf"
+    bpf.write_bytes(b"compiled-bpf")
+    fake = tmp_path / "bwrap"
+    log = tmp_path / "bwrap.log"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$@" > "$PYBREW_BWRAP_LOG"\n'
+        'prev=""\n'
+        'for arg in "$@"; do\n'
+        '  if [ "$prev" = "--seccomp" ]; then\n'
+        '    [ -e "/dev/fd/$arg" ] || [ -e "/proc/self/fd/$arg" ] || exit 78\n'
+        "  fi\n"
+        '  prev="$arg"\n'
+        "done\n"
+        'while [ "$#" -gt 0 ] && [ "$1" != "--" ]; do shift; done\n'
+        '[ "$1" = "--" ] && shift\n'
+        'exec "$@"\n'
+    )
+    fake.chmod(0o755)
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "PYBREW_SANDBOX": "1",
+        "PYBREW_SANDBOX_BINARY": str(fake),
+        "PYBREW_SECCOMP_BPF": str(bpf),
+        "PYBREW_BWRAP_LOG": str(log),
+    }
+    config = _source_config(tmp_path)
+    formula = Formula(name="seccomp-run", version="1.0")
+    build_root = tmp_path / "seccomp-build"
+    build_root.mkdir()
+    keg = tmp_path / "seccomp-keg"
+    keg.mkdir()
+    context = source_builder.BuildContext(
+        formula=formula,
+        config=config,
+        keg=keg,
+        build_root=build_root,
+        env=env,
+        cwd=build_root,
+    )
+    plan = source_builder.plan_build_sandbox(
+        ["/bin/sh", "-c", "true"],
+        cwd=build_root,
+        environment=env,
+        system="Linux",
+    )
+    assert plan is not None
+    assert plan.seccomp_bpf == bpf
+    seccomp_index = plan.command.index("--seccomp")
+    assert plan.command[seccomp_index + 1] == "FD"
+
+    builder = source_builder.SourceBuilder(formula, config)
+    builder._run(
+        ["/bin/sh", "-c", "printf seccomp-ok > seccomp-result.txt"],
+        context,
+    )
+    assert (build_root / "seccomp-result.txt").read_text() == "seccomp-ok"
+    recorded = log.read_text().splitlines()
+    assert "--seccomp" in recorded
+    fd_value = recorded[recorded.index("--seccomp") + 1]
+    assert fd_value.isdigit()
+
+    missing_env = dict(env)
+    missing_env["PYBREW_SECCOMP_BPF"] = str(tmp_path / "missing.bpf")
+    with pytest.raises(source_builder.BuildError, match="seccomp BPF file not found"):
+        source_builder.plan_build_sandbox(
+            ["true"], cwd=build_root, environment=missing_env, system="Linux"
+        )
+
+    sandbox_exec = tmp_path / "sandbox-exec"
+    sandbox_exec.write_text("#!/bin/sh\nexit 0\n")
+    sandbox_exec.chmod(0o755)
+    exec_env = dict(env)
+    exec_env["PYBREW_SANDBOX_BINARY"] = str(sandbox_exec)
+    with pytest.raises(source_builder.BuildError, match="requires the bwrap backend"):
+        source_builder.plan_build_sandbox(
+            ["true"], cwd=build_root, environment=exec_env, system="Darwin"
+        )
