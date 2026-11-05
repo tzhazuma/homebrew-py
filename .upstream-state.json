@@ -1,10 +1,10 @@
 {
   "brew": {
     "default_branch": "main",
-    "head_date": "2026-11-04T16:55:37Z",
-    "head_message": "Merge pull request #24478 from Homebrew/dispatch-pr-repositories",
-    "head_sha": "6ceeda0fc65e173d84a7ae8d104f222618970120",
-    "head_url": "https://github.com/Homebrew/brew/commit/6ceeda0fc65e173d84a7ae8d104f222618970120",
+    "head_date": "2026-11-04T23:43:21Z",
+    "head_message": "Merge pull request #24487 from Homebrew/rubocops-bottle-redundancy",
+    "head_sha": "de8798899ced6272919c5e83c917bd9186cce30d",
+    "head_url": "https://github.com/Homebrew/brew/commit/de8798899ced6272919c5e83c917bd9186cce30d",
     "release": {
       "name": "7.0.12",
       "published_at": "2026-11-02T08:36:59Z",
@@ -13,13 +13,13 @@
     },
     "repo": "Homebrew/brew"
   },
-  "checked_at": "2026-11-04T19:24:18+00:00",
+  "checked_at": "2026-11-05T01:00:06+00:00",
   "core": {
     "default_branch": "main",
-    "head_date": "2026-11-04T18:35:31Z",
-    "head_message": "Merge pull request #323459 from Homebrew/bump-swagger-codegen-3.0.85",
-    "head_sha": "28bbf74648e6fcff618da156073aef925dd48542",
-    "head_url": "https://github.com/Homebrew/homebrew-core/commit/28bbf74648e6fcff618da156073aef925dd48542",
+    "head_date": "2026-11-05T00:27:57Z",
+    "head_message": "Merge pull request #323502 from Homebrew/remove-disabled-packages",
+    "head_sha": "ee8b2bc9784a3ee899498e516670e4b0f53538b3",
+    "head_url": "https://github.com/Homebrew/homebrew-core/commit/ee8b2bc9784a3ee899498e516670e4b0f53538b3",
     "release": null,
     "repo": "Homebrew/homebrew-core"
   }

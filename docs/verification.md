@@ -1,5 +1,14 @@
 # Verification record
 
+## Scheduled upstream check 2026-11-05 09:00
+
+- Homebrew/brew `6ceeda0fc6` → `de8798899c`; homebrew-core `28bbf746` → `ee8b2bc9`.
+- The runtime diff is RuboCop-only (`std_go_args`, `components_redundancy`); no
+  formula/cask/service Ruby API change, so no shim change was required.
+- Full suite: **1156 passed, 5 skipped**.
+- Real install verification: `REAL INSTALL VERIFIED`.
+
+
 ## Upstream sync 2026-11-05 — Homebrew `6ceeda0fc6`
 
 - Advanced `.upstream-state.json` from `86e082cb08` to `6ceeda0fc6`
