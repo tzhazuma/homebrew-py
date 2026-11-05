@@ -2084,3 +2084,43 @@ def test_zap_delete_rmdir_and_pkgutil_directives(
     assert not deleted.exists()
     assert not empty_dir.exists()
     assert log.read_text().splitlines() == ["--forget", "com.example.zappy"]
+
+
+def test_evaluator_zap_directives_reach_installer(
+    cask_env: SimpleNamespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import shutil
+
+    ruby = shutil.which("/usr/bin/ruby")
+    if ruby is None:
+        pytest.skip("Ruby interpreter not installed")
+    monkeypatch.setenv("PYBREW_ALLOW_CASK_RUBY", "1")
+    from pybrew.cask_ruby import evaluate_cask_source
+
+    cask = evaluate_cask_source(
+        'cask "zappy-ruby" do\n  version "1.0"\n'
+        f'  zap trash: "{cask_env.config.prefix}/ruby-trash.txt",\n'
+        f'      delete: "{cask_env.config.prefix}/ruby-deleted.txt",\n'
+        f'      rmdir: "{cask_env.config.prefix}/ruby-empty",\n'
+        '      pkgutil: "com.example.ruby-zappy"\n'
+        'end\n'
+    )
+    trash = cask_env.config.prefix / "ruby-trash.txt"
+    deleted = cask_env.config.prefix / "ruby-deleted.txt"
+    empty_dir = cask_env.config.prefix / "ruby-empty"
+    for path in (trash, deleted):
+        path.write_text("remove\n", encoding="utf-8")
+    empty_dir.mkdir()
+    log = tmp_path / "ruby-pkgutil.log"
+    fake = tmp_path / "pkgutil"
+    fake.write_text("#!/bin/sh\nprintf '%s\\n' \"$@\" >> " + str(log) + "\n")
+    fake.chmod(0o755)
+    monkeypatch.setenv("PYBREW_PKGUTIL", str(fake))
+
+    removed = cask_env.installer.zap(cask)
+
+    assert trash in removed and deleted in removed and empty_dir in removed
+    assert not trash.exists() and not deleted.exists() and not empty_dir.exists()
+    assert log.read_text().splitlines() == ["--forget", "com.example.ruby-zappy"]

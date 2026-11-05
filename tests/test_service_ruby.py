@@ -32,6 +32,7 @@ from pybrew.services import (
     SERVICE_PATH_MODE_ENV,
     ServiceError,
     ServiceManager,
+    ServiceSpec,
     parse_service_block,
     service_path_mode,
 )
@@ -1577,8 +1578,108 @@ def test_service_object_compatibility_helpers(
         "svc",
         "1",
         "false",
-        "0",
+        "*",
         "Mon",
         "homebrew.mxcl.svc",
         "x",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Homebrew parity: platform run form and manual command quoting
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+@pytest.mark.parametrize(
+    "target,expected",
+    [
+        ("darwin", ["/opt/mac/bin/svc"]),
+        ("linux", ["/opt/linux/bin/svc", "--foreground"]),
+    ],
+)
+def test_run_platform_keyword_form(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    allow_ruby: None,
+    target: str,
+    expected: list[str],
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    monkeypatch.setenv("PYBREW_TARGET_OS", target)
+    spec = evaluate_service_source(
+        'run macos: "/opt/mac/bin/svc", '
+        'linux: ["/opt/linux/bin/svc", "--foreground"]',
+        _formula(),
+        config,
+    )
+    assert spec.run == expected
+
+
+@requires_ruby
+@pytest.mark.parametrize("target", ["darwin", "linux"])
+def test_run_platform_missing_selection_leaves_empty_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    allow_ruby: None,
+    target: str,
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    monkeypatch.setenv("PYBREW_TARGET_OS", target)
+    spec = evaluate_service_source(
+        'run macos: "/opt/mac/bin/svc"', _formula(), config
+    )
+    assert spec.run == ([] if target == "linux" else ["/opt/mac/bin/svc"])
+
+
+@requires_ruby
+def test_manual_command_matches_python_service_spec(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allow_ruby: None
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    arguments = ["/opt/x y/bin/svc", "--flag", "two words", "~/a b", "quote'x"]
+    source = (
+        "run " + json.dumps(arguments) + "\n"
+        'environment_variables FOO: "a b", KEEP: "yes", PATH: std_service_path_env\n'
+        "run [manual_command]\n"
+    )
+    spec = evaluate_service_source(source, _formula(), config)
+
+    expected = ServiceSpec(
+        run=arguments,
+        environment_variables={
+            "FOO": "a b",
+            "KEEP": "yes",
+            "PATH": "ignored",
+        },
+    ).manual_command()
+    # Ruby uses Shellwords escaping while Python uses shlex quoting; both must
+    # produce a command line with the same shell-visible argument vector.
+    import shlex as _shlex
+
+    ruby_tokens = _shlex.split(spec.run[0])
+    python_tokens = _shlex.split(expected)
+    assert ruby_tokens[:2] == ["FOO=a b", "KEEP=yes"]
+    assert python_tokens[:2] == ruby_tokens[:2]
+    # Tildes are expanded by both implementations before quoting.
+    expanded = [str(Path.home() / "a b") if arg == "~/a b" else arg for arg in arguments]
+    assert ruby_tokens[2:] == expanded
+    assert python_tokens[2:] == expanded
+    assert "PATH" not in spec.run[0]
+
+
+@requires_ruby
+def test_service_object_cron_defaults_and_timed_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allow_ruby: None
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula()
+    source = (
+        'run [parse_cron["Minute"].to_s, timed?.to_s, effective_run_type]\n'
+        'cron "@daily"\n'
+        "run [parse_cron[\"Minute\"].to_s, parse_cron[\"Hour\"].to_s, "
+        "parse_cron[\"Day\"].to_s, timed?.to_s, effective_run_type]\n"
+    )
+    spec = evaluate_service_source(source, formula, config)
+    # The last `run` wins, matching Homebrew's DSL.
+    assert spec.run == ["0", "0", "*", "true", "cron"]

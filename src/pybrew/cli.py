@@ -20,7 +20,13 @@ from .analytics import (
     record_event,
     set_enabled as set_analytics_enabled,
 )
-from .api import fetch_formula
+from .api import (
+    CASK_INDEX_API,
+    FORMULA_INDEX_API,
+    search_casks_online,
+    search_formulae_online,
+    fetch_formula,
+)
 from .cask import CaskError
 from .bundle import bundle_check, bundle_dump, bundle_install, bundle_list, parse_brewfile
 from .caveats import CaveatsError, run_cask_caveats, run_caveats
@@ -28,7 +34,7 @@ from .cask_installer import CaskInstaller, CaskLoader, CaskNotFound
 from .cellar import Cellar, Linker, read_receipt
 from .doctor import diagnose, diagnose_issues
 from .download import Downloader
-from .errors import FormulaNotFound, PybrewError, UsageError
+from .errors import DownloadError, FormulaNotFound, PybrewError, UsageError
 from .formula_test import FormulaTestError, run_formula_test
 from .installer import InstallOptions, Installer
 from .maintenance import (
@@ -598,11 +604,25 @@ def cmd_search(args: argparse.Namespace) -> int:
     if getattr(args, "cask", False):
         cask_loader = _cask_loader(config)
         casks = cask_loader.search(args.pattern)
+        if not casks:
+            api_url = os.environ.get("PYBREW_CASK_SEARCH_API", CASK_INDEX_API)
+            try:
+                casks = search_casks_online(args.pattern, api_url=api_url)
+            except DownloadError as error:
+                print(f"Error: {error}", file=sys.stderr)
+                return 1
         for cask in casks:
             print(f"{cask.token}: {cask.name or ''} {cask.desc or ''}".strip())
         return 0 if casks else 1
     loader = _loader(config)
     results = loader.search(args.pattern)
+    if not results:
+        api_url = os.environ.get("PYBREW_FORMULA_SEARCH_API", FORMULA_INDEX_API)
+        try:
+            results = search_formulae_online(args.pattern, api_url=api_url)
+        except DownloadError as error:
+            print(f"Error: {error}", file=sys.stderr)
+            return 1
     for formula in results:
         print(f"{formula.name}: {formula.desc}" if formula.desc else formula.name)
     return 0 if results else 1

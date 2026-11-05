@@ -48,7 +48,7 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
   installer validates bottle manifests before extraction, records source/build
   metadata + a keg SBOM, exposes formula-level/all-installed linkage diagnostics
   (`pybrew linkage`, Mach-O/ELF/RPATH with corrupt/unsupported separation) and
-  cleans stale links. Full Homebrew Tab/SBOM semantics and a full dyld/ld.so
+  cleans stale links, patches via dry-run containment, and can wrap external build commands in an opt-in sandbox. Full Homebrew Tab/SBOM semantics and a full dyld/ld.so
   simulation remain bounded. `Superenv` has opt-in generated shims with bounded
   flag/rpath sanitization, macOS SDKROOT/xcrun + LDFLAGS, bounded `PYBREW_ARCH`,
   C/C++/OBJC/OBJCXX standards and compiler wrappers, but no full Homebrew
@@ -76,7 +76,7 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
   evaluator script-body capture is best-effort (lexer-unbalanced bodies
   warn; duplicate stanzas last-wins; `caveats do ... end` source still comes
   from the literal parser); livecheck `strategy do ... end`/url kwargs are
-  partial; script shim has no sudo or caskroom/language/arch delegators;
+  partial; script shim explicitly rejects sudo and covers caskroom/language/arch/MacOS naming;
   date-based deprecation/disable deferral is not implemented.
 - Formulary source loading has namespace/cache/error support but does not
   implement API-struct loading, `factory` tap-source loading, or full
@@ -98,3 +98,6 @@ silently succeeding. Extending the shim is additive and must keep the default
 non-Ruby parser path unchanged.
 
 See [ruby-api-gaps.md](ruby-api-gaps.md) for the durable remaining-work checklist.
+
+For the current concrete list of partial areas and remaining behaviors, see
+[parity-backlog.md](parity-backlog.md).

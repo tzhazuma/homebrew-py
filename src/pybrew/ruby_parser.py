@@ -1332,13 +1332,7 @@ class RubyFormulaParser:
             self.formula.patches.append(PatchSpec(strip=strip))
             return
         if block.kind == "punct" and block.value == "{":
-            self._skip_braces()
-            self.formula.patches.append(
-                PatchSpec(
-                    strip=strip,
-                    unsupported_reason="brace patch blocks are not supported",
-                )
-            )
+            self.formula.patches.append(self._parse_patch_block(strip, closing="}"))
             return
         self.formula.patches.append(self._parse_patch_block(strip))
 
@@ -1372,14 +1366,21 @@ class RubyFormulaParser:
             return int(match.group(1))
         raise FormulaParseError(f"unsupported patch strip value {value!r}")
 
-    def _parse_patch_block(self, strip: int) -> PatchSpec:
+    def _parse_patch_block(self, strip: int, closing: str = "end") -> PatchSpec:
         spec = PatchSpec(strip=strip)
         while True:
             self.skip_newlines()
             token = self.peek()
             if token.kind == "eof":
                 raise FormulaParseError("unterminated patch block")
-            if token.kind == "kw" and token.value == "end":
+            if closing == "end" and token.kind == "kw" and token.value == "end":
+                self.advance()
+                return spec
+            if (
+                closing != "end"
+                and token.kind == "punct"
+                and token.value == closing
+            ):
                 self.advance()
                 return spec
             if token.kind != "id":

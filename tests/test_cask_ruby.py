@@ -2049,3 +2049,93 @@ def test_cask_content_requires_cask_result(allow_ruby: None) -> None:
                     '  url "file:///tmp/x.zip"\n  app "X.app"')
             + "\n1\n"
         )
+
+
+# ---------------------------------------------------------------------------
+# Documented parity gaps: zap directives + livecheck url kwargs
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_evaluator_captures_all_zap_directives(allow_ruby: None) -> None:
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  zap trash: ["~/.tiny"],\n'
+            '      delete: ["~/Library/Deleted"],\n'
+            '      rmdir: "~/Library/Empty",\n'
+            '      pkgutil: "com.example.tiny"\n'
+        )
+    )
+
+    assert cask.zap == ["~/.tiny"]
+    assert cask.zap_directives == {
+        "delete": ["~/Library/Deleted"],
+        "rmdir": ["~/Library/Empty"],
+        "pkgutil": ["com.example.tiny"],
+    }
+    unsupported = cask.extra.get("ruby_unsupported") or []
+    assert not any(
+        isinstance(entry, dict) and entry.get("name") == "zap"
+        for entry in unsupported
+    )
+
+
+@requires_ruby
+def test_evaluator_livecheck_url_kwargs_are_captured(
+    allow_ruby: None,
+) -> None:
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  url "https://example.com/Tiny-1.0.zip"\n'
+            '  livecheck do\n'
+            '    url "https://example.com/tiny",\n'
+            '        header: ["X-Live: yes"],\n'
+            '        user_agent: "livecheck-agent",\n'
+            '        cookies: { "session" => "abc" }\n'
+            '  end\n'
+        )
+    )
+
+    options = cask.livecheck.get("url_options")
+    assert isinstance(options, dict)
+    assert options["header"] == ["X-Live: yes"]
+    assert options["user_agent"] == "livecheck-agent"
+    assert options["cookies"] == {"session": "abc"}
+
+    headers = cask._livecheck_headers()
+    assert headers["X-Live"] == "yes"
+    assert headers["User-Agent"] == "livecheck-agent"
+    assert headers["Cookie"] == "session=abc"
+
+
+@requires_ruby
+def test_evaluator_livecheck_strategy_block_with_url_kwargs(
+    allow_ruby: None,
+) -> None:
+    monkeypatch = pytest.MonkeyPatch()
+    try:
+        cask = evaluate_cask_source(
+            _source(
+                '  version "1.2.3"\n'
+                '  url "https://example.com/Tiny-1.2.3.zip"\n'
+                '  livecheck do\n'
+                '    url "https://example.com/tool", header: "X-Live: yes"\n'
+                '    strategy :page_match do |page|\n'
+                '      page.scan(/tool-(\\d+(?:\\.\\d+)*)/).flatten\n'
+                '    end\n'
+                '  end\n'
+            )
+        )
+
+        assert cask.livecheck.get("strategy_source")
+        executed = cask.check_livecheck(page="tool-1.2.3")
+        assert executed["executed"] is True
+        assert executed["result"] == ["1.2.3"]
+
+        status = cask.livecheck_status(page="tool-2.0")
+        assert status["status"] == "outdated"
+        assert status["latest_version"] == "2.0"
+    finally:
+        monkeypatch.undo()

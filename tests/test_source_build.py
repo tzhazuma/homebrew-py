@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from pybrew.installer import InstallOptions, Installer
-from pybrew.models import Formula
+from pybrew.models import Dependency, Formula, PatchSpec
 from pybrew.paths import Config
 from pybrew.taps import FormulaLoader, discover_taps
 
@@ -2228,3 +2228,260 @@ def test_superenv_shim_reports_dropped_wa_options(tmp_path: Path) -> None:
     assert not any("-Wa,-o" in token for token in argv)
     assert "pybrew superenv" in process.stderr
     assert "unsafe assembler option" in process.stderr
+
+
+def test_build_environment_adds_dependency_paths_and_make_jobs(
+    tmp_path: Path,
+) -> None:
+    import pybrew.source_builder as source_builder
+
+    dependency = tmp_path / "dependency"
+    (dependency / "include").mkdir(parents=True)
+    (dependency / "lib" / "pkgconfig").mkdir(parents=True)
+    (dependency / "share" / "aclocal").mkdir(parents=True)
+    (dependency / "bin").mkdir()
+    config = _source_config(tmp_path)
+    env = source_builder.build_environment(
+        config,
+        {
+            "PATH": "/usr/bin:/bin",
+            "HOMEBREW_MAKE_JOBS": "3",
+        },
+        dependency_paths=[dependency],
+    ).env
+    include = f"-I{dependency / 'include'}"
+    library = f"-L{dependency / 'lib'}"
+    assert include in shlex.split(env["CPPFLAGS"])
+    assert include in shlex.split(env["CFLAGS"])
+    assert include in shlex.split(env["CXXFLAGS"])
+    assert library in shlex.split(env["LDFLAGS"])
+    assert str(dependency / "lib" / "pkgconfig") in env["PKG_CONFIG_PATH"].split(
+        os.pathsep
+    )
+    assert str(dependency / "share" / "aclocal") in env["ACLOCAL_PATH"].split(
+        os.pathsep
+    )
+    assert str(dependency) in env["CMAKE_PREFIX_PATH"].split(os.pathsep)
+    assert str(dependency / "bin") in env["PATH"].split(os.pathsep)
+    assert env["MAKEFLAGS"] == "-j3"
+
+    preserved = source_builder.build_environment(
+        config,
+        {"PATH": "/usr/bin:/bin", "MAKEFLAGS": "-j1", "HOMEBREW_MAKE_JOBS": "8"},
+    ).env
+    assert preserved["MAKEFLAGS"] == "-j1"
+
+
+def test_source_builder_dependency_paths_uses_installed_keg(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    dependency_keg = config.keg_path("dep", "1.0")
+    dependency_keg.mkdir(parents=True)
+    formula = Formula(name="target", version="1.0")
+    formula.dependencies = [Dependency(name="dep")]
+    builder = source_builder.SourceBuilder(formula, config)
+    assert builder._dependency_paths() == [dependency_keg]
+
+
+def test_deparallelize_forces_single_make_job(tmp_path: Path) -> None:
+    project = tmp_path / "deparallel-src"
+    project.mkdir()
+    (project / "README").write_text("deparallel fixture\n")
+    tap, _ = _make_tap(
+        tmp_path,
+        "deparallel-fixture",
+        "1.0",
+        project,
+        "\n".join(
+            [
+                "    deparallelize",
+                '    system "/bin/sh", "-c", '
+                "'printf \"%s\" \"$MAKEFLAGS\" > makeflags.txt'",
+                '    bin.install "makeflags.txt"',
+            ]
+        ),
+    )
+    _config, result = _install(tmp_path, tap, "deparallel-fixture")
+    assert (result.keg / "bin" / "makeflags.txt").read_text() == "-j1"
+
+
+def test_plan_build_sandbox_bounded_and_missing_backend(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    fake = tmp_path / "sandbox-exec"
+    fake.write_text("#!/bin/sh\nexit 0\n")
+    fake.chmod(0o755)
+    cwd = tmp_path / "build"
+    cwd.mkdir()
+    disabled = source_builder.plan_build_sandbox(
+        ["cc", "-c", "x.c"],
+        cwd=cwd,
+        environment={"PATH": "/usr/bin:/bin"},
+        system="Darwin",
+    )
+    assert disabled is None
+    with pytest.raises(source_builder.BuildError, match="sandbox backend"):
+        source_builder.plan_build_sandbox(
+            ["cc"],
+            cwd=cwd,
+            environment={"PYBREW_SANDBOX": "1", "PYBREW_SANDBOX_PATH": ""},
+            system="Darwin",
+        )
+    plan = source_builder.plan_build_sandbox(
+        ["cc", "-c", "x.c"],
+        cwd=cwd,
+        writable_roots=[tmp_path / "keg"],
+        environment={
+            "PYBREW_SANDBOX": "1",
+            "PYBREW_SANDBOX_BINARY": str(fake),
+        },
+        system="Darwin",
+    )
+    assert plan is not None
+    assert plan.backend == "sandbox-exec"
+    assert plan.command[:2] == [str(fake), "-p"]
+    assert str(cwd.resolve()) in plan.profile
+    assert plan.command[-3:] == ["cc", "-c", "x.c"]
+
+    bwrap = tmp_path / "bwrap"
+    bwrap.write_text("#!/bin/sh\nexit 0\n")
+    bwrap.chmod(0o755)
+    bwrap_plan = source_builder.plan_build_sandbox(
+        ["cc"],
+        cwd=cwd,
+        writable_roots=[tmp_path / "keg"],
+        environment={
+            "PYBREW_SANDBOX": "1",
+            "PYBREW_SANDBOX_BINARY": str(bwrap),
+        },
+        system="Linux",
+    )
+    assert bwrap_plan is not None
+    assert bwrap_plan.backend == "bwrap"
+    assert "--unshare-net" in bwrap_plan.command
+    assert "--bind" in bwrap_plan.command
+
+
+def test_source_builder_run_uses_opt_in_sandbox_wrapper(tmp_path: Path) -> None:
+    import sys
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    formula = Formula(name="sandbox-run", version="1.0")
+    build_root = tmp_path / "build"
+    build_root.mkdir()
+    keg = tmp_path / "keg"
+    keg.mkdir()
+    fake = tmp_path / "fake-sandbox"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$0" > "$PYBREW_SANDBOX_LOG"\n'
+        'printf "%s\\n" "$*" >> "$PYBREW_SANDBOX_LOG"\n'
+        'exec "$@"\n'
+    )
+    fake.chmod(0o755)
+    log = tmp_path / "sandbox.log"
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "PYBREW_SANDBOX": "1",
+        "PYBREW_SANDBOX_BINARY": str(fake),
+        "PYBREW_SANDBOX_LOG": str(log),
+    }
+    context = source_builder.BuildContext(
+        formula=formula,
+        config=config,
+        keg=keg,
+        build_root=build_root,
+        env=env,
+        cwd=build_root,
+    )
+    builder = source_builder.SourceBuilder(formula, config)
+    builder._run([sys.executable, "-c", "print('sandboxed')"], context)
+    assert str(fake) in log.read_text()
+
+
+def test_compiler_probe_reports_version_target_and_host_mismatch(
+    tmp_path: Path,
+) -> None:
+    import platform
+    import pybrew.source_builder as source_builder
+
+    fake = tmp_path / "probe-compiler"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        '  --version) printf "%s\\n" "FakeClang 9.9"; exit 0;;\n'
+        '  -dumpmachine) printf "%s\\n" "$PYBREW_PROBE_TARGET"; exit 0;;\n'
+        "esac\n"
+        "exit 0\n"
+    )
+    fake.chmod(0o755)
+    host = platform.system()
+    target = "arm64-apple-darwin" if host == "Darwin" else "x86_64-linux-gnu"
+    environment = {
+        "PATH": str(tmp_path),
+        "PYBREW_CC": str(fake),
+        "PYBREW_CXX": str(fake),
+        "PYBREW_PROBE_TARGET": target,
+    }
+    selection = source_builder.select_compiler(environment)
+    assert selection.cc_version == "FakeClang 9.9"
+    assert selection.cxx_version == "FakeClang 9.9"
+    assert selection.target == target
+    assert selection.warning is None
+
+    mismatched = dict(environment)
+    mismatched["PYBREW_PROBE_TARGET"] = "mips-unknown-none"
+    selection = source_builder.select_compiler(mismatched)
+    assert selection.warning is not None
+    assert "does not look like" in selection.warning
+
+
+def test_patch_target_containment_normal_and_traversal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    project = tmp_path / "patch-project"
+    project.mkdir()
+    (project / "hello.txt").write_text("hello\n")
+    patch_file = tmp_path / "normal.patch"
+    patch_file.write_text(
+        "--- hello.txt\n+++ hello.txt\n@@ -1 +1 @@\n-hello\n+patched\n"
+    )
+    formula = Formula(name="patch-project", version="1.0")
+    formula.patches = [PatchSpec(file=str(patch_file), strip=0)]
+    source_builder.SourceBuilder(formula, config)._apply_patches(project)
+    assert (project / "hello.txt").read_text() == "patched\n"
+
+    fake_patch = tmp_path / "fake-patch"
+    fake_patch.write_text(
+        "#!/bin/sh\n"
+        "case \"$*\" in\n"
+        "  *--dry-run*) printf '%s\\n' 'checking file ../escape.txt'; exit 0;;\n"
+        "esac\n"
+        "exit 1\n"
+    )
+    fake_patch.chmod(0o755)
+    monkeypatch.setenv("PYBREW_PATCH", str(fake_patch))
+    formula.patches = [PatchSpec(data=patch_file.read_text(), strip=0)]
+    with pytest.raises(source_builder.BuildError, match="escapes build root"):
+        source_builder.SourceBuilder(formula, config)._apply_patches(project)
+
+    fake_patch.write_text(
+        "#!/bin/sh\n"
+        "case \"$*\" in\n"
+        "  *--dry-run*) printf '%s\\n' 'checking file /tmp/outside.txt'; exit 0;;\n"
+        "esac\n"
+        "exit 1\n"
+    )
+    fake_patch.chmod(0o755)
+    with pytest.raises(source_builder.BuildError, match="escapes build root"):
+        source_builder.SourceBuilder(formula, config)._apply_patches(project)
+
+    fake_patch.write_text("#!/bin/sh\nexit 0\n")
+    fake_patch.chmod(0o755)
+    with pytest.raises(source_builder.BuildError, match="no verifiable patch targets"):
+        source_builder.SourceBuilder(formula, config)._apply_patches(project)

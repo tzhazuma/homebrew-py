@@ -39,7 +39,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Optional
 
 from .errors import BuildError, ChecksumMismatch, DownloadError, UnsupportedInstall
@@ -154,6 +154,11 @@ class EnvPrependPath(Action):
 @dataclass
 class EnvDelete(Action):
     name: str
+
+
+@dataclass
+class DeparallelizeAction(Action):
+    """Force MAKEFLAGS to a single job for the rest of the build."""
 
 
 @dataclass
@@ -567,6 +572,9 @@ class InstallParser:
         elif name == "system":
             self.advance()
             actions = [SystemAction(self._parse_argument_list())]
+        elif name == "deparallelize":
+            self.advance()
+            actions = [DeparallelizeAction()]
         elif name == "inreplace":
             self.advance()
             args = self._parse_argument_list()
@@ -1835,6 +1843,9 @@ class CompilerSelection:
     cxx: Optional[str] = None
     family: Optional[str] = None
     warning: Optional[str] = None
+    cc_version: Optional[str] = None
+    cxx_version: Optional[str] = None
+    target: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -1881,6 +1892,88 @@ def _which_in(environment: Mapping[str, str], command: str) -> Optional[str]:
     return shutil.which(command, path=search_path)
 
 
+def _probe_compiler(
+    environment: Mapping[str, str], compiler: Optional[str]
+) -> tuple[Optional[str], Optional[str]]:
+    """Best-effort (version, target) probe for one compiler specification."""
+
+    if not compiler:
+        return None, None
+    argv = split_compiler_command(compiler)
+    if not argv:
+        return None, None
+
+    def run(flag: str) -> Optional[str]:
+        try:
+            result = subprocess.run(
+                [*argv, flag],
+                env=dict(environment),
+                cwd=tempfile.gettempdir(),
+                text=True,
+                capture_output=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        if result.returncode != 0:
+            return None
+        lines = (result.stdout or "").strip().splitlines()
+        if not lines:
+            return None
+        value = lines[0].strip()
+        return value[:200] or None
+
+    return run("--version"), run("-dumpmachine")
+
+
+def _compiler_host_warning(target: Optional[str]) -> Optional[str]:
+    if not target:
+        return None
+    lowered = target.lower()
+    host = platform.system()
+    if host == "Darwin" and not any(
+        marker in lowered for marker in ("darwin", "apple")
+    ):
+        return (
+            f"compiler target {target!r} does not look like a macOS target; "
+            "the selected compiler may be a cross-toolchain"
+        )
+    if host == "Linux" and "linux" not in lowered:
+        return (
+            f"compiler target {target!r} does not look like a Linux target; "
+            "the selected compiler may be a cross-toolchain"
+        )
+    return None
+
+
+def _finalize_compiler_selection(
+    environment: Mapping[str, str],
+    *,
+    cc: Optional[str],
+    cxx: Optional[str],
+    family: Optional[str] = None,
+    warning: Optional[str] = None,
+) -> CompilerSelection:
+    if cc is None and cxx is None:
+        return CompilerSelection(
+            cc=cc, cxx=cxx, family=family, warning=warning
+        )
+    cc_version, cc_target = _probe_compiler(environment, cc)
+    cxx_version, cxx_target = _probe_compiler(environment, cxx)
+    target = cc_target or cxx_target
+    if warning is None:
+        warning = _compiler_host_warning(target)
+    return CompilerSelection(
+        cc=cc,
+        cxx=cxx,
+        family=family,
+        warning=warning,
+        cc_version=cc_version,
+        cxx_version=cxx_version,
+        target=target,
+    )
+
+
 def select_compiler(
     environment: Optional[Mapping[str, str]] = None,
 ) -> CompilerSelection:
@@ -1903,10 +1996,11 @@ def select_compiler(
     cxx = _first_environment_value(env, ("PYBREW_CXX", "CXX"))
     requested = (env.get("PYBREW_COMPILER") or "").strip().lower()
     if not requested:
-        return CompilerSelection(cc=cc, cxx=cxx)
+        return _finalize_compiler_selection(env, cc=cc, cxx=cxx)
 
     if requested not in _COMPILER_DRIVERS:
-        return CompilerSelection(
+        return _finalize_compiler_selection(
+            env,
             cc=cc,
             cxx=cxx,
             warning=(
@@ -1918,13 +2012,16 @@ def select_compiler(
     # Both channels are explicitly configured: PYBREW_COMPILER has nothing
     # left to fill in, so do not validate or replace the user's choice.
     if cc is not None and cxx is not None:
-        return CompilerSelection(cc=cc, cxx=cxx, family=requested)
+        return _finalize_compiler_selection(
+            env, cc=cc, cxx=cxx, family=requested
+        )
 
     c_driver, cxx_driver = _COMPILER_DRIVERS[requested]
     available_cc = _which_in(env, c_driver)
     available_cxx = _which_in(env, cxx_driver)
     if cc is None and available_cc is None:
-        return CompilerSelection(
+        return _finalize_compiler_selection(
+            env,
             cc=cc,
             cxx=cxx,
             warning=(
@@ -1944,7 +2041,13 @@ def select_compiler(
                 f"PYBREW_COMPILER={requested} was requested but {cxx_driver} "
                 "is not available; CXX will use the default toolchain"
             )
-    return CompilerSelection(cc=cc, cxx=cxx, family=requested, warning=warning)
+    return _finalize_compiler_selection(
+        env,
+        cc=cc,
+        cxx=cxx,
+        family=requested,
+        warning=warning,
+    )
 
 
 def _merge_flags(existing: str, additions: Iterable[str]) -> str:
@@ -2549,9 +2652,175 @@ def install_superenv_shims(
     )
 
 
+def _force_make_jobs(flags: str, jobs: int) -> str:
+    """Replace any -j/jobserver flags with an explicit bounded job count."""
+
+    try:
+        tokens = shlex.split(flags)
+    except ValueError:
+        tokens = flags.split()
+    result: list[str] = []
+    replaced = False
+    skip_next = False
+    for token in tokens:
+        if skip_next:
+            skip_next = False
+            continue
+        if token in ("-j", "--jobs"):
+            if not replaced:
+                result.append(f"-j{int(jobs)}")
+                replaced = True
+            skip_next = True
+            continue
+        if (
+            token.startswith("-j")
+            or token.startswith("--jobs")
+            or token.startswith("--jobserver")
+        ):
+            if not replaced:
+                result.append(f"-j{int(jobs)}")
+                replaced = True
+            continue
+        result.append(token)
+    if not replaced:
+        result.append(f"-j{int(jobs)}")
+    return shlex.join(result)
+
+
+@dataclass(frozen=True)
+class BuildSandboxPlan:
+    """A bounded external wrapper for one build command."""
+
+    backend: str
+    command: list[str]
+    profile: Optional[str] = None
+
+
+def _sandbox_escape(path: str) -> str:
+    return path.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _sandbox_executable(environment: Mapping[str, str]) -> Optional[str]:
+    override = environment.get("PYBREW_SANDBOX_BINARY", "").strip()
+    if override:
+        candidate = Path(override)
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+        return None
+    path_override = environment.get("PYBREW_SANDBOX_PATH")
+    if path_override is not None:
+        candidate = Path(path_override)
+        if path_override.strip() and candidate.is_file() and os.access(
+            candidate, os.X_OK
+        ):
+            return str(candidate)
+        return None
+    candidates = ("/usr/bin/sandbox-exec", "/usr/bin/bwrap")
+    for candidate in candidates:
+        if Path(candidate).is_file() and os.access(candidate, os.X_OK):
+            return candidate
+    for name in ("sandbox-exec", "bwrap"):
+        found = shutil.which(name, path=environment.get("PATH") or os.defpath)
+        if found:
+            return found
+    return None
+
+
+def plan_build_sandbox(
+    command: Iterable[str],
+    *,
+    cwd: Path,
+    writable_roots: Iterable[Path] = (),
+    environment: Optional[Mapping[str, str]] = None,
+    system: Optional[str] = None,
+) -> Optional[BuildSandboxPlan]:
+    """Return an opt-in sandbox wrapper for a build command, or ``None``.
+
+    ``PYBREW_SANDBOX=1`` enables the wrapper.  ``PYBREW_SANDBOX_BINARY`` or
+    ``PYBREW_SANDBOX_PATH`` can select/disable the backend; otherwise
+    sandbox-exec/bwrap is auto-detected.  Enabled-but-unavailable is a hard
+    error rather than a silent unsandboxed build.  Rules are intentionally
+    bounded: read-only root, explicit writable roots, and no network.
+    """
+
+    env = os.environ if environment is None else environment
+    if env.get("PYBREW_SANDBOX") != "1":
+        return None
+    argv = [str(item) for item in command]
+    executable = _sandbox_executable(env)
+    if executable is None:
+        raise BuildError(
+            "PYBREW_SANDBOX=1 but no sandbox backend is available; "
+            "install bwrap/sandbox-exec or set PYBREW_SANDBOX_BINARY"
+        )
+    backend_name = Path(executable).name
+    roots: list[str] = []
+    for raw_root in (Path(cwd), *[Path(item) for item in writable_roots]):
+        try:
+            resolved = raw_root.resolve()
+        except OSError:
+            continue
+        if resolved.is_dir() and str(resolved) not in roots:
+            roots.append(str(resolved))
+        if len(roots) >= 16:
+            break
+    host = platform.system() if system is None else system
+    if backend_name == "sandbox-exec":
+        strict = env.get("PYBREW_SANDBOX_STRICT") == "1"
+        lines = ["(version 1)"]
+        if strict:
+            lines.extend(
+                [
+                    "(deny default)",
+                    "(allow process-exec)",
+                    "(allow process-fork)",
+                    "(allow signal)",
+                    "(allow sysctl-read)",
+                    '(allow file-read* (subpath "/"))',
+                ]
+            )
+            for root in roots:
+                lines.append(
+                    f'(allow file-write* (subpath "{_sandbox_escape(root)}"))'
+                )
+            lines.append("(deny network*)")
+        else:
+            lines.extend(["(allow default)", "(deny network*)"])
+            for root in roots:
+                lines.append(
+                    f'(allow file-write* (subpath "{_sandbox_escape(root)}"))'
+                )
+        return BuildSandboxPlan(
+            backend="sandbox-exec",
+            command=[executable, "-p", "\n".join(lines), *argv],
+            profile="\n".join(lines),
+        )
+    if backend_name in ("bwrap", "bubblewrap"):
+        args = [
+            executable,
+            "--die-with-parent",
+            "--ro-bind",
+            "/",
+            "/",
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--unshare-net",
+        ]
+        for root in roots:
+            args.extend(["--bind", root, root])
+        args.extend(["--chdir", str(Path(cwd).resolve()), "--", *argv])
+        return BuildSandboxPlan(backend="bwrap", command=args)
+    # Explicit custom backends receive the command unchanged after their path.
+    return BuildSandboxPlan(backend="explicit", command=[executable, *argv])
+
+
 def build_environment(
     config: Config,
     base_env: Optional[Mapping[str, str]] = None,
+    *,
+    dependency_paths: Iterable[Path] = (),
 ) -> BuildEnvironment:
     """Prepare the environment for a source build.
 
@@ -2571,23 +2840,80 @@ def build_environment(
 
     env = dict(os.environ if base_env is None else base_env)
     prefix = config.prefix
+    dependencies: list[Path] = []
+    for raw_path in dependency_paths:
+        candidate = Path(raw_path)
+        if candidate.is_dir() and candidate not in dependencies:
+            dependencies.append(candidate)
     paths = [str(prefix / "bin"), str(prefix / "sbin")]
-    env["PATH"] = os.pathsep.join(paths + [env.get("PATH", "/usr/bin:/bin")])
+    for dependency in dependencies:
+        for leaf in ("bin", "sbin"):
+            candidate = dependency / leaf
+            if candidate.is_dir():
+                paths.append(str(candidate))
+    paths.append(env.get("PATH", "/usr/bin:/bin"))
+    env["PATH"] = os.pathsep.join(paths)
     env["HOMEBREW_PREFIX"] = str(prefix)
     env["HOMEBREW_CELLAR"] = str(config.cellar)
     env["HOMEBREW_REPOSITORY"] = str(prefix)
+    pkg_config_paths = [
+        str(prefix / "lib" / "pkgconfig"),
+        str(prefix / "share" / "pkgconfig"),
+    ]
+    cmake_prefix_paths = [str(prefix)]
+    aclocal_paths = [str(prefix / "share" / "aclocal")]
+    include_flags = [_INCLUDE_FLAG.format(prefix=prefix)]
+    library_flags = [_LIBRARY_FLAG.format(prefix=prefix)]
+    for dependency in dependencies:
+        for pkg_dir in (
+            dependency / "lib" / "pkgconfig",
+            dependency / "share" / "pkgconfig",
+        ):
+            if pkg_dir.is_dir():
+                pkg_config_paths.append(str(pkg_dir))
+        cmake_prefix_paths.append(str(dependency))
+        aclocal_dir = dependency / "share" / "aclocal"
+        if aclocal_dir.is_dir():
+            aclocal_paths.append(str(aclocal_dir))
+        include_dir = dependency / "include"
+        if include_dir.is_dir():
+            include_flags.append(f"-I{include_dir}")
+        library_dir = dependency / "lib"
+        if library_dir.is_dir():
+            library_flags.append(f"-L{library_dir}")
+    existing_pkg_config = env.get("PKG_CONFIG_PATH", "")
+    if existing_pkg_config:
+        pkg_config_paths.extend(existing_pkg_config.split(os.pathsep))
     env["PKG_CONFIG_PATH"] = os.pathsep.join(
-        [str(prefix / "lib" / "pkgconfig"), str(prefix / "share" / "pkgconfig")]
+        dict.fromkeys(path for path in pkg_config_paths if path)
     )
-    env["CMAKE_PREFIX_PATH"] = str(prefix)
-    env["ACLOCAL_PATH"] = str(prefix / "share" / "aclocal")
-    include_flag = _INCLUDE_FLAG.format(prefix=prefix)
-    library_flag = _LIBRARY_FLAG.format(prefix=prefix)
-    env["CPPFLAGS"] = _merge_flags(env.get("CPPFLAGS", ""), [include_flag])
-    env["CFLAGS"] = _merge_flags(env.get("CFLAGS", ""), [include_flag])
-    env["CXXFLAGS"] = _merge_flags(env.get("CXXFLAGS", ""), [include_flag])
-    env["LDFLAGS"] = _merge_flags(env.get("LDFLAGS", ""), [library_flag])
-    env["MAKEFLAGS"] = env.get("MAKEFLAGS", f"-j{max(1, (os.cpu_count() or 2))}")
+    existing_cmake = env.get("CMAKE_PREFIX_PATH", "")
+    if existing_cmake:
+        cmake_prefix_paths.extend(existing_cmake.split(os.pathsep))
+    env["CMAKE_PREFIX_PATH"] = os.pathsep.join(
+        dict.fromkeys(path for path in cmake_prefix_paths if path)
+    )
+    existing_aclocal = env.get("ACLOCAL_PATH", "")
+    if existing_aclocal:
+        aclocal_paths.extend(existing_aclocal.split(os.pathsep))
+    env["ACLOCAL_PATH"] = os.pathsep.join(
+        dict.fromkeys(path for path in aclocal_paths if path)
+    )
+    env["CPPFLAGS"] = _merge_flags(env.get("CPPFLAGS", ""), include_flags)
+    env["CFLAGS"] = _merge_flags(env.get("CFLAGS", ""), include_flags)
+    env["CXXFLAGS"] = _merge_flags(env.get("CXXFLAGS", ""), include_flags)
+    env["LDFLAGS"] = _merge_flags(env.get("LDFLAGS", ""), library_flags)
+    jobs_value = _first_environment_value(
+        env, ("PYBREW_MAKE_JOBS", "HOMEBREW_MAKE_JOBS")
+    )
+    jobs: Optional[int] = None
+    if jobs_value is not None and jobs_value.isdigit():
+        candidate_jobs = int(jobs_value)
+        if 1 <= candidate_jobs <= 1024:
+            jobs = candidate_jobs
+    if jobs is None:
+        jobs = max(1, (os.cpu_count() or 2))
+    env["MAKEFLAGS"] = env.get("MAKEFLAGS") or f"-j{jobs}"
 
     # Objective-C/Objective-C++ support is opt-in: only touch the language
     # variables when the caller supplied a compiler or flags for them.
@@ -2609,19 +2935,19 @@ def build_environment(
         if objc is not None:
             env["OBJC"] = objc
         env["OBJCFLAGS"] = _merge_flags(
-            env.get("OBJCFLAGS", ""), [include_flag]
+            env.get("OBJCFLAGS", ""), include_flags
         )
     elif "OBJCFLAGS" in env:
-        env["OBJCFLAGS"] = _merge_flags(env["OBJCFLAGS"], [include_flag])
+        env["OBJCFLAGS"] = _merge_flags(env["OBJCFLAGS"], include_flags)
     if objcxx is not None or objcxx_standard_configured:
         if objcxx is not None:
             env["OBJCXX"] = objcxx
         env["OBJCXXFLAGS"] = _merge_flags(
-            env.get("OBJCXXFLAGS", ""), [include_flag]
+            env.get("OBJCXXFLAGS", ""), include_flags
         )
     elif "OBJCXXFLAGS" in env:
         env["OBJCXXFLAGS"] = _merge_flags(
-            env["OBJCXXFLAGS"], [include_flag]
+            env["OBJCXXFLAGS"], include_flags
         )
 
     c_standard, cxx_standard = language_standard_flags(env)
@@ -2805,6 +3131,52 @@ class SourceBuilder:
         with tempfile.TemporaryDirectory(prefix="pybrew-patch-") as temporary:
             patch_file = Path(temporary) / "patch.diff"
             patch_file.write_bytes(content)
+            dry_run_command = [
+                patch_command,
+                f"-p{patch.strip}",
+                "--dry-run",
+                "-f",
+                "-i",
+                str(patch_file),
+            ]
+            try:
+                dry_run = subprocess.run(
+                    dry_run_command,
+                    cwd=build_root,
+                    env=os.environ.copy(),
+                    text=True,
+                    capture_output=True,
+                    timeout=600,
+                )
+            except FileNotFoundError as error:
+                raise BuildError(
+                    f"{name}: patch command not found: {patch_command}"
+                ) from error
+            except subprocess.TimeoutExpired as error:
+                raise BuildError(f"{name}: patch #{index} timed out") from error
+            dry_output = (dry_run.stdout or "") + (dry_run.stderr or "")
+            targets = self._patch_targets(dry_output)
+            if not targets:
+                tail = "\n".join(dry_output.strip().splitlines()[-40:])
+                raise BuildError(
+                    f"{name}: patch #{index} failed: no verifiable patch targets"
+                    + (f"\n{tail}" if tail else "")
+                )
+            root = build_root.resolve()
+            for target in targets:
+                posix_target = PurePosixPath(target)
+                if posix_target.is_absolute() or ".." in posix_target.parts:
+                    raise BuildError(
+                        f"{name}: patch #{index} target escapes build root: {target!r}"
+                    )
+                candidate = (build_root / target).resolve()
+                try:
+                    candidate.relative_to(root)
+                except ValueError as error:
+                    raise BuildError(
+                        f"{name}: patch #{index} target escapes build root: {target!r}"
+                    ) from error
+
             command = [
                 patch_command,
                 f"-p{patch.strip}",
@@ -2836,8 +3208,60 @@ class SourceBuilder:
                 + (f"\n{tail}" if tail else "")
             )
 
+    @staticmethod
+    def _patch_targets(output: str) -> list[str]:
+        """Extract patch targets from dry-run ``patching``/``checking`` lines."""
+
+        targets: list[str] = []
+        for line in output.splitlines():
+            stripped = line.strip()
+            for prefix in ("patching file ", "checking file "):
+                if not stripped.startswith(prefix):
+                    continue
+                target = stripped[len(prefix) :].strip()
+                if (
+                    len(target) >= 2
+                    and target[0] == target[-1]
+                    and target[0] in {'"', "'"}
+                ):
+                    target = target[1:-1]
+                if target and target not in targets:
+                    targets.append(target)
+        return targets
+
+    def _dependency_paths(self) -> list[Path]:
+        formula = self.formula
+        dependencies = (
+            list(formula.dependencies)
+            + list(formula.build_dependencies)
+            + list(formula.head_dependencies)
+            + list(formula.uses_from_macos)
+            + list(formula.recommended_dependencies)
+            + list(formula.optional_dependencies)
+        )
+        paths: list[Path] = []
+        for dependency in dependencies:
+            name = dependency.name
+            opted = self.config.opt_path(name)
+            candidate: Optional[Path] = opted if opted.is_dir() else None
+            if candidate is None:
+                rack = self.config.cellar / name
+                if rack.is_dir():
+                    versions = sorted(
+                        child for child in rack.iterdir() if child.is_dir()
+                    )
+                    if versions:
+                        candidate = versions[-1]
+            if candidate is not None and candidate not in paths:
+                paths.append(candidate)
+        return paths
+
     def _build_env(self, keg: Path) -> dict[str, str]:
-        prepared = build_environment(self.config, self.environment)
+        prepared = build_environment(
+            self.config,
+            self.environment,
+            dependency_paths=self._dependency_paths(),
+        )
         if prepared.compiler.warning:
             print(f"warning: {prepared.compiler.warning}", file=sys.stderr)
         return prepared.env
@@ -2867,6 +3291,10 @@ class SourceBuilder:
             ctx.env[name] = os.pathsep.join([value, current]) if current else value
         elif isinstance(action, EnvDelete):
             ctx.env.pop(action.name, None)
+        elif isinstance(action, DeparallelizeAction):
+            ctx.env["MAKEFLAGS"] = _force_make_jobs(
+                ctx.env.get("MAKEFLAGS", ""), 1
+            )
         elif isinstance(action, InreplaceAction):
             paths = self._as_list(self._resolve(action.paths, ctx))
             search = self._scalar(self._resolve(action.search, ctx))
@@ -3114,11 +3542,22 @@ class SourceBuilder:
         if not args:
             raise BuildError(f"{self.formula.name}: empty system command")
         command = [str(arg) for arg in args]
+        sandbox = plan_build_sandbox(
+            command,
+            cwd=ctx.cwd,
+            writable_roots=(
+                ctx.build_root,
+                ctx.keg,
+                Path(tempfile.gettempdir()),
+            ),
+            environment=ctx.env,
+        )
+        execution_command = sandbox.command if sandbox else command
         if self.verbose:
-            print(f"==> {ctx.formula.name}: system {' '.join(command)}")
+            print(f"==> {ctx.formula.name}: system {' '.join(execution_command)}")
         try:
             result = subprocess.run(
-                command,
+                execution_command,
                 cwd=ctx.cwd,
                 env=ctx.env,
                 text=True,

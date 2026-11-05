@@ -265,6 +265,18 @@ HOMEBREW_CELLAR = Pathname.new(
 )
 HOMEBREW_PINNED_KEGS = HOMEBREW_PREFIX/"var/homebrew/pinned"
 HOMEBREW_TEMP = Pathname.new(ENV["HOMEBREW_TEMP"] || "/tmp")
+# Homebrew always defines these; the shim derives bounded local fallbacks so
+# Sandbox/SystemConfig helpers never trip over an undefined constant.
+HOMEBREW_REPOSITORY = Pathname.new(
+  PYBREW_CONFIG["repository"] || ENV["HOMEBREW_REPOSITORY"] || HOMEBREW_PREFIX.to_s
+)
+HOMEBREW_CACHE = Pathname.new(
+  PYBREW_CONFIG["cache"] || ENV["HOMEBREW_CACHE"] ||
+    (RUBY_PLATFORM.include?("darwin") ? "#{Dir.home}/Library/Caches/Homebrew" : "#{Dir.home}/.cache/Homebrew")
+)
+HOMEBREW_LOGS = Pathname.new(
+  PYBREW_CONFIG["logs"] || ENV["HOMEBREW_LOGS"] || (HOMEBREW_PREFIX/"var/log").to_s
+)
 HOMEBREW_PREFIX_PLACEHOLDER = "$HOMEBREW_PREFIX"
 HOMEBREW_CELLAR_PLACEHOLDER = "$HOMEBREW_CELLAR"
 HOMEBREW_HOME_PLACEHOLDER = "$HOMEBREW_HOME"
@@ -777,7 +789,8 @@ module MacOS
     requested = version.nil? ? nil : version.to_s
     return @sdk if requested.nil? && defined?(@sdk) && @sdk
 
-    raw = ENV["HOMEBREW_SDKROOT"].to_s.strip
+    raw = ENV["HOMEBREW_SDK_PATH"].to_s.strip
+    raw = ENV["HOMEBREW_SDKROOT"].to_s.strip if raw.empty?
     if raw.empty?
       command = if requested.nil?
         "/usr/bin/xcrun --show-sdk-path"
@@ -909,30 +922,72 @@ module MacOS
 
   module SDK
     def self.sdk_prefix
+      override = ENV["HOMEBREW_SDK_PREFIX"].to_s.strip
+      return Pathname.new(override) unless override.empty?
+
       Xcode.bundle_path/"Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs"
     end
 
-    def self.sdk_for(version = nil)
-      MacOS.sdk(version)
+    # Versioned SDK directories in ``sdk_prefix`` (bounded local directory
+    # scan; no commands and no network).
+    def self.sdk_directories
+      prefix = sdk_prefix
+      return [] unless prefix.directory?
+
+      prefix.children.select do |child|
+        child.directory? && child.basename.to_s.start_with?("MacOSX") &&
+          child.extname == ".sdk"
+      end.sort_by { |child| child.basename.to_s }
+    rescue StandardError
+      []
     end
 
-    def self.sdk_if_applicable(version = nil)
-      MacOS.sdk(version)
+    def self.read_sdk_version(path = nil)
+      return MacOS.version if path.nil?
+
+      pathname = Pathname.new(path.to_s)
+      settings = pathname/"SDKSettings.json"
+      if settings.file?
+        begin
+          data = JSON.parse(settings.read)
+          version = data["Version"] || data["CanonicalName"] || data["ProductBuildVersion"]
+          return PybrewVersion.new(version.to_s) unless version.nil? || version.to_s.empty?
+        rescue StandardError
+          nil
+        end
+      end
+      match = pathname.basename(".sdk").to_s[/MacOSX(\d+(?:\.\d+)*)/, 1]
+      match.nil? ? nil : PybrewVersion.new(match)
     end
 
     def self.all_sdks
-      found = MacOS.sdk
-      found.nil? ? [] : [found]
+      found = sdk_directories.map do |path|
+        PybrewSDK.new(read_sdk_version(path) || MacOS.version, path)
+      end
+      found = [MacOS.sdk].compact if found.empty?
+      found.sort_by { |sdk| sdk.version.to_s.split(".").map(&:to_i) }
+    rescue StandardError
+      []
     end
 
     def self.latest_sdk
-      MacOS.sdk
+      all_sdks.last
     end
 
-    def self.read_sdk_version(_path = nil)
-      MacOS.version
-    rescue StandardError
-      nil
+    def self.sdk_for(version = nil)
+      if version.nil?
+        found = MacOS.sdk
+        return found.nil? ? latest_sdk : found
+      end
+      wanted = version.to_s
+      all_sdks.find do |candidate|
+        candidate.version.to_s == wanted ||
+          candidate.version.to_s.start_with?("#{wanted}.")
+      end || latest_sdk
+    end
+
+    def self.sdk_if_applicable(version = nil)
+      sdk_for(version)
     end
   end
 
@@ -978,6 +1033,18 @@ module MacOS
       return PybrewVersion.new(override) unless override.empty?
       return nil unless installed?
 
+      # Prefer the local version.plist (bounded, no subprocess) before
+      # shelling out to xcodebuild.
+      version_plist = bundle_path/"Contents/version.plist"
+      if version_plist.file?
+        begin
+          text = version_plist.read
+          match = text[%r{<key>CFBundleShortVersionString</key>\s*<string>([^<]+)</string>}, 1]
+          return PybrewVersion.new(match) if match && !match.empty?
+        rescue StandardError
+          nil
+        end
+      end
       output = `/usr/bin/xcodebuild -version 2>/dev/null`.to_s
       match = output[/Xcode\s+(\S+)/, 1]
       match.nil? || match.empty? ? nil : PybrewVersion.new(match)
@@ -3655,18 +3722,27 @@ module Sandbox
     "/opt/homebrew/bin/bwrap",
   ].freeze
 
-  # Isolation/rules APIs from Homebrew's sandbox.rb.  The pybrew shim only
-  # supports the optional external wrapper (Sandbox.run); policy construction,
-  # rule application and capture are explicitly unsupported so callers never
-  # silently believe they are isolated.
+  # Rules/backends that still cannot be faithfully reproduced by the bounded
+  # policy renderer.  Everything else is implemented (default stays inert).
   UNSUPPORTED_POLICY_METHODS = %i[
-    add_rule add_install_hook_rules allow_cvs allow_fossil allow_network
-    allow_process_exec allow_read allow_read_if_exists allow_write
-    allow_write_cellar allow_write_log allow_write_path allow_write_path_if_exists
-    allow_write_system_temp allow_write_temp_and_cache allow_write_xcode apply!
-    capture cleanup_sandbox copy_pty_output deny_all_network deny_read
-    deny_read_home deny_read_path deny_write deny_write_homebrew_repository
-    deny_write_path protect_homebrew_state record_log record_sandbox_log
+    capture cleanup_sandbox copy_pty_output protect_homebrew_state
+    record_log record_sandbox_log
+  ].freeze
+
+  # Home-relative credential paths kept readable by ``deny_read_home(except: :git)``.
+  GIT_CREDENTIAL_PATHS = %w[
+    .ssh .gitconfig .git-credentials .config/gh .netrc
+  ].freeze
+
+  # Personal/credential paths denied individually when the whole home cannot
+  # be denied because Homebrew/CI paths live inside it.
+  HOME_DENY_PATHS = %w[
+    .ssh .gitconfig .git-credentials .config/gh .netrc .aws .azure .docker
+    .gnupg .kube .npmrc .pypirc .gem/credentials .bundle/config
+    .cargo/credentials .cargo/credentials.toml .m2/settings.xml
+    .gradle/gradle.properties .env .env.local .bash_history .zsh_history
+    .python_history .mysql_history .psql_history
+    Documents Library/Keychains Library/Mobile Documents
   ].freeze
 
   class << self
@@ -3757,15 +3833,34 @@ module Sandbox
       yield if block_given?
     end
 
-    # Wrap an explicit command with the minimal backend arguments.  Explicit
-    # fake/custom binaries receive the command unchanged.
+    # Wrap an explicit command with the backend arguments.  ``sandbox-exec``
+    # receives the collected rules profile (or the allow-default baseline when
+    # no rules were collected) instead of always ignoring the rules.
     def wrapped_command(*command)
       argv = command.flatten.compact.map(&:to_s)
       case backend
       when :sandbox_exec
-        [executable, "-p", "(version 1)(allow default)", *argv]
+        profile = rules.empty? && !strict? ? "(version 1)(allow default)" : sandbox_profile
+        @applied_policy = {
+          "backend" => "sandbox_exec",
+          "executable" => executable.to_s,
+          "strict" => strict?,
+          "rules" => rules.map { |rule| rule[:kind].to_s },
+          "profile" => profile,
+          "command" => [executable.to_s, "-p", profile, *argv],
+        }
+        [executable, "-p", profile, *argv]
       when :bwrap
-        [executable, *bwrap_policy_args, "--", *argv]
+        args = bwrap_policy_args
+        @applied_policy = {
+          "backend" => "bwrap",
+          "executable" => executable.to_s,
+          "strict" => strict?,
+          "rules" => rules.map { |rule| rule[:kind].to_s },
+          "args" => args,
+          "command" => [executable.to_s, *args, "--", *argv],
+        }
+        [executable, *args, "--", *argv]
       else
         [executable, *argv]
       end
@@ -3818,7 +3913,59 @@ module Sandbox
     end
 
     def rule_paths(payload)
-      Array(payload).flatten.compact.map(&:to_s)
+      rule_filters(payload).map { |filter| filter[:path] }
+    end
+
+    # Normalize a rule payload into Homebrew-style path filters.  Plain
+    # strings keep the historical subpath semantics; hashes carry an explicit
+    # ``type`` (:literal/:subpath/:regex) like upstream ``path_filter``.
+    def rule_filters(payload)
+      Array(payload).flatten.compact.map do |entry|
+        if entry.is_a?(Hash) && entry.key?(:path)
+          { path: entry[:path].to_s, type: (entry[:type] || :literal).to_sym }
+        else
+          path_filter(entry.to_s, :subpath)
+        end
+      end.compact
+    end
+
+    # Upstream-compatible path filter: returns nil for no path so callers can
+    # treat "deny whole home" separately.
+    def path_filter(path = nil, type = :literal)
+      return nil if path.nil?
+
+      normalized_type = type.to_s.to_sym
+      unless %i[literal subpath regex].include?(normalized_type)
+        raise ArgumentError, "Invalid path filter type: #{type}"
+      end
+      # Keep the caller-supplied path verbatim in the emitted profile (tests
+      # and users reason about the given path); realpath resolution is only
+      # used for internal containment checks.
+      { path: path.to_s, type: normalized_type }
+    end
+
+    def expand_realpath(path)
+      pathname = Pathname.new(path.to_s)
+      return pathname.expand_path unless pathname.absolute?
+      return pathname.realpath if pathname.exist?
+
+      expand_realpath(pathname.parent)/pathname.basename
+    rescue StandardError
+      Pathname.new(path.to_s).expand_path
+    end
+
+    def filter_line(allow, operation, filter)
+      verb = allow ? "allow" : "deny"
+      return "(#{verb} #{operation})" if filter.nil?
+
+      case filter[:type]
+      when :literal
+        "(#{verb} #{operation} (literal \"#{sandbox_escape(filter[:path])}\"))"
+      when :regex
+        "(#{verb} #{operation} (regex #\"#{sandbox_escape(filter[:path])}\"))"
+      else
+        "(#{verb} #{operation} (subpath \"#{sandbox_escape(filter[:path])}\"))"
+      end
     end
 
     def sandbox_escape(value)
@@ -3863,52 +4010,83 @@ module Sandbox
       end
       rules.each do |rule|
         kind = rule[:kind]
-        paths = rule_paths(rule[:payload])
+        payload = rule[:payload]
         case kind
         when :raw
-          paths.each { |raw| lines << raw if raw.start_with?("(") }
-        when :allow_read
-          if paths.empty?
-            lines << "(allow file-read*)"
+          Array(payload).flatten.compact.map(&:to_s).each do |raw|
+            lines << raw if raw.start_with?("(")
+          end
+        when :noop
+          nil
+        when :allow_read, :deny_read
+          filters = rule_filters(payload)
+          if filters.empty?
+            lines << filter_line(kind == :allow_read, "file-read*", nil)
           else
-            paths.each { |path| lines << "(allow file-read* (subpath \"#{sandbox_escape(path)}\"))" }
+            filters.each { |filter| lines << filter_line(kind == :allow_read, "file-read*", filter) }
           end
         when :allow_write
-          if paths.empty?
-            lines << "(allow file-write*)"
+          filters = rule_filters(payload)
+          if filters.empty?
+            lines << filter_line(true, "file-write*", nil)
           else
-            paths.each { |path| lines << "(allow file-write* (subpath \"#{sandbox_escape(path)}\"))" }
-          end
-        when :deny_read
-          if paths.empty?
-            lines << "(deny file-read*)"
-          else
-            paths.each { |path| lines << "(deny file-read* (subpath \"#{sandbox_escape(path)}\"))" }
+            filters.each do |filter|
+              lines << filter_line(true, "file-write*", filter)
+              lines << filter_line(true, "file-write-setugid", filter)
+              lines << filter_line(true, "file-write-mode", filter)
+            end
           end
         when :deny_write
-          if paths.empty?
-            lines << "(deny file-write*)"
+          filters = rule_filters(payload)
+          if filters.empty?
+            lines << filter_line(false, "file-write*", nil)
           else
-            paths.each { |path| lines << "(deny file-write* (subpath \"#{sandbox_escape(path)}\"))" }
+            filters.each { |filter| lines << filter_line(false, "file-write*", filter) }
           end
         when :allow_network
-          lines << "(allow network*)"
+          filters = rule_filters(payload)
+          if filters.empty?
+            lines << "(allow network*)"
+          else
+            filters.each { |filter| lines << filter_line(true, "network*", filter) }
+          end
         when :deny_network
           lines << "(deny network*)"
         when :allow_process_exec
-          lines << "(allow process-exec)"
+          filters = rule_filters(payload)
+          if filters.empty?
+            lines << "(allow process-exec)"
+          else
+            filters.each { |filter| lines << filter_line(true, "process-exec", filter) }
+          end
         end
       end
       lines.join("\n")
     end
 
     def bwrap_policy_args
-      write_paths = []
+      write_filters = []
+      read_filters = []
+      deny_paths = []
       rules.each do |rule|
-        next unless rule[:kind] == :allow_write
-
-        write_paths.concat(rule_paths(rule[:payload]))
+        case rule[:kind]
+        when :allow_write
+          write_filters.concat(rule_filters(rule[:payload]))
+        when :allow_read
+          read_filters.concat(rule_filters(rule[:payload]))
+        when :deny_read, :deny_write
+          deny_paths.concat(rule_filters(rule[:payload]).map { |filter| filter[:path] })
+        end
       end
+      denied = lambda do |path|
+        deny_paths.any? do |denied_path|
+          path.to_s == denied_path.to_s ||
+            path.to_s.start_with?("#{denied_path}/") ||
+            denied_path.to_s.start_with?("#{path}/")
+        end
+      end
+      write_paths = write_filters.map { |filter| filter[:path] }.reject(&:empty?).reject(&denied)
+      read_paths = read_filters.map { |filter| filter[:path] }.reject(&:empty?).reject(&denied)
 
       if strict?
         args = ["--dev", "/dev", "--proc", "/proc", "--unshare-user",
@@ -3916,10 +4094,12 @@ module Sandbox
         sandbox_read_roots.each do |root|
           args << "--ro-bind" << root.to_s << root.to_s
         end
+        read_paths.each { |path| args << "--ro-bind-try" << path << path }
         write_paths.concat(["/tmp", "/private/tmp", HOMEBREW_CELLAR.to_s,
                             HOMEBREW_PREFIX.to_s])
       else
         args = ["--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc"]
+        read_paths.each { |path| args << "--ro-bind-try" << path << path }
       end
       write_paths.map(&:to_s).reject(&:empty?).uniq.each do |path|
         args << "--bind" << path << path
@@ -3940,64 +4120,100 @@ module Sandbox
       collect_rule!(:raw, args)
     end
 
-    def add_install_hook_rules(*_args, **_kwargs)
-      unsupported_isolation!(:add_install_hook_rules)
+    # Upstream signature is ``add_install_hook_rules(network_access_allowed:)``.
+    def add_install_hook_rules(network_access_allowed: false, **_kwargs)
+      allow_write_temp_and_cache
+      deny_write_homebrew_repository
+      deny_read_home
+      deny_all_network unless network_access_allowed
+      true
     end
 
     def allow_cvs(*_args, **_kwargs)
-      collect_rule!(:noop, :allow_cvs)
+      collect_rule!(:allow_write, [path_filter("#{Dir.home}/.cvspass", :literal)])
     end
 
     def allow_fossil(*_args, **_kwargs)
-      collect_rule!(:noop, :allow_fossil)
+      collect_rule!(:allow_write, [
+        path_filter("#{Dir.home}/.fossil", :literal),
+        path_filter("#{Dir.home}/.fossil-journal", :literal),
+      ])
     end
 
-    def allow_network(*_args, **_kwargs)
-      collect_rule!(:allow_network, :network)
+    def allow_network(*paths, path: nil, type: :subpath, **_kwargs)
+      entries = [path, *paths].compact.map { |entry| path_filter(entry, type) }
+      collect_rule!(:allow_network, entries)
     end
 
-    def allow_process_exec(*_args, **_kwargs)
-      collect_rule!(:allow_process_exec, :process_exec)
+    def allow_process_exec(*paths, path: nil, type: :subpath, **_kwargs)
+      entries = [path, *paths].compact.map { |entry| path_filter(entry, type) }
+      collect_rule!(:allow_process_exec, entries)
     end
 
-    def allow_read(*paths, **_kwargs)
-      collect_rule!(:allow_read, paths)
+    def allow_read(*paths, path: nil, type: :subpath, **_kwargs)
+      entries = [path, *paths].compact.map { |entry| path_filter(entry, type) }
+      collect_rule!(:allow_read, entries)
     end
 
-    def allow_read_if_exists(*paths, **_kwargs)
-      collect_rule!(:allow_read, paths)
+    def allow_read_if_exists(*paths, path: nil, type: :subpath, **_kwargs)
+      entries = [path, *paths].compact.select { |entry| File.exist?(entry.to_s) }
+      entries = entries.map { |entry| path_filter(entry, type) }
+      collect_rule!(:allow_read, entries)
     end
 
-    def allow_write(*paths, **_kwargs)
-      collect_rule!(:allow_write, paths)
+    def allow_write(*paths, path: nil, type: :subpath, **_kwargs)
+      entries = [path, *paths].compact.map { |entry| path_filter(entry, type) }
+      collect_rule!(:allow_write, entries)
     end
 
-    def allow_write_cellar(*_args, **_kwargs)
-      collect_rule!(:allow_write, HOMEBREW_CELLAR)
+    # ``allow_write_cellar(formula)`` in Homebrew grants the rack/etc/var
+    # trees.  Accept a formula-like object and fall back to the shared Cellar.
+    def allow_write_cellar(formula = nil, **_kwargs)
+      paths = if !formula.nil? && formula.respond_to?(:rack)
+        [formula.rack, (formula.etc if formula.respond_to?(:etc)), (formula.var if formula.respond_to?(:var))]
+      else
+        [HOMEBREW_CELLAR]
+      end
+      collect_rule!(:allow_write, paths.compact.map { |path| path_filter(path, :subpath) })
     end
 
-    def allow_write_log(*_args, **_kwargs)
-      collect_rule!(:allow_write, "#{HOMEBREW_PREFIX}/var/log")
+    def allow_write_log(formula = nil, **_kwargs)
+      path = if !formula.nil? && formula.respond_to?(:logs)
+        formula.logs
+      else
+        HOMEBREW_PREFIX/"var/log"
+      end
+      collect_rule!(:allow_write, [path_filter(path, :subpath)])
     end
 
-    def allow_write_path(*paths, **_kwargs)
-      collect_rule!(:allow_write, paths)
+    def allow_write_path(*paths, path: nil, **_kwargs)
+      entries = [path, *paths].compact.map { |entry| path_filter(entry, :subpath) }
+      collect_rule!(:allow_write, entries)
     end
 
-    def allow_write_path_if_exists(*paths, **_kwargs)
-      collect_rule!(:allow_write, paths)
+    def allow_write_path_if_exists(*paths, path: nil, **_kwargs)
+      entries = [path, *paths].compact.select { |entry| File.exist?(entry.to_s) }
+      entries = entries.map { |entry| path_filter(entry, :subpath) }
+      collect_rule!(:allow_write, entries)
     end
 
     def allow_write_system_temp(*_args, **_kwargs)
-      collect_rule!(:allow_write, "/tmp")
+      collect_rule!(:allow_write, [path_filter(HOMEBREW_TEMP, :subpath)])
     end
 
     def allow_write_temp_and_cache(*_args, **_kwargs)
-      collect_rule!(:allow_write, ENV["TMPDIR"] || "/tmp")
+      allow_write_system_temp
+      cache = if defined?(HOMEBREW_CACHE)
+        HOMEBREW_CACHE
+      else
+        HOMEBREW_PREFIX/"Library/Caches"
+      end
+      collect_rule!(:allow_write, [path_filter(cache, :subpath)])
     end
 
     def allow_write_xcode(*_args, **_kwargs)
-      collect_rule!(:allow_write, "/Applications/Xcode.app")
+      # Mirrors upstream: no extra rule on this bounded implementation.
+      nil
     end
 
     def apply!(*_args, **_kwargs)
@@ -4006,10 +4222,17 @@ module Sandbox
               "Sandbox.apply! requires PYBREW_SANDBOX=1 and an available sandbox " \
               "backend; the default remains disabled"
       end
-      @applied_policy = if backend == :bwrap
-        { "backend" => "bwrap", "args" => bwrap_policy_args }
-      else
-        { "backend" => backend.to_s, "profile" => sandbox_profile }
+      profile = sandbox_profile
+      @applied_policy = {
+        "backend" => backend.to_s,
+        "executable" => executable.to_s,
+        "strict" => strict?,
+        "rules" => rules.map { |rule| rule[:kind].to_s },
+        "profile" => profile,
+        "command" => wrapped_command("/bin/sh", "-c", "true"),
+      }
+      if backend == :bwrap
+        @applied_policy["args"] = bwrap_policy_args
       end
       true
     end
@@ -4030,28 +4253,66 @@ module Sandbox
       collect_rule!(:deny_network, :network)
     end
 
-    def deny_read(*paths, **_kwargs)
-      collect_rule!(:deny_read, paths)
+    def deny_read(*paths, path: nil, type: :subpath, **_kwargs)
+      entries = [path, *paths].compact.map { |entry| path_filter(entry, type) }
+      collect_rule!(:deny_read, entries)
     end
 
-    def deny_read_home(*_args, **_kwargs)
-      collect_rule!(:deny_read, ENV["HOME"])
+    # ``deny_read_home(except: :git)`` keeps git credentials/shortcuts
+    # readable while denying the rest of the personal home paths.  Without a
+    # usable HOME the call is a bounded no-op.
+    def deny_read_home(except: nil, **_kwargs)
+      home = ENV["HOME"].to_s
+      return nil if home.empty?
+      if !except.nil? && except.to_sym != :git
+        raise ArgumentError, "Unknown home credential exception: #{except.inspect}"
+      end
+
+      if !except.nil? && except.to_sym == :git
+        HOME_DENY_PATHS.each do |relative|
+          next if GIT_CREDENTIAL_PATHS.include?(relative)
+
+          path = Pathname.new(home)/relative
+          next unless path.exist?
+
+          collect_rule!(:deny_read, [path_filter(path, :subpath)])
+        end
+        GIT_CREDENTIAL_PATHS.each do |relative|
+          path = Pathname.new(home)/relative
+          next unless path.exist? || path.symlink?
+
+          collect_rule!(:allow_read, [path_filter(path, :literal)])
+        end
+        return nil
+      end
+
+      collect_rule!(:deny_read, [path_filter(home, :subpath)])
+      nil
     end
 
     def deny_read_path(*paths, **_kwargs)
-      collect_rule!(:deny_read, paths)
+      entries = paths.compact.map { |entry| path_filter(entry, :subpath) }
+      collect_rule!(:deny_read, entries)
     end
 
-    def deny_write(*paths, **_kwargs)
-      collect_rule!(:deny_write, paths)
+    def deny_write(*paths, path: nil, type: :subpath, **_kwargs)
+      entries = [path, *paths].compact.map { |entry| path_filter(entry, type) }
+      collect_rule!(:deny_write, entries)
     end
 
     def deny_write_homebrew_repository(*_args, **_kwargs)
-      collect_rule!(:deny_write, HOMEBREW_REPOSITORY)
+      paths = []
+      brew_file = HOMEBREW_PREFIX/"bin/brew"
+      paths << brew_file if brew_file.file? || brew_file.symlink?
+      paths << HOMEBREW_REPOSITORY if defined?(HOMEBREW_REPOSITORY)
+      paths << HOMEBREW_PREFIX/"Library" if (HOMEBREW_PREFIX/"Library").directory?
+      paths = [HOMEBREW_PREFIX] if paths.empty?
+      collect_rule!(:deny_write, paths.compact.map { |path| path_filter(path, :subpath) })
     end
 
     def deny_write_path(*paths, **_kwargs)
-      collect_rule!(:deny_write, paths)
+      entries = paths.compact.map { |entry| path_filter(entry, :subpath) }
+      collect_rule!(:deny_write, entries)
     end
 
     def protect_homebrew_state(*_args, **_kwargs)
@@ -4144,16 +4405,6 @@ module Sandbox
 
     def home_write_paths
       []
-    end
-
-    def path_filter
-      nil
-    end
-
-    def expand_realpath(path)
-      Pathname.new(path.to_s).realpath.to_s
-    rescue Errno::ENOENT, Errno::EACCES, Errno::ENOTDIR
-      Pathname.new(path.to_s).expand_path.to_s
     end
 
     def run_or_fork(*_args, **_kwargs, &block)
@@ -6892,12 +7143,26 @@ class Keg
     []
   end
 
-  def codesign_patched_binary(_file)
-    nil
+  # Ad-hoc/custom codesign after relocation.  Uses the same bounded helpers as
+  # ``relocate_binary_files`` and returns a verification/entitlements result.
+  def codesign_patched_binary(file)
+    tool = codesign_tool
+    return { "file" => file.to_s, "signed" => false, "reason" => "codesign tool not found" } if tool.nil?
+
+    begin
+      Utils.popen_read(*codesign_sign_command(file), safe: true)
+    rescue ScriptError, StandardError => error
+      return { "file" => file.to_s, "signed" => false,
+               "reason" => "#{error.class}: #{error.message}" }
+    end
+    result = verify_codesign_signature(file)
+    result["signed"] = true
+    result["entitlements"] = codesign_entitlements(file)
+    result
   end
 
-  def codesign_patched_binaries(_files)
-    nil
+  def codesign_patched_binaries(files)
+    Array(files).map { |file| codesign_patched_binary(file) }
   end
 
   def remove_opt_record
@@ -7321,6 +7586,54 @@ class Keg
     Utils.which("codesign")
   end
 
+  def codesign_identity
+    value = ENV["PYBREW_CODESIGN_IDENTITY"].to_s.strip
+    value.empty? ? "-" : value
+  end
+
+  CODESIGN_PRESERVE_METADATA = "entitlements,requirements,flags,runtime"
+
+  def codesign_sign_command(path)
+    [codesign_tool, "--force", "--sign", codesign_identity,
+     "--preserve-metadata=#{CODESIGN_PRESERVE_METADATA}", path.to_s]
+  end
+
+  def codesign_verify_command(path)
+    [codesign_tool, "--verify", "--strict", path.to_s]
+  end
+
+  # Verify an existing signature (bounded local `codesign --verify` call).
+  def verify_codesign_signature(path, strict: false)
+    tool = codesign_tool
+    return { "file" => path.to_s, "verified" => false, "reason" => "codesign tool not found" } if tool.nil?
+
+    begin
+      output = Utils.popen_read(*codesign_verify_command(path), safe: true)
+      { "file" => path.to_s, "verified" => true, "output" => output.to_s }
+    rescue ScriptError, StandardError => error
+      result = { "file" => path.to_s, "verified" => false,
+                 "reason" => "#{error.class}: #{error.message}" }
+      raise "codesign verification failed for #{path}: #{result["reason"]}" if strict
+      result
+    end
+  end
+
+  # Capture a binary's entitlements (XML plist text) without parsing Apple's
+  # full plist grammar; ``present`` is true when codesign reports a dict.
+  def codesign_entitlements(path)
+    tool = codesign_tool
+    return { "file" => path.to_s, "present" => false, "raw" => "", "reason" => "codesign tool not found" } if tool.nil?
+
+    begin
+      output = Utils.popen_read(tool, "-d", "--entitlements", ":-", path.to_s).to_s
+    rescue ScriptError, StandardError => error
+      return { "file" => path.to_s, "present" => false, "raw" => "",
+               "reason" => "#{error.class}: #{error.message}" }
+    end
+    { "file" => path.to_s, "present" => output.include?("<dict>") || output.include?("<key>"),
+      "raw" => output }
+  end
+
   def expand_relocation_placeholders(value)
     text = value.to_s
     relocation_placeholder_pairs.each { |path, placeholder| text = text.gsub(placeholder, path) }
@@ -7371,6 +7684,7 @@ class Keg
       "skipped" => [],
       "codesign_files" => [],
       "codesign_commands" => [],
+      "codesign_verify_commands" => [],
       "codesign_skipped" => [],
     }
     binary_relocation_files(files).each do |path|
@@ -7415,9 +7729,8 @@ class Keg
           }
         else
           plan["codesign_files"] << path.to_s
-          plan["codesign_commands"] << [
-            sign_tool, "--force", "--sign", "-", path.to_s
-          ]
+          plan["codesign_commands"] << codesign_sign_command(path)
+          plan["codesign_verify_commands"] << codesign_verify_command(path)
         end
       end
       plan["files"] << path.to_s
@@ -7485,6 +7798,24 @@ class Keg
         end
       end
     end
+    codesign_verified = []
+    entitlements = []
+    unless dry_run
+      plan["codesign_verify_commands"].each do |command|
+        file = command.last.to_s
+        begin
+          Utils.popen_read(*command.map(&:to_s), safe: true)
+          codesign_verified << { "file" => file, "verified" => true }
+          entitlements << codesign_entitlements(file)
+        rescue ScriptError, StandardError => error
+          result = { "file" => file, "verified" => false,
+                     "reason" => "#{error.class}: #{error.message}" }
+          codesign_verified << result
+          raise RuntimeError,
+                "codesign verification failed for #{file}: #{result["reason"]}" if strict
+        end
+      end
+    end
     {
       "files" => plan["files"],
       "commands" => plan["commands"],
@@ -7492,7 +7823,10 @@ class Keg
       "skipped" => plan["skipped"],
       "codesign_files" => plan["codesign_files"],
       "codesign_commands" => plan["codesign_commands"],
+      "codesign_verify_commands" => plan["codesign_verify_commands"],
       "codesigned" => codesigned,
+      "codesign_verified" => codesign_verified,
+      "entitlements" => entitlements,
       "codesign_skipped" => plan["codesign_skipped"],
       "dry_run" => !!dry_run,
     }
@@ -8292,6 +8626,57 @@ module SystemConfig
       "CPU: #{Hardware::CPU.cores}-core #{Hardware::CPU.bits}-bit #{Hardware::CPU.family}"
     end
 
+    def describe_os
+      if OS.mac?
+        "macOS #{MacOS.full_version} (#{MacOS.version_symbol})"
+      elsif OS.linux?
+        "Linux #{OS.version}"
+      else
+        RUBY_PLATFORM.to_s
+      end
+    rescue StandardError
+      "N/A"
+    end
+
+    def describe_hardware
+      text = hardware
+      return "N/A" if text.nil?
+
+      model = Hardware::CPU.model.to_s
+      arch = Hardware::CPU.arch.to_s
+      flags = Array(Hardware::CPU.flags).map(&:to_s).join(" ")
+      text += "\nModel: #{model}; Arch: #{arch}" unless model.empty?
+      text += "\nFlags: #{flags}" unless flags.empty?
+      text
+    rescue StandardError
+      hardware.to_s
+    end
+
+    def describe_xcode
+      version = MacOS::Xcode.version
+      if version.nil?
+        MacOS::Xcode.installed? ? "installed (unknown version)" : "N/A"
+      else
+        "#{version} => #{MacOS::Xcode.prefix}"
+      end
+    rescue StandardError
+      "N/A"
+    end
+
+    def describe_clt
+      version = MacOS::CLT.version
+      version.nil? ? (MacOS::CLT.installed? ? "installed (unknown version)" : "N/A") : version.to_s
+    rescue StandardError
+      "N/A"
+    end
+
+    def describe_sdk
+      found = MacOS.sdk
+      found.nil? ? "N/A" : "#{found.version} => #{found.path}"
+    rescue StandardError
+      "N/A"
+    end
+
     def kernel
       Etc.uname[:machine].to_s
     end
@@ -8354,13 +8739,17 @@ module SystemConfig
     end
 
     def hardware_config(out = $stdout)
-      hardware_text = hardware
-      out.puts hardware_text unless hardware_text.nil?
+      out.puts "Hardware: #{describe_hardware}"
+      out.puts "CPU: #{Hardware::CPU.arch}" if OS.mac? || OS.linux?
       out
     end
 
     def host_software_config(out = $stdout)
+      out.puts "OS: #{describe_os}"
       out.puts "Clang: #{describe_clang}"
+      out.puts "Xcode: #{describe_xcode}" if OS.mac?
+      out.puts "CLT: #{describe_clt}" if OS.mac?
+      out.puts "SDK: #{describe_sdk}" if OS.mac?
       out.puts "Git: #{describe_git}"
       out.puts "Curl: #{describe_curl}"
       out
@@ -8591,6 +8980,137 @@ class PybrewPypiPackages
     @extra_packages = Array(extra_packages).compact.map(&:to_s)
     @exclude_packages = Array(exclude_packages).compact.map(&:to_s)
     @dependencies = Array(dependencies).compact.map(&:to_s)
+  end
+end
+
+class PybrewResourceDefinition
+  FIELDS = %i[
+    url sha256 version using mirror mirrors file data apply strip type resolves
+    directory
+  ].freeze
+
+  def initialize(name, context_version = nil)
+    @name = name.to_s
+    @context_version = context_version
+    @attrs = {}
+  end
+
+  def name
+    @name
+  end
+
+  def method_missing(method_name, *args, **kwargs, &block)
+    if FIELDS.include?(method_name)
+      if args.empty? && kwargs.empty?
+        return @attrs[method_name] if @attrs.key?(method_name)
+        return @context_version if method_name == :version && !@context_version.nil?
+
+        return nil
+      end
+      value = if !kwargs.empty?
+        kwargs
+      elsif args.length > 1
+        args
+      else
+        args.first
+      end
+      @attrs[method_name] = value
+      return value
+    end
+    super
+  end
+
+  def respond_to_missing?(method_name, include_private = false)
+    FIELDS.include?(method_name) || super
+  end
+
+  def to_resource
+    info = {}
+    @attrs.each do |key, value|
+      normalized = value.is_a?(Pathname) ? value.to_s : value
+      normalized = normalized.map { |entry| entry.is_a?(Pathname) ? entry.to_s : entry } if normalized.is_a?(Array)
+      info[key.to_s] = normalized
+      info["data"] = true if key == :data && value == true
+    end
+    PybrewResource.new(@name, info)
+  end
+end
+
+class PybrewPatchDefinition
+  FIELDS = %i[url sha256 strip file directory resolves type apply data].freeze
+
+  def initialize(args = nil, block = nil)
+    @args = Array(args)
+    @attrs = {}
+    @block = block
+    capture_block! unless block.nil?
+  end
+
+  def capture_block!
+    @block.call(self) if @block.arity >= 1
+    instance_eval(&@block) if @block.arity.zero?
+  end
+
+  def method_missing(method_name, *args, **kwargs, &block)
+    if FIELDS.include?(method_name)
+      value = if !kwargs.empty?
+        kwargs
+      elsif args.length > 1
+        args
+      else
+        args.first
+      end
+      @attrs[method_name] = value
+      return value
+    end
+    super
+  end
+
+  def respond_to_missing?(method_name, include_private = false)
+    FIELDS.include?(method_name) || super
+  end
+
+  def url
+    return @attrs[:url] if @attrs.key?(:url)
+
+    @args.first if @args.first.is_a?(String)
+  end
+
+  def file
+    @attrs[:file] || (@args.first if @args.first.is_a?(Pathname))
+  end
+
+  def sha256
+    @attrs[:sha256]
+  end
+
+  def strip
+    value = @attrs.key?(:strip) ? @attrs[:strip] : @args.first
+    value.nil? || value.is_a?(String) || value == :DATA ? value : value
+  end
+
+  def directory
+    @attrs[:directory]
+  end
+
+  def resolves
+    Array(@attrs[:resolves])
+  end
+
+  def type
+    @attrs[:type]
+  end
+
+  def apply?
+    @attrs.key?(:apply)
+  end
+
+  def data?
+    @args.first == :DATA || @attrs[:data] == true
+  end
+
+  def to_s
+    (url || file || (data? ? ":DATA" : "inline patch")).to_s
   end
 end
 
@@ -8904,6 +9424,45 @@ class PybrewLoadedFormula
     (@version || self.class.loaded_version || "HEAD").to_s
   end
 
+  # Resources declared in the formula class body (evaluated dynamically at
+  # load time) are exposed as real Resource objects, so dynamic names and
+  # class-body values work even without Python metadata staging.
+  def declared_resources
+    @declared_resources ||= begin
+      list = PybrewResourceList.new
+      blocks = self.class.loaded_resources || {}
+      blocks.each do |resource_name, block|
+        definition = PybrewResourceDefinition.new(
+          resource_name, self.class.loaded_version
+        )
+        definition.instance_eval(&block) if block
+        list << definition.to_resource
+      end
+      list
+    end
+  end
+
+  def resources
+    declared_resources
+  end
+
+  def resource(resource_name)
+    declared_resources[resource_name.to_s]
+  end
+
+  # Patches declared in the formula class body, including dynamically
+  # interpolated urls/files.  They are metadata only: the Python builder
+  # remains responsible for actually applying patches.
+  def patches
+    @declared_patches ||= Array(self.class.loaded_patches).map do |args, block|
+      PybrewPatchDefinition.new(args, block)
+    end
+  end
+
+  def patchlist
+    patches
+  end
+
   def fetch?
     !self.class.loaded_fetch_block.nil?
   end
@@ -9078,7 +9637,9 @@ module Formulary
   module_function
 
   # Accessors understood by the bounded API-struct mapping.
-  FORMULA_STRUCT_ATTRIBUTES = %i[desc homepage url sha256 version license dependencies].freeze
+  FORMULA_STRUCT_ATTRIBUTES = %i[
+    desc homepage url sha256 version license dependencies aliases oldname oldnames
+  ].freeze
   # The bounded struct shape must at least carry a description and version;
   # objects missing them are rejected as malformed instead of producing an
   # empty formula class.
@@ -9115,13 +9676,82 @@ module Formulary
     alias_reference = factory_alias_reference(ref)
     reference = alias_reference unless alias_reference.nil?
     formula = factory_load_source(reference, options)
+    if formula.nil?
+      # API aliases/oldnames resolve through the API cache even when the
+      # caller did not pass ``from: :api`` (Homebrew's loader order).
+      formula = factory_api_alias(ref)
+    end
     formula = reference if formula.nil?
     (@factory_cache ||= {})[cache_key] = formula if factory_cached?
     formula
   end
 
-  def resolve(ref, *args, **options)
-    factory(ref, *args, **options)
+  # Look up an API alias/rename in the bounded API cache; nil when no API is
+  # configured or the name is unknown.  Never raises for missing metadata.
+  def factory_api_alias(ref)
+    return nil unless api_json_configured?
+
+    begin
+      ensure_api_json_loaded
+      formula_class_get_from_api(ref)
+    rescue PybrewFormulaUnavailableError
+      nil
+    end
+  end
+
+  # Bounded ``Formulary.resolve``: resolve installed specs/tabs and installed
+  # aliases like Homebrew, while keeping source loading in ``factory``.
+  # ``follow_installed_alias`` is always disabled because a caller resolving a
+  # name is referring to that specific formula.
+  def resolve(ref, spec = nil, force_bottle: false, flags: [], **options)
+    name = ref.to_s
+    formula = if name.include?("/") || File.exist?(name)
+      factory(ref, spec || :stable, force_bottle: force_bottle, flags: flags, **options)
+    else
+      rack = to_rack(ref)
+      if rack.nil?
+        factory(ref, spec || :stable, force_bottle: force_bottle, flags: flags, **options)
+      else
+        alias_path = begin
+          factory(ref, force_bottle: force_bottle, flags: flags, **options).alias_path
+        rescue ScriptError, StandardError
+          nil
+        end
+        from_rack(rack, spec, alias_path: alias_path, force_bottle: force_bottle, flags: flags)
+      end
+    end
+
+    if formula.respond_to?(:any_version_installed?) && formula.any_version_installed?
+      tab = begin
+        Tab.for_formula(formula)
+      rescue ScriptError, StandardError
+        nil
+      end
+      unless tab.nil?
+        resolved_spec = spec
+        resolved_spec ||= tab.spec if tab.respond_to?(:spec)
+        if !resolved_spec.nil? && formula.respond_to?(resolved_spec) &&
+           formula.public_send(resolved_spec) && formula.respond_to?(:active_spec=)
+          formula.active_spec = resolved_spec
+        end
+        formula.build = tab if formula.respond_to?(:build=)
+        if formula.respond_to?(:head?) && formula.head? &&
+           tab.respond_to?(:tabfile) && !tab.tabfile.nil?
+          begin
+            keg = Keg.new(tab.tabfile.parent)
+            if keg.version.respond_to?(:head?) && keg.version.head? &&
+               formula.version.respond_to?(:update_commit)
+              formula.version.update_commit(keg.version.version.commit)
+            end
+          rescue ScriptError, StandardError
+            nil
+          end
+        end
+      end
+    end
+
+    formula.follow_installed_alias = false if formula.respond_to?(:follow_installed_alias=)
+    formula
   end
 
   def factory_cache_key(ref, args, options)
@@ -9168,7 +9798,8 @@ module Formulary
   end
 
   def api_json_configured?
-    !ENV[API_JSON_ENV].to_s.strip.empty? || !api_json_path.nil? || !api_json_url.nil?
+    !ENV[API_JSON_ENV].to_s.strip.empty? || !api_json_path.nil? ||
+      !api_json_url.nil? || api_channels_configured?
   end
 
   def api_json_channels
@@ -9212,14 +9843,36 @@ module Formulary
     raw
   end
 
+  # Select one channel's payload.  Supports flat structs, ``{channel_name:
+  # ...}``, and a nested ``{"channels": {...}}`` manifest, which lets a
+  # multi-channel file carry per-channel subsets.
   def api_channel_data(data, channel)
     return data unless data.is_a?(Hash)
 
-    [channel.to_s, channel.to_sym].each do |key|
-      value = data[key]
-      return value if value.is_a?(Array) || value.is_a?(Hash)
+    candidates = [data[channel.to_s], data[channel.to_sym]]
+    channels = data["channels"] || data[:channels]
+    if channels.is_a?(Hash)
+      candidates.concat([channels[channel.to_s], channels[channel.to_sym]])
     end
-    data
+    selected = candidates.find do |value|
+      value.is_a?(Array) || value.is_a?(Hash)
+    end
+    selected.nil? ? data : selected
+  end
+
+  # Deep-merge a later channel's struct over an earlier one, so a channel can
+  # carry a subset of fields (e.g. only a version bump) without erasing the
+  # shared metadata.  Arrays and scalars are replaced by the later value.
+  def merge_api_struct(base, override)
+    return override unless base.is_a?(Hash) && override.is_a?(Hash)
+
+    base.merge(override) do |_key, old_value, new_value|
+      if old_value.is_a?(Hash) && new_value.is_a?(Hash)
+        merge_api_struct(old_value, new_value)
+      else
+        new_value
+      end
+    end
   end
 
   def api_channels_signature
@@ -9240,8 +9893,12 @@ module Formulary
     end.join("|")
   end
 
+  # Load every configured channel, merging duplicate formula names field-wise
+  # (later channels win) before mapping structs to classes.  This keeps
+  # channel files able to carry subsets of the full struct set.
   def load_formula_from_api_channels!
-    loaded = []
+    entries_by_name = {}
+    order = []
     api_json_channels.each do |channel|
       suffix = api_channel_suffix(channel)
       channel_path = ENV["#{API_JSON_ENV}_#{suffix}"].to_s.strip
@@ -9273,12 +9930,22 @@ module Formulary
                 "no API JSON source configured for channel #{channel.inspect}"
         end
       end
-      mapped = load_api_entries!(entries)
-      loaded.concat(mapped.is_a?(Array) ? mapped : [mapped])
+      entries.each do |entry|
+        name = api_struct_name(entry)
+        if entries_by_name.key?(name)
+          entries_by_name[name] = merge_api_struct(entries_by_name[name], entry)
+        else
+          entries_by_name[name] = entry
+          order << name
+        end
+      end
     end
-    by_name = {}
-    loaded.each { |klass| by_name[klass.loaded_name.to_s] = klass }
-    values = by_name.values
+
+    loaded = order.map do |name|
+      entry = entries_by_name[name]
+      load_formula_from_struct!(api_struct_name(entry), entry)
+    end
+    values = loaded.compact
     values.length == 1 ? values.first : values
   end
 
@@ -9304,10 +9971,128 @@ module Formulary
       !stripped.match(/\A[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*\z/).nil?
   end
 
+  # Homebrew's signed API endpoints use the embedded ``homebrew-1`` RSA
+  # public key (RS*/PS* JWS).  It is public data and only used to verify
+  # downloaded payloads; ``PYBREW_FORMULA_API_JWS_KEY`` can override it.
+  JWS_PUBLIC_KEY_PEM = <<~'PEM'
+    -----BEGIN PUBLIC KEY-----
+    MIICIjANBgkqhkiG9w0BAQEFAAOCAg8AMIICCgKCAgEAyKoOYzp1rhwXISRi61BY
+    XBEr2PalSK8lEVOL2USy7mpy0OubOlFyujawyQcBcCn+uPOJ/WaK+POhNWcLLoiK
+    L2m8GViaQm7SMwdLKUXFgKSPHcG/1m6Vu+TNBKTfQqT60PjEYIrn5NW9ZrM0cUhK
+    REmsbeAMBevdSaW9UwY9iIhprrgovvT8SzKhF8ZOIZKXfJX4VNk0y/7VJYNuGGqH
+    3npxV7OKd4yTGRGqFcC9kJ84me3thiu0yqlOjASmfWIwIwcfp4j6BEM2LuqKd7yX
+    h51/O+MTthkuxV36moDKfdgdOFsvlCFkziaYLScCX9lOlmZHtOfJTAOXxTmM7qGr
+    wTGK0vhvTi8k9dBmH/dccredQBtPOfM/FEdeyakGLoTcDguiBS/4El3I2KtF6B2h
+    OGoBumR915/cI4drr5yPMduZ7gjs7ZEZnVkeVzic24TfUHpnOYzrhucNJtHMBDj9
+    6d1Gk82AhtuF9KlusLmCb6qXCWQSp/A4RZpN37E/p9q8rLp/7B/zp8X2TVvecPNy
+    BdMagdktdEqK7WPlYMcUp56JaOph8vqYoU+oGyCpWoLvcXFb75o4eefuu6Rs5SyM
+    c9JCCJ0DDFPjCRFnGPkvsKxFCzMFqH1jpWH0RQIrgmNVM5PO84iRH9YJsSPQzpMj
+    KvK/ZH4YgR9wNkBNagFo7lsCAwEAAQ==
+    -----END PUBLIC KEY-----
+  PEM
+
   def decode_jws_segment(segment)
     padded = segment.to_s.tr("-_", "+/")
     padded += "=" * ((4 - padded.length % 4) % 4)
     Base64.strict_decode64(padded)
+  rescue ScriptError, StandardError => error
+    raise PybrewFormulaUnavailableError,
+          "malformed API JWS segment: #{error.class}: #{error.message}"
+  end
+
+  def encode_jws_segment(value)
+    Base64.urlsafe_encode64(value.to_s, padding: false)
+  end
+
+  def jws_digest_for(alg)
+    case alg.to_s
+    when "RS256", "PS256", "HS256" then "SHA256"
+    when "RS384", "PS384" then "SHA384"
+    when "RS512", "PS512" then "SHA512"
+    end
+  end
+
+  def jws_public_key_pem
+    raw = ENV["PYBREW_FORMULA_API_JWS_PUBLIC_KEY"].to_s.strip
+    if raw.empty?
+      candidate = ENV[API_JWS_KEY_ENV].to_s.strip
+      raw = candidate if candidate.include?("BEGIN PUBLIC KEY") ||
+                          candidate.include?("BEGIN RSA PUBLIC KEY")
+    end
+    if raw.empty?
+      embedded = JWS_PUBLIC_KEY_PEM.to_s.strip
+      return embedded unless embedded.empty?
+
+      return nil
+    end
+    if !raw.include?("BEGIN")
+      path = Pathname.new(raw)
+      return path.read.strip if path.file?
+    end
+    raw
+  end
+
+  # Verify one JWS signature (compact or JSON-envelope form) with a bounded
+  # algorithm allow-list: HS256 (injectable shared secret) plus RSA
+  # RS*/PS* using ``jws_public_key_pem``.
+  def jws_signature_valid?(alg, signing_input, signature, payload_segment)
+    digest = jws_digest_for(alg)
+    if digest.nil?
+      raise PybrewFormulaUnavailableError,
+            "unsupported API JWS alg #{alg.to_s.inspect}: pybrew verifies " \
+            "HS256/RS256/RS384/RS512/PS256/PS384/PS512"
+    end
+
+    if alg.to_s == "HS256"
+      key = ENV[API_JWS_KEY_ENV].to_s
+      if key.empty?
+        raise PybrewFormulaUnavailableError,
+              "API JWS verification requires #{API_JWS_KEY_ENV} (HS256); " \
+              "refusing to trust an unverified payload"
+      end
+      expected = OpenSSL::HMAC.digest("SHA256", key, signing_input)
+      return false unless expected.bytesize == signature.bytesize
+
+      if OpenSSL.respond_to?(:fixed_length_secure_compare)
+        return OpenSSL.fixed_length_secure_compare(expected, signature)
+      end
+
+      return expected == signature
+    end
+
+    pem = jws_public_key_pem
+    if pem.nil? || pem.empty?
+      raise PybrewFormulaUnavailableError,
+            "API JWS verification requires a public key for #{alg}: set " \
+            "PYBREW_FORMULA_API_JWS_PUBLIC_KEY (PEM or path) or " \
+            "#{API_JWS_KEY_ENV} to a PEM value"
+    end
+    key = begin
+      OpenSSL::PKey::RSA.new(pem)
+    rescue ScriptError, StandardError => error
+      raise PybrewFormulaUnavailableError,
+            "invalid API JWS public key: #{error.class}: #{error.message}"
+    end
+
+    if alg.to_s.start_with?("PS")
+      unless key.respond_to?(:verify_pss)
+        raise PybrewFormulaUnavailableError,
+              "API JWS alg #{alg} requires OpenSSL::PKey::RSA#verify_pss " \
+              "(missing on this Ruby)"
+      end
+      key.verify_pss(digest, signature, signing_input,
+                     salt_length: :digest, mgf1_hash: digest)
+    else
+      key.verify(digest, signature, signing_input)
+    end
+  rescue OpenSSL::PKey::PKeyError => error
+    raise PybrewFormulaUnavailableError,
+          "API JWS signature verification failed: #{error.class}: #{error.message}"
+  end
+
+  def jws_envelope?(data)
+    data.is_a?(Hash) && data["payload"].is_a?(String) &&
+      data["signatures"].is_a?(Array) && !data["signatures"].empty?
   end
 
   def verify_formula_jws!(text)
@@ -9319,63 +10104,97 @@ module Formulary
     header_segment, payload_segment, signature_segment = parts
     begin
       header = JSON.parse(decode_jws_segment(header_segment).force_encoding("UTF-8"))
+    rescue PybrewFormulaUnavailableError
+      raise
     rescue ScriptError, StandardError => error
       raise PybrewFormulaUnavailableError,
             "malformed API JWS header: #{error.class}: #{error.message}"
     end
     alg = header.is_a?(Hash) ? header["alg"].to_s : ""
-    unless alg == "HS256"
-      raise PybrewFormulaUnavailableError,
-            "unsupported API JWS alg #{alg.inspect}: pybrew only verifies HS256"
-    end
-    key = ENV[API_JWS_KEY_ENV].to_s
-    if key.empty?
-      raise PybrewFormulaUnavailableError,
-            "API JWS verification requires #{API_JWS_KEY_ENV} (HS256); " \
-            "refusing to trust an unverified payload"
-    end
-    expected = OpenSSL::HMAC.digest("SHA256", key, "#{header_segment}.#{payload_segment}")
-    actual = begin
-      decode_jws_segment(signature_segment)
-    rescue ScriptError, StandardError => error
-      raise PybrewFormulaUnavailableError,
-            "malformed API JWS signature: #{error.class}: #{error.message}"
-    end
-    valid = if OpenSSL.respond_to?(:fixed_length_secure_compare)
-      expected.bytesize == actual.bytesize &&
-        OpenSSL.fixed_length_secure_compare(expected, actual)
-    else
-      expected == actual
-    end
+    signature = decode_jws_segment(signature_segment)
+    signing_input = "#{header_segment}.#{payload_segment}"
+    valid = jws_signature_valid?(alg, signing_input, signature, payload_segment)
     unless valid
       raise PybrewFormulaUnavailableError, "API JWS signature verification failed"
     end
     begin
       decode_jws_segment(payload_segment).force_encoding("UTF-8")
+    rescue PybrewFormulaUnavailableError
+      raise
     rescue ScriptError, StandardError => error
       raise PybrewFormulaUnavailableError,
             "malformed API JWS payload: #{error.class}: #{error.message}"
     end
   end
 
+  # Homebrew's current API uses the JSON (RFC 7515 general) envelope form with
+  # a ``homebrew-1`` signature and unencoded (b64: false) payload.
+  def verify_formula_jws_envelope!(data)
+    payload = data["payload"].to_s
+    signatures = Array(data["signatures"]).select { |entry| entry.is_a?(Hash) }
+    signature = signatures.find do |entry|
+      header = entry["header"]
+      header.is_a?(Hash) && header["kid"].to_s == "homebrew-1"
+    end
+    signature ||= signatures.first
+    if signature.nil?
+      raise PybrewFormulaUnavailableError,
+            "malformed API JWS: no signature entry found"
+    end
+
+    protected_segment = signature["protected"].to_s
+    signature_segment = signature["signature"].to_s
+    if protected_segment.empty? || signature_segment.empty?
+      raise PybrewFormulaUnavailableError,
+            "malformed API JWS: protected/signature segments are required"
+    end
+    begin
+      header = JSON.parse(decode_jws_segment(protected_segment).force_encoding("UTF-8"))
+    rescue PybrewFormulaUnavailableError
+      raise
+    rescue ScriptError, StandardError => error
+      raise PybrewFormulaUnavailableError,
+            "malformed API JWS header: #{error.class}: #{error.message}"
+    end
+    alg = header.is_a?(Hash) ? header["alg"].to_s : ""
+    b64_encoded = header.is_a?(Hash) && header.key?("b64") ? header["b64"] : true
+    signing_input = if b64_encoded
+      "#{protected_segment}.#{encode_jws_segment(payload)}"
+    else
+      "#{protected_segment}.#{payload}"
+    end
+    valid = jws_signature_valid?(
+      alg, signing_input, decode_jws_segment(signature_segment), nil
+    )
+    unless valid
+      raise PybrewFormulaUnavailableError, "API JWS signature verification failed"
+    end
+    payload
+  end
+
+  def parse_jws_payload(payload, source)
+    JSON.parse(payload.to_s)
+  rescue ScriptError, StandardError => error
+    raise PybrewFormulaUnavailableError,
+          "malformed JWS payload from #{source}: #{error.class}: #{error.message}"
+  end
+
   def api_json_text_data(text, source, remote: false)
     stripped = text.to_s
     if jws_compact?(stripped)
-      payload = verify_formula_jws!(stripped)
-      begin
-        return JSON.parse(payload)
-      rescue ScriptError, StandardError => error
-        raise PybrewFormulaUnavailableError,
-              "malformed JWS payload from #{source}: #{error.class}: #{error.message}"
-      end
+      return parse_jws_payload(verify_formula_jws!(stripped), source)
     end
     begin
-      JSON.parse(stripped)
+      data = JSON.parse(stripped)
     rescue ScriptError, StandardError => error
       prefix = remote ? "malformed API JSON from" : "malformed API JSON at"
       raise PybrewFormulaUnavailableError,
             "#{prefix} #{source}: #{error.class}: #{error.message}"
     end
+    if jws_envelope?(data)
+      return parse_jws_payload(verify_formula_jws_envelope!(data), source)
+    end
+    data
   end
 
   def remote_sidecar_path
@@ -9438,11 +10257,8 @@ module Formulary
     end
 
     memory = (@remote_api_json_cache ||= {})
-    cached = if memory[:url] == url
-               memory
-             else
-               remote_sidecar_read(url)
-             end
+    cached = memory[url]
+    cached = remote_sidecar_read(url) if cached.nil?
 
     transport = ENV[API_CURL_ENV].to_s.strip
     transport = "curl" if transport.empty?
@@ -9468,13 +10284,14 @@ module Formulary
       end
 
       headers = File.file?(header_file.path.to_s) ? File.read(header_file.path.to_s) : ""
-      status = headers[/\AHTTP\/\S+\s+(\d{3})/, 1] || "200"
+      statuses = headers.scan(/\AHTTP\/\S+\s+(\d{3})/).flatten
+      status = statuses.empty? ? "200" : statuses.last
       if status == "304"
         if cached.nil? || !cached[:entries].is_a?(Array)
           raise PybrewFormulaUnavailableError,
                 "HTTP 304 for #{url} but no cached API JSON is available"
         end
-        @remote_api_json_cache = cached
+        memory[url] = cached
         return cached[:entries]
       end
       if status.to_i >= 400
@@ -9492,7 +10309,7 @@ module Formulary
       etag = headers[/^ETag:\s*(.+)$/i, 1].to_s.strip
       last_modified = headers[/^Last-Modified:\s*(.+)$/i, 1].to_s.strip
       content_hash = Digest::SHA256.hexdigest(text)
-      @remote_api_json_cache = {
+      memory[url] = {
         url: url,
         entries: entries,
         etag: etag,
@@ -9542,6 +10359,15 @@ module Formulary
               when Hash
                 if data["formulae"].is_a?(Array)
                   data["formulae"]
+                elsif data["formulae"].is_a?(Hash)
+                  # Channel/subset manifests may key structs by name.
+                  data["formulae"].map do |name, entry|
+                    if entry.is_a?(Hash) && (entry["name"] || entry[:name]).to_s.empty?
+                      entry.merge("name" => name.to_s)
+                    else
+                      entry
+                    end
+                  end
                 elsif data["formula"].is_a?(Hash)
                   [data["formula"]]
                 elsif data["name"] || data[:name] || data["full_name"] || data[:full_name]
@@ -9921,7 +10747,43 @@ module Formulary
     end
 
     cache_api_formula_class!(name, formula_struct, klass)
+    cache_api_aliases!(name, formula_struct, klass)
     klass
+  end
+
+  def formula_struct_aliases(formula_struct, attribute)
+    return [] unless formula_struct_responds?(formula_struct, attribute)
+
+    Array(formula_struct_read(formula_struct, attribute)).map(&:to_s).reject(&:empty?)
+  end
+
+  def api_alias_map
+    @api_alias_map ||= {}
+  end
+
+  # Register API aliases/oldnames (and their tap-qualified forms) so
+  # ``Formulary.factory``/``canonical_name`` resolve API aliases like
+  # Homebrew's loader does, and keep a canonical-name map for renames.
+  def cache_api_aliases!(name, formula_struct, klass)
+    @api_cache ||= {}
+    aliases = formula_struct_aliases(formula_struct, :aliases)
+    renames = formula_struct_aliases(formula_struct, :oldnames) +
+              formula_struct_aliases(formula_struct, :oldname)
+    tap_prefix = nil
+    if formula_struct_responds?(formula_struct, :full_name)
+      parts = formula_struct_read(formula_struct, :full_name).to_s.split("/")
+      tap_prefix = parts[0..-2].join("/") if parts.length > 1
+    end
+    (aliases + renames).uniq.each do |alias_name|
+      keys = [alias_name]
+      keys << "#{tap_prefix}/#{alias_name}" unless tap_prefix.nil? || tap_prefix.empty?
+      keys.each do |key|
+        @api_cache[key] = klass
+        api_alias_map[key] = name.to_s
+        api_alias_map[key.split("/").last] = name.to_s
+      end
+    end
+    nil
   end
 
   # Cache keys for an API formula: the requested name, the struct's own
@@ -10050,9 +10912,18 @@ module Formulary
     class_name
   end
 
-  def from_rack(rack, *_args, **_kwargs)
-    keg = Keg.from_rack(rack)
-    factory(keg.nil? ? Pathname.new(rack.to_s).basename.to_s : keg.name)
+  def from_rack(rack, spec = nil, alias_path: nil, force_bottle: false, flags: [], keg: nil)
+    keg ||= Keg.from_rack(rack)
+    return from_keg(keg, spec, alias_path: alias_path, force_bottle: force_bottle, flags: flags) unless keg.nil?
+
+    factory(
+      Pathname.new(rack.to_s).basename.to_s,
+      spec || :stable,
+      alias_path: alias_path,
+      from: :rack,
+      force_bottle: force_bottle,
+      flags: flags
+    )
   end
 
   def keg_only?(rack)
@@ -10130,6 +11001,7 @@ module Formulary
     @path_cache = {}
     @factory_cache = {}
     @api_cache = {}
+    @api_alias_map = {}
     @api_json_cache = {}
     @api_json_loaded = nil
     @remote_api_json_cache = nil
@@ -10164,13 +11036,32 @@ module Formulary
   def to_rack(ref)
     name = File.basename(ref.to_s, ".rb")
     rack = HOMEBREW_CELLAR/name
-    rack.directory? ? rack.realpath : nil
+    return rack.realpath if rack.directory?
+
+    canonical = canonical_name(ref)
+    candidate = HOMEBREW_CELLAR/canonical
+    candidate.directory? ? candidate.realpath : candidate
   rescue StandardError
     nil
   end
 
+  # Resolve aliases/renames from the bounded API cache and local tap
+  # ``Aliases/`` directories before falling back to the short name.
   def canonical_name(ref)
-    File.basename(ref.to_s, ".rb").split("/").last
+    raw = ref.to_s.sub(/\.rb\z/, "")
+    key = File.basename(raw)
+    begin
+      ensure_api_json_loaded if api_json_configured?
+    rescue ScriptError, StandardError
+      nil
+    end
+    target = api_alias_map[raw] || api_alias_map[key]
+    return target unless target.nil?
+
+    found = tap_alias_target(raw)
+    return found[0] unless found.nil?
+
+    key
   end
 
   def core_path(name)
@@ -10182,8 +11073,34 @@ module Formulary
     base/"#{File.basename(name.to_s, ".rb")}.rb"
   end
 
-  def from_keg(keg)
-    factory(keg.name.to_s, from: :keg, warn: false)
+  def from_keg(keg, spec = nil, alias_path: nil, force_bottle: false, flags: [])
+    tab = begin
+      keg.tab
+    rescue ScriptError, StandardError
+      nil
+    end
+    tap = tab.respond_to?(:tap) ? tab.tap.to_s : ""
+    spec ||= tab.spec if tab.respond_to?(:spec)
+    name = keg.rack.basename.to_s
+    formula = begin
+      if tap.empty?
+        factory(name, spec || :stable, alias_path: alias_path, from: :keg,
+                warn: false, force_bottle: force_bottle, flags: flags)
+      else
+        begin
+          factory("#{tap}/#{name}", spec || :stable, alias_path: alias_path, from: :keg,
+                  warn: false, force_bottle: force_bottle, flags: flags)
+        rescue PybrewFormulaUnavailableError
+          factory(name, spec || :stable, alias_path: alias_path, from: :keg,
+                  warn: false, force_bottle: force_bottle, flags: flags)
+        end
+      end
+    rescue ScriptError, StandardError
+      factory(name, spec || :stable, from: :keg, warn: false)
+    end
+    formula.build = tab if !tab.nil? && formula.respond_to?(:build=)
+    formula.follow_installed_alias = false if formula.respond_to?(:follow_installed_alias=)
+    formula
   end
 
   # Load a parent-selected Ruby source file (Homebrew 4.6+/7.0 API).
@@ -10243,8 +11160,42 @@ module Formulary
     factory(ref, **options)
   end
 
+  # Bounded loader object mirroring Homebrew's FormulaLoader surface:
+  # ``name``/``path``/``get_formula``.
+  class PybrewFormulaLoader
+    attr_reader :name, :path
+
+    def initialize(ref)
+      @ref = ref.to_s
+      @name = File.basename(@ref, ".rb").split("/").last
+      candidate = Pathname.new(@ref)
+      @path = if candidate.file? && candidate.extname == ".rb"
+        candidate
+      else
+        begin
+          reference = Formula[@ref]
+          path = reference.respond_to?(:path) ? reference.path : nil
+          path.is_a?(Pathname) ? path : nil
+        rescue ScriptError, StandardError
+          nil
+        end
+      end
+    end
+
+    def get_formula(spec = :stable, alias_path: nil, force_bottle: false,
+                    flags: [], ignore_errors: false)
+      Formulary.factory(
+        @ref, spec,
+        alias_path: alias_path,
+        force_bottle: force_bottle,
+        flags: flags,
+        ignore_errors: ignore_errors
+      )
+    end
+  end
+
   def loader_for(ref)
-    Formula[ref]
+    PybrewFormulaLoader.new(ref)
   end
 
   def loader_from_name_tap_type(name, _tap = nil, _type = nil)
@@ -10333,9 +11284,30 @@ class PybrewResource
   # Like Homebrew's ``Resource#stage``: without a block return the staged
   # directory, with a block change into it and yield that directory.  For
   # resources unpacked by the bridge, enter a single top-level directory
-  # produced by the archive, exactly like Homebrew's unpack helper.
-  def stage(*_args, &block)
+  # produced by the archive, exactly like Homebrew's unpack helper.  A
+  # positional ``target`` extracts/copies the staged tree into that directory
+  # (bounded: the bridge never downloads inside Ruby).
+  def stage(target = nil, debug_symbols: false, staging_path: nil, staged: false, &block)
     path = staged_path
+    if !target.nil?
+      target_path = Pathname.new(target.to_s)
+      target_path.mkpath
+      Dir.glob((path/"**/*").to_s, File::FNM_DOTMATCH).each do |entry|
+        relative = Pathname.new(entry).relative_path_from(path)
+        next if relative.to_s == "." || relative.to_s.start_with?("..")
+
+        destination = target_path/relative
+        if File.directory?(entry)
+          destination.mkpath
+        else
+          destination.dirname.mkpath
+          FileUtils.cp(entry, destination.to_s)
+        end
+      end
+      return target_path if block.nil?
+
+      return block.call(target_path)
+    end
     return path if block.nil?
 
     Dir.chdir(path.to_s) do
@@ -10917,13 +11889,224 @@ module Utils
       "q=#{URI.encode_www_form_component(terms.join(" "))}"
     end
 
-    def get_json(url, data: nil, method: "GET")
+    # GitHub API error surface mirroring Homebrew's ``GitHub::API`` errors.
+    # Formula code rescues ``RateLimitExceededError`` and calls
+    # ``sleep_for_rate_limit``; the pybrew shim keeps the same semantics for
+    # REST and GraphQL calls while remaining fully injectable/no-network.
+    module API
+      class Error < RuntimeError
+        attr_reader :github_message
+
+        def initialize(message = nil, github_message = nil)
+          @github_message = github_message
+          super(message)
+        end
+      end
+
+      class HTTPNotFoundError < Error; end
+
+      class GitRepositoryIsEmptyError < Error; end
+
+      class ValidationFailedError < Error
+        attr_reader :errors
+
+        def initialize(message = nil, errors = [])
+          @errors = Array(errors).map(&:to_s)
+          text = @errors.empty? ? message : "#{message}: #{@errors.join(", ")}"
+          super(text, message)
+        end
+      end
+
+      class AuthenticationFailedError < Error; end
+
+      class MissingAuthenticationError < AuthenticationFailedError
+        def initialize(message = nil, github_message = nil)
+          super(
+            message || "No GitHub credentials found. Set PYBREW_GITHUB_TOKEN " \
+                       "(or HOMEBREW_GITHUB_API_TOKEN) to authenticate.",
+            github_message
+          )
+        end
+      end
+
+      class RateLimitExceededError < Error
+        attr_reader :reset, :resource, :limit
+
+        def initialize(github_message, reset:, resource: nil, limit: nil)
+          @reset = reset.to_i
+          @resource = (resource.nil? ? "core" : resource.to_s)
+          @limit = limit.nil? ? nil : limit.to_i
+          message = <<~EOS
+            GitHub API Error: #{github_message}
+            Rate limit exceeded for #{@resource} resource (#{@limit.nil? ? "unknown" : @limit} limit).
+            Try again in #{pretty_ratelimit_reset}
+          EOS
+          super(message, github_message)
+        end
+
+        def pretty_ratelimit_reset
+          seconds = [@reset - Time.now.to_i, 0].max
+          if seconds < 60
+            "#{seconds} seconds"
+          elsif seconds < 3600
+            "#{(seconds / 60.0).ceil} minutes"
+          else
+            "#{(seconds / 3600.0).ceil} hours"
+          end
+        end
+      end
+
+      # Sleep until the rate limit resets (at least one second, matching
+      # Homebrew) and print the same warning to stderr.
+      def self.sleep_for_rate_limit(exception)
+        reset = exception.respond_to?(:reset) ? exception.reset.to_i : 0
+        sleep_seconds = [reset - Time.now.to_i, 1].max
+        $stderr.puts "Warning: GitHub rate limit exceeded, sleeping for #{sleep_seconds} seconds..."
+        sleep sleep_seconds
+        sleep_seconds
+      end
+    end
+
+    GITHUB_RATE_LIMIT_HEADERS = %w[
+      x-ratelimit-limit x-ratelimit-remaining x-ratelimit-reset
+      x-ratelimit-resource retry-after
+    ].freeze
+
+    def credentials_type
+      token.nil? ? :none : :env_token
+    end
+
+    # Parse an HTTP response-header blob (``curl -D`` output) into a
+    # downcased, last-wins hash.  Multiple redirect blocks are tolerated.
+    def parse_response_headers(headers)
+      meta = {}
+      headers.to_s.each_line do |line|
+        key, separator, value = line.partition(":")
+        next if separator.empty?
+
+        key = key.strip.downcase
+        next if key.empty? || key.start_with?("http/")
+
+        meta[key] = value.strip
+      end
+      meta
+    end
+
+    def response_status(headers, fallback = "200")
+      statuses = headers.to_s.scan(/\AHTTP\/\S+\s+(\d{3})/).flatten
+      statuses.empty? ? fallback : statuses.last
+    end
+
+    def retry_after_seconds(meta)
+      raw = meta["retry-after"].to_s.strip
+      return nil if raw.empty?
+      return raw.to_i if /\A\d+\z/.match?(raw)
+
+      begin
+        require "time"
+        [Time.httpdate(raw).to_i - Time.now.to_i, 1].max
+      rescue StandardError
+        nil
+      end
+    end
+
+    # Raise the same error classes Homebrew uses for REST/GraphQL failures.
+    def raise_error(output, errors = "", http_code = "200", headers = "", scopes = [])
+      json = begin
+        JSON.parse(output.to_s)
+      rescue StandardError
+        nil
+      end
+      message = json.is_a?(Hash) && json["message"] ? json["message"].to_s : "curl failed! #{errors}".strip
+      meta = parse_response_headers(headers)
+      code = http_code.to_s
+
+      if code == "401"
+        raise API::AuthenticationFailedError.new(
+          "GitHub API Error: #{message}", message
+        )
+      end
+
+      if code == "403" || code == "429"
+        retry_after = retry_after_seconds(meta)
+        remaining = meta["x-ratelimit-remaining"]
+        reset = meta["x-ratelimit-reset"].to_s
+        resource = meta["x-ratelimit-resource"]
+        limit = meta["x-ratelimit-limit"]
+        if !retry_after.nil? && (remaining.nil? || remaining.to_i > 0)
+          raise API::RateLimitExceededError.new(
+            message,
+            reset: Time.now.to_i + retry_after,
+            resource: "secondary",
+            limit: limit
+          )
+        end
+        if code == "403" && !remaining.nil? && remaining.to_i <= 0
+          raise API::RateLimitExceededError.new(
+            message,
+            reset: reset.empty? ? Time.now.to_i + 60 : reset.to_i,
+            resource: resource,
+            limit: limit
+          )
+        end
+        if code == "429"
+          raise API::RateLimitExceededError.new(
+            message,
+            reset: reset.empty? ? Time.now.to_i + 60 : reset.to_i,
+            resource: resource.nil? ? "secondary" : resource,
+            limit: limit
+          )
+        end
+
+        raise API::AuthenticationFailedError.new(
+          "GitHub API Error: #{message}", message
+        )
+      end
+
+      case code
+      when "404"
+        if !Array(scopes).empty? && credentials_type == :none
+          raise API::MissingAuthenticationError.new(nil, message)
+        end
+
+        raise API::HTTPNotFoundError.new("GitHub API Error: #{message}", message)
+      when "409"
+        if message.downcase.include?("git repository is empty")
+          raise API::GitRepositoryIsEmptyError.new("GitHub API Error: #{message}", message)
+        end
+
+        raise API::Error.new("GitHub API Error: #{message}", message)
+      when "422"
+        raise API::ValidationFailedError.new(
+          "GitHub API Error: #{message}",
+          json.is_a?(Hash) ? json["errors"] : []
+        )
+      else
+        raise API::Error.new("GitHub API Error: #{message}", message)
+      end
+    end
+
+    # Bounded REST request that preserves the curl injection point used by
+    # tests while capturing status/headers for error classification.  A fake
+    # transport that writes a ``-D`` header file gets full HTTP semantics; one
+    # that only prints JSON is treated as HTTP 200.
+    def get_json(url, data: nil, method: "GET", scopes: [], raise_errors: true)
       command = [curl_executable, "-sS", "-L", "-H", "Accept: application/vnd.github+json"]
       command += ["-H", "Authorization: Bearer #{token}"] unless token.nil?
       command += ["-X", method.to_s] unless method.to_s == "GET"
       command += ["--data", JSON.generate(data)] unless data.nil?
+      header_file = Tempfile.new(["pybrew-github-headers", ".txt"])
+      command += ["-D", header_file.path.to_s]
       command << url.to_s
-      output = Utils.popen_read(*command).to_s
+      begin
+        output = Utils.popen_read(*command).to_s
+      ensure
+        headers = File.file?(header_file.path.to_s) ? File.read(header_file.path.to_s) : ""
+        header_file.close!
+      end
+
+      code = response_status(headers)
+      raise_error(output, "", code, headers, Array(scopes)) if raise_errors && code.to_i >= 400
       return nil if output.empty?
 
       JSON.parse(output)
@@ -11260,7 +12443,21 @@ module Utils
         messages = Array(errors).map do |error|
           error.is_a?(Hash) ? (error["message"] || error["type"] || error.inspect) : error.to_s
         end
-        raise PybrewGitHubGraphqlError, "GitHub GraphQL error: #{messages.join("; ")}"
+        joined = messages.join("; ")
+        if joined.match?(/rate.?limit|RATE_LIMITED/i)
+          rate = response["data"].is_a?(Hash) ? response["data"]["rateLimit"] : nil
+          reset_at = rate.is_a?(Hash) ? rate["resetAt"].to_s : ""
+          reset = begin
+            require "time"
+            reset_at.empty? ? Time.now.to_i + 60 : Time.parse(reset_at).to_i
+          rescue StandardError
+            Time.now.to_i + 60
+          end
+          raise API::RateLimitExceededError.new(
+            joined, reset: reset, resource: "graphql", limit: nil
+          )
+        end
+        raise PybrewGitHubGraphqlError, "GitHub GraphQL error: #{joined}"
       end
       data = response["data"]
       unless data.is_a?(Hash) && !data.empty?
@@ -11537,8 +12734,22 @@ module Utils
     def generate_release_notes(*_args, **_kwargs)
       unsupported_write!(:generate_release_notes)
     end
+
+    # ``GitHub::API.sleep_for_rate_limit`` equivalent for formula code that
+    # talks to ``Utils::GitHub`` directly.
+    def sleep_for_rate_limit(exception)
+      API.sleep_for_rate_limit(exception)
+    end
+
+    def rate_limit_error?(error)
+      error.is_a?(API::RateLimitExceededError)
+    end
   end
 end
+
+# Homebrew exposes the GitHub helpers both as top-level ``GitHub`` and under
+# ``Utils``.  Alias the shim module so either constant resolves.
+GitHub = Utils::GitHub unless defined?(GitHub)
 
 module Utils
   module Analytics

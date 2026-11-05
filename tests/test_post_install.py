@@ -78,8 +78,13 @@ def make_fake_ruby(tmp_path: Path) -> tuple[Path, Path, Path]:
                 printf 'HOMEBREW_PREFIX=%s\\n' "${HOMEBREW_PREFIX:-}"
                 printf 'HOMEBREW_CELLAR=%s\\n' "${HOMEBREW_CELLAR:-}"
                 printf 'HOMEBREW_REPOSITORY=%s\\n' "${HOMEBREW_REPOSITORY:-}"
+                printf 'HOMEBREW_PATH=%s\\n' "${HOMEBREW_PATH:-}"
+                printf 'HOMEBREW_TEMP=%s\\n' "${HOMEBREW_TEMP:-}"
+                printf 'HOME=%s\\n' "${HOME:-}"
+                printf 'TMPDIR=%s\\n' "${TMPDIR:-}"
                 printf 'PYBREW_FORMULA_NAME=%s\\n' "${PYBREW_FORMULA_NAME:-}"
                 printf 'PYBREW_FORMULA_VERSION=%s\\n' "${PYBREW_FORMULA_VERSION:-}"
+                printf 'PYBREW_FORMULA_PKG_VERSION=%s\\n' "${PYBREW_FORMULA_PKG_VERSION:-}"
               } > "$record"
             fi
             copies="${PYBREW_FAKE_COPY_DIR:-}"
@@ -642,3 +647,165 @@ def test_installer_skips_post_install_when_keg_already_exists(
     assert second.returncode == 0, second.stderr + second.stdout
     assert "Already installed" in second.stdout
     assert not record.exists()
+
+
+# -- context/env parity --------------------------------------------------
+def test_fake_ruby_gets_isolated_home_tmpdir_and_no_homebrew_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config(tmp_path)
+    keg = make_keg(config)
+    formula = make_formula("def post_install\nend")
+    fake_ruby, record, _copies = make_fake_ruby(tmp_path)
+    monkeypatch.setenv("HOMEBREW_PATH", "/should/be/removed")
+
+    run_post_install(
+        formula,
+        config,
+        keg=keg,
+        ruby=str(fake_ruby),
+        env={"PYBREW_FAKE_RECORD": str(record)},
+    )
+
+    recorded = read_record(record)
+    assert recorded["HOMEBREW_PATH"] == ""
+    assert recorded["HOMEBREW_TEMP"] == recorded["TMPDIR"]
+    assert recorded["HOME"] != str(Path.home())
+    assert recorded["HOME"].endswith("/home")
+    assert recorded["TMPDIR"].endswith("/tmp")
+    assert Path(recorded["HOME"]).is_dir() is False  # temp root was cleaned up
+    assert recorded["PYBREW_FORMULA_PKG_VERSION"] == "1.0"
+
+
+def test_fake_ruby_payload_includes_build_and_formula_context(
+    tmp_path: Path,
+) -> None:
+    config = make_config(tmp_path)
+    keg = make_keg(config)
+    (keg / "INSTALL_RECEIPT.json").write_text(
+        json.dumps(
+            {
+                "version": "1.0",
+                "poured_from_bottle": False,
+                "built_as_bottle": False,
+                "build": {"spec": "head", "from_bottle": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+    formula = Formula(name="posty", version="1.0", revision=2, keg_only=True)
+    formula.post_install_source = "def post_install\nend"
+    fake_ruby, _record, copies = make_fake_ruby(tmp_path)
+
+    run_post_install(
+        formula,
+        config,
+        keg=keg,
+        ruby=str(fake_ruby),
+        env={
+            "PYBREW_FAKE_COPY_DIR": str(copies),
+            "PYBREW_BUILD_OPTIONS": "with-foo,bar",
+        },
+    )
+
+    payload = json.loads((copies / "config.json").read_text(encoding="utf-8"))
+    assert payload["build"]["head"] is True
+    assert payload["build"]["used_options"] == ["with-foo", "bar"]
+    assert payload["build"]["bottle"] is False
+    assert payload["full_name"] == "posty"
+    assert payload["pkg_version"] == "1.0_2"
+    assert payload["revision"] == 2
+    assert payload["rack"] == "posty"
+    assert payload["keg_only"] is True
+    assert payload["installed"] is True
+    assert payload["formulas"]["posty"]["build"]["head"] is True
+    assert payload["paths"]["etc"] == str(config.prefix / "etc")
+    assert payload["paths"]["opt_sbin"] == str(config.opt_path("posty") / "sbin")
+
+
+@requires_ruby
+def test_real_ruby_context_build_platform_and_full_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = make_config(tmp_path)
+    keg = make_keg(config)
+    monkeypatch.setenv("PYBREW_TARGET_OS", "darwin")
+    monkeypatch.setenv("PYBREW_TARGET_ARCH", "arm64")
+    monkeypatch.setenv("PYBREW_MACOS_VERSION", "14.5")
+    monkeypatch.setenv("PYBREW_BUILD_OPTIONS", "with-foo")
+    (keg / "INSTALL_RECEIPT.json").write_text(
+        json.dumps(
+            {
+                "version": "1.0",
+                "poured_from_bottle": True,
+                "built_as_bottle": True,
+                "build": {"spec": "stable", "from_bottle": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    formula = make_formula(
+        textwrap.dedent(
+            """\
+            def post_install
+              File.write(prefix/"context.txt", [
+                MacOS.version.to_s,
+                MacOS.version_symbol.to_s,
+                (MacOS.version >= :sonoma).to_s,
+                (MacOS.version < :sequoia).to_s,
+                OS.version.to_s,
+                OS.mac?.to_s,
+                Hardware::CPU.arm?.to_s,
+                Hardware::CPU.cores.to_s,
+                Hardware::CPU.is_64_bit?.to_s,
+                build.head?.to_s,
+                build.stable?.to_s,
+                build.bottle?.to_s,
+                build.with?("with-foo").to_s,
+                build.without?("nope").to_s,
+                full_name,
+                pkg_version,
+                revision.to_s,
+                rack,
+                keg_only?.to_s,
+                installed?.to_s
+              ].join("|"))
+              File.write(prefix/"platform.txt", OS.mac? ? "macos" : "other")
+              on_macos { File.write(prefix/"on-macos.txt", "yes") }
+              on_linux { File.write(prefix/"on-linux.txt", "yes") }
+              File.write(prefix/"etc.txt", etc.to_s)
+              File.write(prefix/"ref.txt", Formula["homebrew/core/posty"].prefix.to_s)
+            end
+            """
+        )
+    )
+
+    result = run_post_install(formula, config, keg=keg, ruby=REAL_RUBY, timeout=30)
+
+    assert result.ran is True
+    context = (keg / "context.txt").read_text(encoding="utf-8").split("|")
+    assert context[0] == "14.5"
+    assert context[1] == "sonoma"
+    assert context[2] == "true"
+    assert context[3] == "true"
+    assert context[4] == "14.5"
+    assert context[5] == "true"
+    assert context[6] == "true"
+    assert int(context[7]) >= 1
+    assert context[8] == "true"
+    assert context[9] == "false"  # stable build
+    assert context[10] == "true"
+    assert context[11] == "true"  # poured from bottle
+    assert context[12] == "true"
+    assert context[13] == "true"
+    assert context[14] == "posty"
+    assert context[15] == "1.0"
+    assert context[16] == "0"
+    assert context[17] == "posty"
+    assert context[18] == "false"
+    assert context[19] == "true"
+    assert (keg / "platform.txt").read_text(encoding="utf-8") == "macos"
+    assert (keg / "on-macos.txt").read_text(encoding="utf-8") == "yes"
+    assert not (keg / "on-linux.txt").exists()
+    assert (keg / "etc.txt").read_text(encoding="utf-8") == str(config.prefix / "etc")
+    assert (keg / "ref.txt").read_text(encoding="utf-8") == str(keg)

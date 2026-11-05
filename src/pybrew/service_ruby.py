@@ -23,7 +23,8 @@ JSON, which Python converts into a :class:`pybrew.services.ServiceSpec`.
 
 Captured DSL (in addition to arbitrary Ruby control flow):
 
-* ``run`` (string or array), ``working_dir``, ``root_dir``, ``input_path``,
+* ``run`` (string, array, or the ``macos:``/``linux:`` platform form),
+  ``working_dir``, ``root_dir``, ``input_path``,
   ``log_path``, ``error_log_path``, ``keep_alive`` (boolean or hash),
   ``run_at_load``, ``interval``, ``process_type``, ``environment_variables``,
   ``require_root``, ``throttle_interval``, ``sockets``, ``macos_legacy_timers``
@@ -478,6 +479,13 @@ def _spec_from_result(
         if value is None:
             continue
         try:
+            if name == "run_type" and str(value) == "immediate":
+                # The shim always reports its default; keep pybrew's schedule
+                # inference for interval/cron-only blocks instead of marking
+                # "immediate" as an explicit caller choice.
+                spec.run_type = "immediate"
+                spec.run_type_explicit = False
+                continue
             _apply_service_directive(spec, name, [value])
         except ServiceError as error:
             raise ServiceError(f"{formula.name}: {error}") from error
@@ -608,7 +616,7 @@ class PybrewServiceDSL
     run_type
     working_dir log_path error_log_path interval process_type run_at_load
     require_root throttle_interval launch_only_once macos_legacy_timers nice
-    restart_delay stop_timeout root_dir input_path cron
+    restart_delay stop_timeout root_dir input_path
   ].freeze
 
   def initialize
@@ -753,8 +761,17 @@ class PybrewServiceDSL
     !!@data["keep_alive"]
   end
 
+  def effective_run_type
+    run_type = (@data["run_type"] || "immediate").to_s
+    return run_type unless run_type == "immediate"
+    return "cron" if !@data["cron"].nil? && @data["cron"].to_s.strip != ""
+    return "interval" unless @data["interval"].nil?
+
+    "immediate"
+  end
+
   def timed?
-    !Array(@data["cron"]).empty? || !@data["interval"].nil?
+    %w[cron interval].include?(effective_run_type)
   end
 
   def launch_only_once
@@ -832,20 +849,50 @@ class PybrewServiceDSL
   end
 
   def default_cron_values
-    { "Minute" => 0, "Hour" => 0, "Day" => 1, "Month" => 1, "Weekday" => 0 }
+    { "Minute" => "*", "Hour" => "*", "Day" => "*", "Month" => "*", "Weekday" => "*" }
   end
 
-  def parse_cron
+  def parse_cron(cron_statement = nil)
     values = default_cron_values
-    raw = @data["cron"]
+    raw = cron_statement.nil? ? @data["cron"] : cron_statement
     if raw.is_a?(Hash)
       raw.each do |key, value|
         normalized = key.to_s.downcase
         normalized = normalized[0].upcase + normalized[1..]
-        values[normalized] = value.to_i if values.key?(normalized)
+        next unless values.key?(normalized)
+
+        values[normalized] = value.to_s.strip == "*" ? "*" : value.to_i
+      end
+    elsif raw.is_a?(String) && !raw.strip.empty?
+      text = raw.strip
+      presets = {
+        "@hourly" => { "Minute" => 0 },
+        "@daily" => { "Minute" => 0, "Hour" => 0 },
+        "@weekly" => { "Minute" => 0, "Hour" => 0, "Weekday" => 0 },
+        "@monthly" => { "Minute" => 0, "Hour" => 0, "Day" => 1 },
+        "@yearly" => { "Minute" => 0, "Hour" => 0, "Day" => 1, "Month" => 1 },
+        "@annually" => { "Minute" => 0, "Hour" => 0, "Day" => 1, "Month" => 1 }
+      }
+      if presets.key?(text)
+        values.merge!(presets[text])
+      else
+        parts = text.split
+        raise PybrewServiceError, "cron expects a five-field expression" if parts.length != 5
+
+        %w[Minute Hour Day Month Weekday].each_with_index do |key, index|
+          part = parts[index]
+          values[key] = part == "*" ? "*" : Integer(part)
+        end
       end
     end
     values
+  end
+
+  def cron(value = nil)
+    return parse_cron if value.nil?
+
+    @data["cron"] = value.to_s
+    parse_cron
   end
 
   def cron_weekday_to_systemd_weekday(weekday)
@@ -884,11 +931,20 @@ class PybrewServiceDSL
 
   # -- directives -------------------------------------------------------
 
-  def run(*args)
-    return @data["run"] if args.empty?
-
-    value = args.length == 1 ? args[0] : args
-    @data["run"] = PybrewServiceJSON.value(value)
+  def run(*args, **kwargs)
+    unless args.empty?
+      value = args.length == 1 ? args[0] : args
+      @data["run"] = PybrewServiceJSON.value(value)
+      return @data["run"]
+    end
+    unless kwargs.empty?
+      # Homebrew's platform form: `run macos: "...", linux: "..."`.
+      platform = (@config["platform"] || "").to_s
+      selected = kwargs[platform == "darwin" ? :macos : :linux]
+      @data["run"] = selected.nil? ? [] : PybrewServiceJSON.value(selected)
+      return @data["run"]
+    end
+    @data["run"]
   end
 
   def keep_alive(*args)

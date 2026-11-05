@@ -609,3 +609,40 @@ def test_patch_file_missing_fails_clearly(tmp_path: Path) -> None:
 
     with pytest.raises(BuildError, match="cannot read patch"):
         _build(tmp_path, formula)
+
+
+def test_dynamic_patch_filenames_and_repeated_inline_data_apply_in_order(
+    tmp_path: Path,
+) -> None:
+    """Runtime-built patch names/contents are applied deterministically.
+
+    Formula metadata may be assembled programmatically (for example a tap
+    helper that computes a patch file name from the formula version); the
+    builder must accept those names and apply multiple inline patches in
+    declaration order.
+    """
+
+    project = tmp_path / "src"
+    project.mkdir()
+    (project / "hello.txt").write_text("hello\n")
+
+    version = "2.1"
+    first_name = tmp_path / f"first-{version}.diff"
+    second_name = tmp_path / f"second-{version}.diff"
+    first_name.write_text(_diff("hello.txt", "hello\n", "first patch\n"))
+    second_name.write_text(_diff("hello.txt", "first patch\n", "second patch\n"))
+
+    formula = _formula()
+    formula.patches.extend(
+        [
+            PatchSpec(url=first_name.as_uri(), sha256=_sha(first_name)),
+            PatchSpec(url=second_name.as_uri(), sha256=_sha(second_name)),
+            PatchSpec(data=_diff("hello.txt", "second patch\n", "inline patch\n")),
+        ]
+    )
+
+    keg = _build(
+        tmp_path, formula, downloader=_downloader(tmp_path), build_root=project
+    )
+
+    assert (keg / "bin" / "hello.txt").read_text() == "inline patch\n"

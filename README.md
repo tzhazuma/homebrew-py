@@ -8,7 +8,7 @@ Formula 解析、依赖解析、Cellar、bottle 安装、链接/卸载和 receip
 
 > **状态：v0.1 原型（可运行、可测试）**
 >
-> - 1156 个测试通过（另有 5 个 opt-in 测试跳过；`pytest -q`）
+> - 1218 个测试通过（另有 6 个 opt-in 测试跳过；`pytest -q`）
 > - 15 个真实 homebrew-core 公式（bash、git、curl、openssl@3、python@3.12 等）与
 >   `brew info --json=v2` 的元数据逐项对比通过
 > - 使用真实 `hello 2.12.3` Formula 完成 autotools 源码构建并运行成功
@@ -42,6 +42,12 @@ pybrew --prefix /tmp/pybrew uninstall hello
 
 # 使用本地已有的 Homebrew bottle（离线）
 pybrew --prefix /tmp/pybrew --tap /path/to/tap install --bottle-file ~/Library/Caches/Homebrew/downloads/xxx.bottle.tar.gz hello
+
+# 搜索：先查本地 tap；本地没有结果时自动转发到 formulae.brew.sh 索引
+pybrew --prefix /tmp/pybrew search wget
+pybrew --prefix /tmp/pybrew search --cask rectangle
+# 可用环境变量指向测试/镜像索引（file:// 也可）
+# PYBREW_FORMULA_SEARCH_API / PYBREW_CASK_SEARCH_API
 
 # 使用 Homebrew JSON API（没有 homebrew-core 本地 checkout 时）
 pybrew --prefix /tmp/pybrew info --api hello
@@ -150,7 +156,7 @@ Installer(config, loader).install(formula, InstallOptions())
 
 ```bash
 pytest -q
-# 1156 passed, 5 skipped
+# 1218 passed, 6 skipped
 ```
 
 测试覆盖：

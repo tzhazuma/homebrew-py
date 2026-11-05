@@ -58,6 +58,11 @@ MAX_EAGER_FORMULA_ENTRIES = 10000
 #: trigger this scan, keeping the 10000-formula path lightweight.
 MAX_SOURCE_ALIAS_SCAN = 2000
 
+#: Small taps additionally get an eager bounded source-alias scan so dynamic
+#: ``Formula[variable]`` alias lookups work without a prior literal lookup.
+#: Larger taps stay lazy/10000-friendly.
+MAX_EAGER_SOURCE_ALIAS_ENTRIES = 500
+
 #: Bounded in-process caches (parsed formulae and tap indexes).
 FORMULA_CACHE_LIMIT = 256
 TAP_INDEX_CACHE_LIMIT = 8
@@ -368,6 +373,53 @@ class FormulaTestContext
       end
       alias eql? ==
 
+      def numeric?
+        false
+      end
+
+      def null?
+        false
+      end
+
+      def blank?
+        null?
+      end
+
+      def to_i
+        value.to_i
+      end
+
+      def to_f
+        value.to_f
+      end
+
+      def self.from(value)
+        return NULL_TOKEN if value.nil?
+        return value if value.is_a?(Token)
+
+        case value
+        when Integer, String
+          create(value.to_s)
+        end
+      end
+
+      def self.create(value)
+        text = value.to_s
+        case text
+        when /\A\d+\z/
+          NumericToken.new(text)
+        when /\A\.?post(\d*)\z/i
+          PostToken.new("post", Regexp.last_match(1).to_i)
+        when /\A(alpha|beta|pre|rc|p)\.?(\d*)\z/i
+          word = Regexp.last_match(1).downcase
+          PRE_TOKEN_CLASSES[word].new(word, Regexp.last_match(2).to_i)
+        when /\A[a-z]+\z/i
+          StringToken.new(text.downcase)
+        else
+          raise ArgumentError, "Cannot classify version token #{text.inspect}"
+        end
+      end
+
       def hash
         return 0.hash if is_a?(NullToken)
         return value.hash if is_a?(NumericToken)
@@ -384,9 +436,33 @@ class FormulaTestContext
       def group
         3
       end
+
+      def numeric?
+        true
+      end
     end
 
-    class PreReleaseToken < Token
+    class StringToken < Token
+      def class_name
+        "letter"
+      end
+
+      def group
+        2
+      end
+
+      def rank
+        50
+      end
+    end
+
+    class CompositeToken < StringToken
+      def rev
+        revision
+      end
+    end
+
+    class PreReleaseToken < CompositeToken
       def group
         0
       end
@@ -422,7 +498,7 @@ class FormulaTestContext
       end
     end
 
-    class RcToken < PreReleaseToken
+    class RCToken < PreReleaseToken
       def class_name
         "rc"
       end
@@ -432,7 +508,7 @@ class FormulaTestContext
       end
     end
 
-    class PToken < Token
+    class PatchToken < CompositeToken
       def class_name
         "p"
       end
@@ -446,7 +522,7 @@ class FormulaTestContext
       end
     end
 
-    class PostToken < Token
+    class PostToken < CompositeToken
       def class_name
         "post"
       end
@@ -457,20 +533,6 @@ class FormulaTestContext
 
       def rank
         5
-      end
-    end
-
-    class LetterToken < Token
-      def class_name
-        "letter"
-      end
-
-      def group
-        2
-      end
-
-      def rank
-        50
       end
     end
 
@@ -486,12 +548,27 @@ class FormulaTestContext
       def group
         1
       end
+
+      def null?
+        true
+      end
+      alias blank? null?
+
+      def to_i
+        0
+      end
+
+      def to_f
+        0.0
+      end
     end
 
-    # Upstream-compatible aliases.
-    RCToken = RcToken
-    PatchToken = PToken
-    StringToken = LetterToken
+    NULL_TOKEN = NullToken.new.freeze
+
+    # Backwards-compatible aliases matching the bounded DSL history.
+    RcToken = RCToken
+    PToken = PatchToken
+    LetterToken = StringToken
     MissingToken = NullToken
 
     # Pre-release word -> token class.
@@ -499,8 +576,8 @@ class FormulaTestContext
       "alpha" => AlphaToken,
       "beta" => BetaToken,
       "pre" => PreToken,
-      "rc" => RcToken,
-      "p" => PToken,
+      "rc" => RCToken,
+      "p" => PatchToken,
       "post" => PostToken,
     }.freeze
 
@@ -937,7 +1014,48 @@ class FormulaTestContext
         end
         Dir.chdir(dependency_testpath)
         context = @context.dependency_test_context(@info, dependency_testpath)
-        FormulaTestContext.evaluate_source(context, source, "(formula #{@name} test)")
+        if FormulaTestContext.dependency_subprocess_enabled?
+          # Run the dependency test in a forked child: environment changes,
+          # arbitrary constants and other process-global state are copy-on-write
+          # and cannot leak into the parent test.  The child reports its outcome
+          # through a small Marshal file; fork is unavailable on some hosts, in
+          # which case we fall back to the same process.
+          result_path = File.join(dependency_testpath, ".pybrew-dependency-result")
+          pid = fork do
+            begin
+              FormulaTestContext.evaluate_source(context, source, "(formula #{@name} test)")
+              File.binwrite(result_path, Marshal.dump([:ok, ""]))
+            rescue FormulaTestSkip => error
+              File.binwrite(result_path, Marshal.dump([:skip, error.message]))
+            rescue FormulaTestFailure => error
+              File.binwrite(result_path, Marshal.dump([:failure, error.message]))
+            rescue Exception => error
+              File.binwrite(
+                result_path,
+                Marshal.dump([:error, "#{error.class}: #{error.message}"])
+              )
+            ensure
+              exit! 0
+            end
+          end
+          Process.wait(pid)
+          unless File.file?(result_path)
+            raise FormulaTestFailure,
+                  "dependency test subprocess exited without reporting a result"
+          end
+          kind, message = Marshal.load(File.binread(result_path))
+          File.delete(result_path) rescue nil
+          case kind
+          when :skip
+            raise FormulaTestSkip, message
+          when :failure
+            raise FormulaTestFailure, message
+          when :error
+            raise RuntimeError, message
+          end
+        else
+          FormulaTestContext.evaluate_source(context, source, "(formula #{@name} test)")
+        end
       ensure
         FormulaTestContext.current = previous_context
         begin
@@ -1109,6 +1227,18 @@ class FormulaTestContext
     else
       Dir.mktmpdir(prefix)
     end
+  end
+
+  # Whether dependency test bodies run in a forked subprocess.  Fork isolates
+  # Ruby constants/arbitrary ENV at the OS level; it is unavailable on some
+  # hosts, where the same-process fallback keeps the older bounded isolation.
+  def self.dependency_subprocess_enabled?
+    return false unless Process.respond_to?(:fork)
+
+    raw = ENV["PYBREW_TEST_ISOLATE_DEPENDENCIES"].to_s.strip.downcase
+    return false if %w[0 false no off].include?(raw)
+
+    true
   end
 
   # Environment for a dependency test: its own prefix/testpath/cwd/tmpdir/home
@@ -2194,8 +2324,33 @@ MacOS = OS::Mac
 module Hardware
   module CPU
     def self.arch
+      override = ENV["PYBREW_CPU_ARCH"].to_s
+      return override.to_sym unless override.empty?
+
       host_cpu = RbConfig::CONFIG["host_cpu"].to_s
       host_cpu =~ /aarch64|arm/ ? :arm64 : :x86_64
+    end
+
+    def self.type
+      arm? ? :arm : :intel
+    end
+
+    def self.family
+      type
+    end
+
+    def self.model
+      override = ENV["PYBREW_CPU_MODEL"].to_s
+      return override unless override.empty?
+
+      RbConfig::CONFIG["host_cpu"].to_s
+    end
+
+    def self.bits
+      override = ENV["PYBREW_CPU_BITS"].to_s
+      return override.to_i unless override.empty?
+
+      is_64_bit? ? 64 : 32
     end
 
     def self.arm?
@@ -2207,6 +2362,9 @@ module Hardware
     end
 
     def self.is_64_bit?
+      override = ENV["PYBREW_CPU_BITS"].to_s
+      return override.to_i == 64 unless override.empty?
+
       host_cpu = RbConfig::CONFIG["host_cpu"].to_s
       ["x86_64", "amd64"].include?(host_cpu) || arch == :arm64
     end
@@ -2214,6 +2372,11 @@ module Hardware
     # Raw CPU feature strings reported by the OS (downcased, deduplicated).
     def self.flags
       return @flags if defined?(@flags)
+
+      override = ENV["PYBREW_CPU_FLAGS"].to_s
+      unless override.empty?
+        return @flags = override.split.map { |value| value.downcase }.uniq
+      end
 
       @flags = begin
         values = []
@@ -2241,12 +2404,40 @@ module Hardware
       features.include?(name.to_sym)
     end
 
+    def self.sse3?
+      feature?(:sse3) || feature?(:pni)
+    end
+
+    def self.ssse3?
+      feature?(:ssse3)
+    end
+
+    def self.sse4_1?
+      feature?(:sse4_1) || feature?(:"sse4.1")
+    end
+
     def self.sse4_2?
       feature?(:sse4_2) || feature?(:"sse4.2") || sysctl_bool?("hw.optional.sse4_2")
     end
 
+    def self.sse4?
+      sse4_1? || sse4_2?
+    end
+
+    def self.avx?
+      feature?(:avx)
+    end
+
+    def self.avx2?
+      feature?(:avx2) || sysctl_bool?("hw.optional.avx2_0")
+    end
+
     def self.avx512?
       feature?(:avx512f) || sysctl_bool?("hw.optional.avx512f")
+    end
+
+    def self.neon?
+      arm? || feature?(:neon) || feature?(:asimd)
     end
 
     def self.sysctl_bool?(name)
@@ -2259,6 +2450,9 @@ module Hardware
     end
 
     def self.cores
+      override = ENV["PYBREW_CPU_CORES"].to_s
+      return override.to_i if override.to_i.positive?
+
       require "etc"
       Etc.nprocessors
     rescue StandardError
@@ -2266,8 +2460,198 @@ module Hardware
     end
 
     def self.physical_cores
+      override = ENV["PYBREW_CPU_PHYSICAL_CORES"].to_s
+      return override.to_i if override.to_i.positive?
+
       cores
     end
+  end
+end
+
+# Host-specific limits: Xcode/CLT detection is intentionally shallow (path +
+# optional xcodebuild/clang probing) and env overrides (PYBREW_XCODE_*,
+# PYBREW_CLT_*, PYBREW_DEVELOPER_DIR, ...) keep tests offline and synthetic.
+# This is not Homebrew's full Xcode/CLT/developer-dir locator.
+module MacOS
+  def self.active_developer_dir
+    override = ENV["PYBREW_DEVELOPER_DIR"].to_s
+    return override unless override.empty?
+
+    override = ENV["DEVELOPER_DIR"].to_s
+    return override unless override.empty?
+
+    @active_developer_dir ||= begin
+      output = `/usr/bin/xcode-select -p 2>/dev/null`.strip
+      output.empty? ? nil : output
+    rescue StandardError
+      nil
+    end
+  end
+
+  def self.preferred_perl_version
+    override = ENV["PYBREW_PERL_VERSION"].to_s
+    override.empty? ? "5.30" : override
+  end
+
+  def self.languages
+    override = ENV["PYBREW_LANGUAGES"].to_s
+    return ["en"] if override.empty?
+
+    override.split(",").map(&:strip).reject(&:empty?)
+  end
+
+  def self.language
+    languages.first
+  end
+
+  module CLT
+    def self.installed?
+      override = ENV["PYBREW_CLT_INSTALLED"].to_s.downcase
+      return %w[1 true yes on].include?(override) unless override.empty?
+
+      File.directory?("/Library/Developer/CommandLineTools")
+    end
+
+    def self.version
+      override = ENV["PYBREW_CLT_VERSION"].to_s
+      return override unless override.empty?
+      return nil unless installed?
+
+      @version ||= begin
+        output = `#{clang} --version 2>/dev/null`.to_s
+        output[/clang-(\d+(?:\.\d+)+)/, 1]
+      rescue StandardError
+        nil
+      end
+    end
+
+    def self.clang
+      override = ENV["PYBREW_CLANG"].to_s
+      return override unless override.empty?
+
+      "/Library/Developer/CommandLineTools/usr/bin/clang"
+    end
+
+    def self.sdk_path
+      MacOS.sdk_path
+    end
+  end
+
+  module Xcode
+    def self.installed?
+      override = ENV["PYBREW_XCODE_INSTALLED"].to_s.downcase
+      return %w[1 true yes on].include?(override) unless override.empty?
+
+      File.directory?(path)
+    end
+
+    def self.path
+      override = ENV["PYBREW_XCODE_PATH"].to_s
+      override.empty? ? "/Applications/Xcode.app" : override
+    end
+
+    def self.prefix
+      Pathname.new(path)
+    end
+
+    def self.version
+      override = ENV["PYBREW_XCODE_VERSION"].to_s
+      return override unless override.empty?
+      return nil unless installed?
+
+      @version ||= begin
+        output = `/usr/bin/xcodebuild -version 2>/dev/null`.to_s
+        output[/^Xcode\s+([0-9.]+)/, 1]
+      rescue StandardError
+        nil
+      end
+    end
+
+    def self.clang
+      File.join(path, "Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang")
+    end
+
+    def self.sdk_path
+      MacOS.sdk_path
+    end
+  end
+end
+
+module DevelopmentTools
+  def self.clang
+    return MacOS::Xcode.clang if MacOS::Xcode.installed?
+    return MacOS::CLT.clang if MacOS::CLT.installed?
+
+    ENV["PYBREW_CLANG"].to_s.empty? ? "clang" : ENV["PYBREW_CLANG"]
+  end
+
+  def self.clang_version
+    override = ENV["PYBREW_CLANG_VERSION"].to_s
+    return override unless override.empty?
+
+    MacOS::Xcode.version || MacOS::CLT.version
+  end
+
+  def self.clang_build_version
+    override = ENV["PYBREW_CLANG_BUILD_VERSION"].to_s
+    override.empty? ? clang_version : override
+  end
+
+  def self.default_compiler
+    :clang
+  end
+
+  def self.preferred_compiler
+    :clang
+  end
+
+  def self.llvm_clang
+    clang
+  end
+
+  def self.clang_build
+    "clang"
+  end
+
+  def self.gcc_version
+    override = ENV["PYBREW_GCC_VERSION"].to_s
+    override.empty? ? "0" : override
+  end
+
+  def self.compiler_version
+    clang_version
+  end
+
+  def self.installed?
+    MacOS::CLT.installed? || MacOS::Xcode.installed? || which(clang)
+  end
+
+  def self.needs_clt?
+    !MacOS::CLT.installed? && !MacOS::Xcode.installed?
+  end
+
+  def self.xcode_installed?
+    MacOS::Xcode.installed?
+  end
+
+  def self.sdk_path
+    MacOS.sdk_path
+  end
+
+  def self.locate(tool)
+    path = which(tool)
+    path.nil? ? nil : Pathname.new(path)
+  end
+
+  def self.which(tool)
+    name = tool.to_s
+    return name if name.include?("/") && File.executable?(name)
+
+    ENV["PATH"].to_s.split(File::PATH_SEPARATOR).each do |directory|
+      candidate = File.join(directory, name)
+      return candidate if File.executable?(candidate)
+    end
+    nil
   end
 end
 
@@ -2748,6 +3132,12 @@ def _formula_entries(
             )
             entries[eager_name] = entry
             entries.setdefault(f"{tap.name}/{eager_name}", entry)
+
+    # Small taps eagerly discover source-only aliases so dynamic
+    # ``Formula[variable]`` alias lookups work; large taps stay lazy to
+    # preserve the 10000-formula lightweight path.
+    if len(index.by_name) <= MAX_EAGER_SOURCE_ALIAS_ENTRIES and not index._source_alias_attempted:
+        index._scan_source_aliases()
 
     # Alias metadata is cheap (tap ``Aliases`` symlinks) and can point at
     # formulae whose sources were not parsed eagerly.

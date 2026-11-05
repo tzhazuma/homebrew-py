@@ -266,7 +266,41 @@ class NumericToken(Token):
     group = 3
 
 
-class PreReleaseToken(Token):
+class StringToken(Token):
+    """Base class for Homebrew's string/composite token hierarchy."""
+
+    class_name = "string"
+    group = 2
+
+
+class CompositeToken(StringToken):
+    """A token made from several child tokens (upstream compatibility)."""
+
+    class_name = "composite"
+
+    def __init__(self, tokens: list[Token] | tuple[Token, ...] = (), revision: int = 0):
+        self.tokens = list(tokens)
+        super().__init__("".join(str(token) for token in self.tokens), revision)
+
+    def to_s(self) -> str:
+        return "".join(str(token) for token in self.tokens)
+
+    def compare(self, other: "Token") -> int:
+        if not isinstance(other, CompositeToken):
+            return super().compare(other)
+        for left, right in zip(self.tokens, other.tokens):
+            comparison = left.compare(right)
+            if comparison:
+                return comparison
+        return (len(self.tokens) > len(other.tokens)) - (
+            len(self.tokens) < len(other.tokens)
+        )
+
+    def __hash__(self) -> int:
+        return hash(tuple(hash(token) for token in self.tokens))
+
+
+class PreReleaseToken(StringToken):
     group = 0
 
 
@@ -290,19 +324,19 @@ class RcToken(PreReleaseToken):
     rank = 3
 
 
-class PToken(Token):
+class PToken(StringToken):
     class_name = "p"
     group = 2
     rank = 4
 
 
-class PostToken(Token):
+class PostToken(StringToken):
     class_name = "post"
     group = 2
     rank = 5
 
 
-class LetterToken(Token):
+class LetterToken(StringToken):
     class_name = "letter"
     group = 2
     rank = 50
@@ -319,8 +353,79 @@ class NullToken(Token):
 # Homebrew-compatible aliases for callers that use the upstream names.
 RCToken = RcToken
 PatchToken = PToken
-StringToken = LetterToken
 MissingToken = NullToken
+
+#: Shared singleton used for missing version segments (upstream ``NULL_TOKEN``).
+NULL_TOKEN = NullToken()
+
+
+def _token_from(value: object, revision: int = 0) -> Token:
+    if isinstance(value, Token):
+        return value
+    if value is None or value == "":
+        return NULL_TOKEN
+    if isinstance(value, int) and not isinstance(value, bool):
+        return NumericToken(value, revision)
+    text = str(value)
+    if text.isdigit():
+        return NumericToken(int(text), revision)
+    match = re.fullmatch(
+        r"(?P<pre>preview|alpha|beta|post|pre|rc|p)(?P<revision>\d*)",
+        text,
+        re.IGNORECASE,
+    )
+    if match:
+        word = match.group("pre").lower()
+        if word == "preview":
+            word = "pre"
+        token_class = _PRE_TOKEN_CLASSES[word]
+        return token_class(word, int(match.group("revision") or revision or 0))
+    return LetterToken(text.lower(), revision)
+
+
+Token.create = classmethod(lambda cls, value, revision=0: _token_from(value, revision))
+Token.from_value = classmethod(lambda cls, value, revision=0: _token_from(value, revision))
+Token.from_token = classmethod(lambda cls, value, revision=0: _token_from(value, revision))
+# ``Token.from`` is a normal classmethod name; assigning it explicitly keeps
+# mypy/IDE callers working without shadowing Python's builtin ``from`` syntax.
+Token.from_ = Token.from_value
+
+
+def _token_numeric(self: Token) -> bool:
+    return isinstance(self, NumericToken)
+
+
+def _token_null(self: Token) -> bool:
+    return isinstance(self, NullToken)
+
+
+def _token_blank(self: Token) -> bool:
+    return self.value is None or str(self.value) == ""
+
+
+def _token_to_i(self: Token) -> int:
+    try:
+        return int(self.value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _token_to_f(self: Token) -> float:
+    try:
+        return float(self.value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+Token.numeric = property(_token_numeric)
+Token.null = property(_token_null)
+Token.blank = property(_token_blank)
+Token.numericp = _token_numeric
+Token.nullp = _token_null
+Token.blankp = _token_blank
+Token.to_i = _token_to_i
+Token.to_f = _token_to_f
+Token.rev = property(lambda self: self.revision)
 
 _TOKEN_PATTERN = re.compile(
     r"(?P<numeric>\d+)"

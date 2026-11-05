@@ -303,10 +303,8 @@ def test_literal_user_env_applies_without_declared_environment(
 
     manager = ServiceManager(config)
     payload = manager.plist_payload(formula, spec)
-    assert payload["EnvironmentVariables"] == {
-        "FOO": "only-user",
-        "PATH": str(config.prefix / "bin"),
-    }
+    # Both renderers use the effective environment only: no synthetic PATH.
+    assert payload["EnvironmentVariables"] == {"FOO": "only-user"}
     assert 'Environment="FOO=only-user"' in manager.unit_text(formula, spec)
 
 
@@ -401,11 +399,11 @@ def test_literal_user_env_with_homebrew_path_mode(
 
 
 # ---------------------------------------------------------------------------
-# effective PATH vs pybrew renderer default
+# shared PATH policy across renderers
 # ---------------------------------------------------------------------------
 
 
-def test_effective_path_is_homebrew_style_while_plist_keeps_default(
+def test_path_policy_is_shared_by_launchd_and_systemd(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = _config(tmp_path, monkeypatch)
@@ -413,19 +411,15 @@ def test_effective_path_is_homebrew_style_while_plist_keeps_default(
     formula = _formula()
     spec = ServiceSpec(run=["/opt/svc/bin/svc"])
 
-    # Homebrew's effective environment never synthesises PATH.
+    # Homebrew's effective environment never synthesises PATH, and both
+    # renderers now follow it.
     assert spec.effective_environment_variables() == {}
     assert spec.render_environment_variables() == {}
-    # The launchd renderer keeps pybrew's historical default PATH.
-    assert spec.render_environment_variables(
-        default_path=str(config.prefix / "bin")
-    ) == {"PATH": str(config.prefix / "bin")}
     payload = manager.plist_payload(formula, spec)
-    assert payload["EnvironmentVariables"] == {"PATH": str(config.prefix / "bin")}
-    # systemd renders effective values only (no synthetic PATH).
+    assert "EnvironmentVariables" not in payload
     assert "Environment=" not in manager.unit_text(formula, spec)
 
-    # Declared or user PATH wins over the renderer default.
+    # Declared or user PATH is rendered identically by both backends.
     declared = ServiceSpec(
         run=["/opt/svc/bin/svc"], environment_variables={"PATH": "/declared/bin"}
     )
@@ -433,6 +427,7 @@ def test_effective_path_is_homebrew_style_while_plist_keeps_default(
         manager.plist_payload(formula, declared)["EnvironmentVariables"]["PATH"]
         == "/declared/bin"
     )
+    assert 'Environment="PATH=/declared/bin"' in manager.unit_text(formula, declared)
     user = ServiceSpec(
         run=["/opt/svc/bin/svc"], user_environment_variables={"PATH": "/user/bin"}
     )
@@ -441,6 +436,7 @@ def test_effective_path_is_homebrew_style_while_plist_keeps_default(
         manager.plist_payload(formula, user)["EnvironmentVariables"]["PATH"]
         == "/user/bin"
     )
+    assert 'Environment="PATH=/user/bin"' in manager.unit_text(formula, user)
 
 
 # ---------------------------------------------------------------------------
@@ -474,7 +470,7 @@ def test_render_time_user_env_replaces_stale_parse_snapshot(
     payload = manager.plist_payload(formula, spec)
     assert payload["EnvironmentVariables"]["FOO"] == "two"
     assert payload["EnvironmentVariables"]["BAR"] == "added"
-    assert payload["EnvironmentVariables"]["PATH"] == str(config.prefix / "bin")
+    assert "PATH" not in payload["EnvironmentVariables"]
 
     unit = manager.unit_text(formula, spec)
     assert 'Environment="FOO=two"' in unit
@@ -507,10 +503,7 @@ def test_render_time_user_env_removal_ignores_stale_snapshot(
     manager = ServiceManager(config)
     payload = manager.plist_payload(formula, spec)
     # The current (empty) file supersedes the stale snapshot.
-    assert payload["EnvironmentVariables"] == {
-        "FOO": "formula",
-        "PATH": str(config.prefix / "bin"),
-    }
+    assert payload["EnvironmentVariables"] == {"FOO": "formula"}
     assert 'Environment="FOO=formula"' in manager.unit_text(formula, spec)
     # The standalone spec snapshot is untouched.
     assert spec.user_environment_variables == {"FOO": "one"}
@@ -1094,6 +1087,7 @@ def test_plist_renders_extended_fields(tmp_path: Path, monkeypatch: pytest.Monke
     assert payload["StandardErrorPath"] == str(config.prefix / "var" / "log" / "svc.err.log")
     assert payload["EnvironmentVariables"]["FOO"] == "bar"
     assert payload["EnvironmentVariables"]["NUM"] == "7"
+    # The formula declares PATH via std_service_path_env; it is preserved.
     assert payload["EnvironmentVariables"]["PATH"] == str(config.prefix / "bin")
     # require_root is stored on the spec but never changes the plist user.
     assert "User" not in payload and "UserName" not in payload
@@ -1328,13 +1322,10 @@ def test_service_cron_renders_launchd_calendar(
     assert spec.cron["Minute"] == 0
     assert spec.cron["Hour"] == 0
     payload = manager.plist_payload(formula, spec)
-    assert payload["StartCalendarInterval"] == {
-        "Minute": 0,
-        "Hour": 0,
-        "Day": "*",
-        "Month": "*",
-        "Weekday": "*",
-    }
+    # launchd does not accept "*" in StartCalendarInterval, so wildcard fields
+    # are omitted (matching Homebrew's Service#to_plist).
+    assert payload["StartCalendarInterval"] == {"Minute": 0, "Hour": 0}
+    assert set(payload["StartCalendarInterval"]) == {"Minute", "Hour"}
 
 
 def test_systemd_cron_timer(
@@ -1427,7 +1418,7 @@ def test_service_spec_helper_methods(tmp_path: Path) -> None:
     prefix = tmp_path / "prefix"
     assert spec.command() == ["/opt/example/bin/svc", "--flag"]
     assert spec.command_p() is True
-    assert spec.manual_command() == spec.command()
+    assert spec.manual_command() == 'FOO="bar" /opt/example/bin/svc --flag'
     assert spec.keep_alive_p() is True
     assert spec.timed_p() is True
     assert spec.requires_root_p() is True
@@ -1446,8 +1437,8 @@ def test_service_spec_helper_methods(tmp_path: Path) -> None:
     assert spec.parse_cron() == {
         "Minute": 5,
         "Hour": 6,
-        "Day": 1,
-        "Month": 1,
+        "Day": "*",
+        "Month": "*",
         "Weekday": 7,
     }
     assert ServiceSpec.cron_weekday_to_systemd_weekday(1) == "Mon"
@@ -1534,7 +1525,6 @@ def test_rendering_applies_user_environment_without_mutating_declared(
         "FOO": "override",
         "KEEP": "yes",
         "BAR": "added",
-        "PATH": str(config.prefix / "bin"),
     }
 
     unit = manager.unit_text(formula, spec)
@@ -1582,7 +1572,8 @@ def test_plist_and_unit_render_root_and_input_paths_with_home_expansion(
     )
 
     payload = manager.plist_payload(formula, spec)
-    assert payload["WorkingDirectory"] == str(home / "root")
+    # root_dir is the chroot key, not a working-directory fallback.
+    assert "WorkingDirectory" not in payload
     assert payload["RootDirectory"] == str(home / "root")
     assert payload["StandardInPath"] == str(home / "stdin")
     assert payload["StandardOutPath"] == str(home / "out.log")
@@ -1591,7 +1582,7 @@ def test_plist_and_unit_render_root_and_input_paths_with_home_expansion(
     unit = manager.unit_text(formula, spec)
     assert f"RootDirectory={home / 'root'}" in unit
     assert f"StandardInput=file:{home / 'stdin'}" in unit
-    assert f"WorkingDirectory={home / 'root'}" in unit
+    assert "WorkingDirectory=" not in unit
     assert f"StandardOutput=append:{home / 'out.log'}" in unit
     assert f"StandardError=append:{home / 'err.log'}" in unit
 
@@ -1662,3 +1653,168 @@ def test_only_one_custom_log_path_keeps_the_other_default(
     assert f"StandardOutput=append:{home / 'custom.out'}" in unit
     assert f"StandardError=append:{default_log}" in unit
     assert f"ExecStart={shlex.join(spec.run)}" in unit
+
+
+# ---------------------------------------------------------------------------
+# Homebrew parity: manual command quoting and launchd scheduling/paths
+# ---------------------------------------------------------------------------
+
+
+def test_manual_command_is_shell_quoted_like_homebrew() -> None:
+    spec = ServiceSpec(
+        run=["/opt/x y/bin/svc", "--flag", "two words", "quote'x"],
+        environment_variables={"FOO": "a b", "PATH": "/declared/bin", "KEEP": "yes"},
+        user_environment_variables={"FOO": "user value"},
+    )
+
+    command = spec.manual_command()
+
+    assert command == (
+        'FOO="user value" KEEP="yes" '
+        "'/opt/x y/bin/svc' --flag 'two words' 'quote'\"'\"'x'"
+    )
+    # PATH is intentionally excluded, matching Homebrew's Service#manual_command.
+    assert "PATH=" not in command
+
+
+def test_manual_command_expands_tilde_like_homebrew(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    spec = ServiceSpec(run=["~/bin/svc", "~/a b"])
+
+    # Homebrew's Service#command expands leading tildes before quoting.
+    assert spec.command() == [str(home / "bin/svc"), str(home / "a b")]
+    assert spec.manual_command() == f"{home}/bin/svc '{home}/a b'"
+
+
+def test_manual_command_keeps_declared_values_and_empty_arguments() -> None:
+    spec = ServiceSpec(run=["/opt/svc/bin/svc", ""], environment_variables={"A": "1"})
+    assert spec.manual_command() == 'A="1" /opt/svc/bin/svc \'\''
+
+
+def test_launchd_restart_delay_and_throttle_have_distinct_keys(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    manager = ServiceManager(config)
+    formula = _formula()
+    spec = ServiceSpec(
+        run=["/opt/svc/bin/svc"],
+        restart_delay=7,
+        throttle_interval=20,
+        interval=300,
+        run_type="interval",
+    )
+
+    payload = manager.plist_payload(formula, spec)
+    assert payload["TimeOut"] == 7
+    assert payload["ThrottleInterval"] == 20
+    assert payload["StartInterval"] == 300
+
+
+def test_launchd_schedule_fields_follow_run_type(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    manager = ServiceManager(config)
+    formula = _formula()
+
+    immediate = ServiceSpec(
+        run=["/opt/svc/bin/svc"],
+        run_type="immediate",
+        run_type_explicit=True,
+        interval=30,
+        cron={"minute": 5},
+    )
+    payload = manager.plist_payload(formula, immediate)
+    assert "StartInterval" not in payload
+    assert "StartCalendarInterval" not in payload
+
+    cron = ServiceSpec(
+        run=["/opt/svc/bin/svc"],
+        run_type="cron",
+        interval=30,
+        cron={"minute": 5, "hour": 6},
+    )
+    payload = manager.plist_payload(formula, cron)
+    assert "StartInterval" not in payload
+    assert payload["StartCalendarInterval"] == {"Minute": 5, "Hour": 6}
+
+
+def test_plist_limits_launchd_to_all_session_types(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    manager = ServiceManager(config)
+    payload = manager.plist_payload(_formula(), ServiceSpec(run=["/opt/svc/bin/svc"]))
+    assert payload["LimitLoadToSessionType"] == [
+        "Aqua",
+        "Background",
+        "LoginWindow",
+        "StandardIO",
+        "System",
+    ]
+
+
+@pytest.mark.parametrize(
+    "target,expected",
+    [
+        ("darwin", ["/opt/mac/bin/svc"]),
+        ("linux", ["/opt/linux/bin/svc", "--foreground"]),
+    ],
+)
+def test_run_platform_keyword_selects_command(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    expected: list[str],
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    monkeypatch.setenv("PYBREW_TARGET_OS", target)
+    formula = _formula_with_service(
+        'run macos: "/opt/mac/bin/svc", linux: ["/opt/linux/bin/svc", "--foreground"]'
+    )
+    assert parse_service_block(formula, config).run == expected
+
+
+@pytest.mark.parametrize(
+    "target,expected",
+    [
+        ("darwin", []),
+        ("linux", ["/opt/linux/bin/svc"]),
+    ],
+)
+def test_run_platform_keyword_missing_target_leaves_command_empty(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    target: str,
+    expected: list[str],
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    monkeypatch.setenv("PYBREW_TARGET_OS", target)
+    formula = _formula_with_service('run linux: "/opt/linux/bin/svc"')
+    assert parse_service_block(formula, config).run == expected
+
+
+def test_systemd_interval_timer_and_start(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula_with_service(
+        'run [opt_bin/"svc"]\nrun_type :interval\ninterval 300'
+    )
+    _install_fake_keg(config, formula)
+    manager, log = _systemd_manager(tmp_path, monkeypatch, config)
+    spec = manager.spec_for(formula)
+
+    timer = manager.timer_text(formula, spec)
+    assert "OnUnitActiveSec=300" in timer
+    assert "OnCalendar=" not in timer
+    assert "Persistent=true" not in timer
+    assert "Unit=homebrew.mxcl.svc.service" in timer
+
+    manager.start(formula)
+    assert manager.timer_path(formula).is_file()
+    assert "start homebrew.mxcl.svc.timer" in log.read_text()

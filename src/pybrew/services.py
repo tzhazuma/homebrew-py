@@ -14,9 +14,9 @@ Both parsers read Homebrew's user service env override file
 (``HOMEBREW_USER_CONFIG_HOME/services/<formula>.env``, see
 :func:`read_user_service_env`) and keep it separate from the declared
 environment: :meth:`ServiceSpec.effective_environment_variables` follows
-Homebrew and never synthesises ``PATH``, while the launchd renderer historically
-adds pybrew's ``<prefix>/bin`` default when no PATH is declared or overridden.
-The systemd renderer writes effective values only.
+Homebrew and never synthesises ``PATH``.  Both renderers write the effective
+environment only (declared values plus user overrides); neither adds a
+synthetic ``PATH`` default, so launchd and systemd share one PATH policy.
 
 Renderers with formula context re-read the user env file at render time (see
 :func:`resolve_render_user_environment`) so edits or removals after parsing are
@@ -245,6 +245,36 @@ def std_service_path_env_value(config: Any, mode: str = "pybrew") -> str:
     return str(prefix / "bin")
 
 
+def service_platform() -> str:
+    """Return the service target platform (``darwin``/``linux``/other).
+
+    ``PYBREW_TARGET_OS`` mirrors the overrides used by the opt-in Ruby
+    evaluators so ``run macos:``/``run linux:`` can be tested deterministically.
+    """
+
+    target = (os.environ.get("PYBREW_TARGET_OS") or sys.platform).lower()
+    if target == "darwin":
+        return "darwin"
+    if target.startswith("linux"):
+        return "linux"
+    return target
+
+
+def shell_quote(value: Any) -> str:
+    """Quote one command argument the way Homebrew's ``Utils::Shell`` does.
+
+    ``Shellwords.escape`` is close to :func:`shlex.quote`; the one Homebrew
+    special case is a leading tilde, which stays unquoted so the shell expands
+    it (``~/"a b"`` still expands the tilde prefix).
+    """
+
+    text = str(value)
+    if text.startswith("~"):
+        remainder = text[1:]
+        return "~" + (shlex.quote(remainder) if remainder else "")
+    return shlex.quote(text)
+
+
 #: Homebrew's user configuration directory; service env overrides live in its
 #: ``services/<formula>.env`` subdirectory.  Also injectable per parse/render.
 USER_CONFIG_HOME_ENV = "HOMEBREW_USER_CONFIG_HOME"
@@ -406,24 +436,53 @@ class ServiceSpec:
     #: Formula name captured at parse time so a standalone spec can explicitly
     #: re-read ``services/<name>.env`` when a caller passes ``user_config_home``.
     formula_name: Optional[str] = None
+    #: True when the service block (or caller) set ``run_type`` explicitly.
+    #: Without this, ``effective_run_type`` infers cron/interval from the
+    #: schedule fields so directly constructed specs keep working.
+    run_type_explicit: bool = False
 
     @classmethod
     def from_hash(cls, data: dict[str, Any]) -> "ServiceSpec":
         known = cls.__dataclass_fields__
         values = {key: value for key, value in data.items() if key in known}
+        if "run_type" in data and "run_type_explicit" not in values:
+            # Serialised specs keep Homebrew's explicit-run_type semantics.
+            values["run_type_explicit"] = True
         if "user_environment" in data and "user_environment_variables" not in values:
             # Accept Homebrew's shorter spelling as an alias in serialised data.
             values["user_environment_variables"] = data["user_environment"]
         return cls(**values)
 
     def command(self) -> list[str]:
-        return list(self.run)
+        """Return the command with leading tildes expanded (Homebrew parity)."""
+
+        return [
+            os.path.expanduser(str(argument))
+            if str(argument).startswith("~")
+            else str(argument)
+            for argument in self.run
+        ]
 
     def command_p(self) -> bool:
         return bool(self.run)
 
-    def manual_command(self) -> list[str]:
-        return list(self.run)
+    def manual_command(self) -> str:
+        """Return the shell command line a user would run manually.
+
+        Mirrors Homebrew's ``Service#manual_command``: the effective
+        environment (declared values plus user overrides) is rendered as
+        ``KEY="value"`` pairs with ``PATH`` excluded, followed by the
+        shell-quoted command arguments.  Leading tildes stay unquoted so the
+        shell can expand them, matching ``Utils::Shell.sh_quote``.
+        """
+
+        parts = [
+            f'{key}="{value}"'
+            for key, value in self.effective_environment_variables().items()
+            if str(key) != "PATH"
+        ]
+        parts.extend(shell_quote(argument) for argument in self.command())
+        return " ".join(parts)
 
     def keep_alive_p(self) -> bool:
         return bool(self.keep_alive)
@@ -431,8 +490,27 @@ class ServiceSpec:
     def run_at_load_p(self) -> bool:
         return bool(self.run_at_load)
 
+    def effective_run_type(self) -> str:
+        """Return the run type used by renderers.
+
+        A ``run_type`` set explicitly (by the service block or a caller) always
+        wins, matching Homebrew.  pybrew additionally infers cron/interval when
+        a spec only sets ``cron``/``interval`` so directly constructed specs
+        keep rendering their schedule without an extra flag.
+        """
+
+        if self.run_type_explicit:
+            return self.run_type
+        if self.run_type in RUN_TYPES and self.run_type != "immediate":
+            return self.run_type
+        if self.cron:
+            return "cron"
+        if self.interval is not None:
+            return "interval"
+        return "immediate"
+
     def timed_p(self) -> bool:
-        return bool(self.cron) or self.interval is not None
+        return self.effective_run_type() in ("cron", "interval")
 
     def launch_only_once_p(self) -> bool:
         return bool(self.launch_only_once)
@@ -530,8 +608,8 @@ class ServiceSpec:
 
         User values win, matching Homebrew's
         ``Service#effective_environment_variables``.  ``prefix`` is accepted for
-        backwards compatibility but no longer synthesises ``PATH``; renderers
-        keep pybrew's default search path separately.
+        backwards compatibility but never synthesises ``PATH``; the stock
+        renderers write this environment verbatim.
 
         ``user_environment`` explicitly supplies fresh user overrides (for
         example re-read at render time); ``None`` uses the parse-time snapshot
@@ -564,11 +642,11 @@ class ServiceSpec:
     ) -> dict[str, str]:
         """Return the environment a renderer should write.
 
-        Homebrew's effective environment never synthesises ``PATH``; pybrew's
-        launchd renderer historically adds ``<prefix>/bin`` when neither the
-        declared nor the user environment provides one.  Passing
-        ``default_path`` reproduces that renderer default, while systemd (and
-        callers that need Homebrew semantics) pass nothing.
+        Homebrew's effective environment never synthesises ``PATH`` and both
+        pybrew renderers follow that policy.  ``default_path`` remains available
+        for callers that explicitly want a fallback ``PATH`` (it is only used
+        when neither the declared nor the user environment provides one), but
+        the stock launchd and systemd renderers do not pass it.
 
         ``user_environment`` lets a renderer with a formula/config context pass
         freshly resolved overrides instead of the spec's stale parse-time
@@ -589,18 +667,31 @@ class ServiceSpec:
             environment.setdefault("PATH", default_path)
         return environment
 
-    def default_cron_values(self) -> dict[str, int]:
-        return {"Minute": 0, "Hour": 0, "Day": 1, "Month": 1, "Weekday": 0}
+    def default_cron_values(self) -> dict[str, Any]:
+        """Return Homebrew's unspecified cron fields (``*`` for every field)."""
 
-    def parse_cron(self) -> dict[str, int]:
+        return {
+            "Minute": "*",
+            "Hour": "*",
+            "Day": "*",
+            "Month": "*",
+            "Weekday": "*",
+        }
+
+    def parse_cron(self) -> dict[str, Any]:
         values = self.default_cron_values()
         for key, value in (self.cron or {}).items():
-            normalized = CRON_KEY_ALIASES.get(str(key), str(key))
-            if normalized in values:
-                try:
-                    values[normalized] = int(value)
-                except (TypeError, ValueError):
-                    values[normalized] = 0
+            normalized = CRON_KEY_ALIASES.get(str(key).lower(), str(key))
+            normalized = normalized[:1].upper() + normalized[1:].lower()
+            if normalized not in values:
+                continue
+            if isinstance(value, str) and value.strip() == "*":
+                values[normalized] = "*"
+                continue
+            try:
+                values[normalized] = int(value)
+            except (TypeError, ValueError):
+                values[normalized] = "*"
         return values
 
     @staticmethod
@@ -1021,7 +1112,32 @@ def _parse_cron(value: Any) -> dict[str, Any]:
 
 def _apply_service_directive(spec: ServiceSpec, name: str, args: list[Any]) -> None:
     if name == "run":
-        if len(args) == 1 and isinstance(args[0], list):
+        # Homebrew's `run macos: "...", linux: "..."` platform form.  The
+        # literal parser sees the keyword arguments as ("macos", value) tuples.
+        platform_values = {
+            str(item[0]): item[1]
+            for item in args
+            if isinstance(item, tuple)
+            and len(item) == 2
+            and item[0] in ("macos", "linux")
+        }
+        if platform_values:
+            selected = platform_values.get(
+                "macos" if service_platform() == "darwin" else "linux"
+            )
+            if selected is None:
+                spec.run = []
+            elif isinstance(selected, list):
+                spec.run = [
+                    str(item)
+                    for item in selected
+                    if item is not None and str(item) != ""
+                ]
+            elif str(selected) != "":
+                spec.run = [str(selected)]
+            else:
+                spec.run = []
+        elif len(args) == 1 and isinstance(args[0], list):
             spec.run = [str(item) for item in args[0]]
         elif args:
             spec.run = [str(item) for item in args if item is not None and str(item) != ""]
@@ -1045,6 +1161,7 @@ def _apply_service_directive(spec: ServiceSpec, name: str, args: list[Any]) -> N
                 f"run_type must be one of {', '.join(RUN_TYPES)}, got {args[0]!r}"
             )
         spec.run_type = run_type
+        spec.run_type_explicit = True
     elif name == "name":
         mapping = _mapping_from_args(args, "name") if args else {}
         if mapping.get("macos") is not None:
@@ -1394,8 +1511,10 @@ class ServiceManager:
             f"StandardOutput=append:{stdout_path}",
             f"StandardError=append:{stderr_path}",
         ]
-        if working_dir or root_dir:
-            lines.append(f"WorkingDirectory={working_dir or root_dir}")
+        # Each service path maps to its own systemd key: ``root_dir`` is the
+        # chroot (RootDirectory) and must not double as WorkingDirectory.
+        if working_dir:
+            lines.append(f"WorkingDirectory={working_dir}")
         if spec.nice is not None:
             lines.append(f"Nice={spec.nice}")
         for key, value in spec.render_environment_variables(
@@ -1438,19 +1557,33 @@ class ServiceManager:
         return self.directory / f"{self.label(formula, spec)}.timer"
 
     def timer_text(self, formula: Formula, spec: ServiceSpec) -> str:
-        if not spec.cron:
-            raise ServiceError(f"{formula.name} service does not define cron")
-        return (
-            "[Unit]\n"
-            f"Description={formula.name} (pybrew) timer\n"
-            "\n"
-            "[Timer]\n"
-            f"OnCalendar={_systemd_on_calendar(spec.cron)}\n"
-            "Persistent=true\n"
-            "\n"
-            "[Install]\n"
-            "WantedBy=timers.target\n"
-        )
+        """Return the systemd timer for cron or interval services.
+
+        Homebrew renders ``OnCalendar`` for ``run_type :cron`` and
+        ``OnUnitActiveSec`` for ``run_type :interval``; ``Persistent=true``
+        applies to calendar timers only.
+        """
+
+        run_type = spec.effective_run_type()
+        lines = [
+            "[Unit]",
+            f"Description={formula.name} (pybrew) timer",
+            "[Timer]",
+            f"Unit={self.label(formula, spec)}.service",
+        ]
+        if run_type == "cron":
+            if not spec.cron:
+                raise ServiceError(f"{formula.name} service does not define cron")
+            lines.append(f"OnCalendar={_systemd_on_calendar(spec.parse_cron())}")
+            lines.append("Persistent=true")
+        elif run_type == "interval":
+            if spec.interval is None:
+                raise ServiceError(f"{formula.name} service does not define interval")
+            lines.append(f"OnUnitActiveSec={spec.interval}")
+        else:
+            raise ServiceError(f"{formula.name} service is not timed")
+        lines += ["", "[Install]", "WantedBy=timers.target", ""]
+        return "\n".join(lines)
 
     def write_timer(self, formula: Formula, spec: ServiceSpec) -> Path:
         self.directory.mkdir(parents=True, exist_ok=True)
@@ -1505,10 +1638,10 @@ class ServiceManager:
             "StandardOutPath": stdout_path,
             "StandardErrorPath": stderr_path,
         }
-        if working_dir or root_dir:
-            payload["WorkingDirectory"] = working_dir or root_dir
-        # Homebrew emits RootDirectory for launchd as well; keep that bounded
-        # parity while retaining pybrew's root_dir-as-working-dir fallback.
+        if working_dir:
+            payload["WorkingDirectory"] = working_dir
+        # Homebrew emits RootDirectory for launchd as well; each service path
+        # maps to its own key (root_dir is not a working-directory fallback).
         if root_dir:
             payload["RootDirectory"] = root_dir
         if input_path:
@@ -1517,14 +1650,27 @@ class ServiceManager:
             payload["ExitTimeOut"] = spec.stop_timeout
         if spec.nice is not None:
             payload["Nice"] = spec.nice
-        if spec.cron:
-            payload["StartCalendarInterval"] = dict(spec.cron)
+        run_type = spec.effective_run_type()
+        if run_type == "cron" and spec.cron:
+            # launchd rejects the cron wildcard: Homebrew omits "*" fields
+            # instead of writing them into StartCalendarInterval.
+            calendar = {
+                str(key): value
+                for key, value in spec.parse_cron().items()
+                if str(value).strip() != "*"
+            }
+            if calendar:
+                payload["StartCalendarInterval"] = calendar
         keep_alive = _launchd_keep_alive(spec)
         if keep_alive is not None:
             payload["KeepAlive"] = keep_alive
-        if spec.interval is not None:
+        if run_type == "interval" and spec.interval is not None:
             payload["StartInterval"] = spec.interval
-        throttle = spec.restart_delay if spec.restart_delay is not None else _throttle_interval(spec)
+        # launchd's TimeOut is the restart delay; ThrottleInterval keeps its
+        # own (or keep_alive interval) meaning, matching Homebrew's Service.
+        if spec.restart_delay is not None:
+            payload["TimeOut"] = spec.restart_delay
+        throttle = _throttle_interval(spec)
         if throttle is not None:
             payload["ThrottleInterval"] = throttle
         if spec.process_type:
@@ -1535,12 +1681,20 @@ class ServiceManager:
             payload["LaunchOnlyOnce"] = True
         if spec.sockets:
             payload["Sockets"] = _launchd_sockets(spec)
-        # pybrew's launchd renderer keeps its historical default search path
-        # unless the declared or user environment already provides PATH.
-        # ``effective_environment_variables`` itself stays Homebrew-style.
+        # Homebrew restricts launchd jobs to every session type so a job loaded
+        # from one session (e.g. Background) keeps working when another (Aqua)
+        # logs in.
+        payload["LimitLoadToSessionType"] = [
+            "Aqua",
+            "Background",
+            "LoginWindow",
+            "StandardIO",
+            "System",
+        ]
+        # Both renderers write the same effective environment (declared values
+        # plus user overrides); neither synthesises a PATH default.
         environment = spec.render_environment_variables(
-            default_path=str(self.config.prefix / "bin"),
-            user_environment=user_environment,
+            user_environment=user_environment
         )
         if environment:
             payload["EnvironmentVariables"] = environment
@@ -1590,13 +1744,14 @@ class ServiceManager:
             raise ServiceError(f"{formula.name} is not installed")
         spec = spec or self.spec_for(formula)
         if self.backend == "systemd":
+            timed = spec.effective_run_type() in ("cron", "interval")
             path = self.write_unit(formula, spec)
-            if spec.cron:
+            if timed:
                 self.write_timer(formula, spec)
             if spec.sockets:
                 self.write_socket(formula, spec)
             self.runner.daemon_reload()
-            if spec.cron:
+            if timed:
                 self.runner.start(f"{self.label(formula, spec)}.timer")
             elif spec.sockets:
                 self.runner.start(f"{self.label(formula, spec)}.socket")

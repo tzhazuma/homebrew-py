@@ -8,6 +8,7 @@ usable on a machine without a homebrew-core checkout.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 import urllib.error
 import urllib.request
@@ -19,6 +20,8 @@ from .errors import DownloadError, FormulaNotFound
 from .models import BottleFile, BottleSpec, Dependency, Formula, SourceSpec
 
 DEFAULT_API = "https://formulae.brew.sh/api/formula"
+FORMULA_INDEX_API = "https://formulae.brew.sh/api/formula.json"
+CASK_INDEX_API = "https://formulae.brew.sh/api/cask.json"
 
 
 def _request_json(url: str, timeout: int = 30) -> Any:
@@ -88,6 +91,82 @@ def formula_from_api(data: dict[str, Any], tap: Optional[str] = None) -> Formula
         },
     )
     return formula
+
+
+def _search_match(pattern: str, *values: object) -> bool:
+    text = " ".join(str(value) for value in values if value)
+    if len(pattern) >= 2 and pattern.startswith("/") and pattern.endswith("/"):
+        try:
+            return re.search(pattern[1:-1], text, re.IGNORECASE) is not None
+        except re.error:
+            return False
+    return pattern.casefold() in text.casefold()
+
+
+def search_formulae_online(
+    pattern: str,
+    api_url: str = FORMULA_INDEX_API,
+    timeout: int = 30,
+) -> list[Formula]:
+    """Search the full formulae.brew.sh formula index.
+
+    This is the fallback used by ``pybrew search`` when no local tap has the
+    requested formula.  The index is public JSON; callers may override the URL
+    (for example with a ``file://`` fixture in tests).
+    """
+    data = _request_json(api_url, timeout=timeout)
+    if not isinstance(data, list):
+        raise DownloadError(f"{api_url}: expected a JSON array")
+    results: list[Formula] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        aliases = item.get("aliases") or []
+        desc = str(item.get("desc") or "")
+        if not _search_match(pattern, name, desc, *aliases):
+            continue
+        formula = Formula(name=name)
+        formula.desc = desc
+        formula.homepage = str(item.get("homepage") or "")
+        formula.license = item.get("license")
+        formula.version = (item.get("versions") or {}).get("stable")
+        formula.tap = item.get("tap") or "homebrew/core"
+        results.append(formula)
+    return sorted(results, key=lambda formula: formula.name)
+
+
+def search_casks_online(
+    pattern: str,
+    api_url: str = CASK_INDEX_API,
+    timeout: int = 30,
+) -> list[Cask]:
+    """Search the full formulae.brew.sh cask index as a fallback."""
+    data = _request_json(api_url, timeout=timeout)
+    if not isinstance(data, list):
+        raise DownloadError(f"{api_url}: expected a JSON array")
+    results: list[Cask] = []
+    for item in data:
+        if not isinstance(item, dict):
+            continue
+        token = str(item.get("token") or "").strip()
+        if not token:
+            continue
+        names = item.get("name") or []
+        name_text = ", ".join(str(value) for value in names) if isinstance(names, list) else str(names)
+        desc = str(item.get("desc") or "")
+        if not _search_match(pattern, token, name_text, desc):
+            continue
+        cask = Cask(token=token)
+        cask.name = name_text or None
+        cask.desc = desc or None
+        cask.homepage = item.get("homepage")
+        cask.version = str(item["version"]) if item.get("version") is not None else None
+        cask.tap = item.get("tap") or "homebrew/cask"
+        results.append(cask)
+    return sorted(results, key=lambda cask: cask.token)
 
 
 def fetch_formula(name: str, api_url: str = DEFAULT_API, timeout: int = 30) -> Formula:

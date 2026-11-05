@@ -2747,3 +2747,251 @@ end
         env={"PYBREW_VERSION_LEGACY": ""},
     )
     assert result.success is True
+
+
+@requires_ruby
+def test_dynamic_source_alias_lookup_without_prior_literal(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(
+        tap,
+        "tool-source",
+        "  test do\n    assert true\n  end",
+        aliases=["source-alias"],
+    )
+    assert not (tap / "Aliases").exists()
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  ref = Formula[["source", "alias"].join("-")]
+  assert_equal "tool-source", ref.name
+  refute ref.installed?
+  qualified = Formula["sample-tap/" + ["source", "alias"].join("-")]
+  assert_equal "tool-source", qualified.name
+end
+""",
+        taps=[tap],
+    )
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_dependency_subprocess_isolates_arbitrary_env_and_constants(
+    tmp_path: Path,
+) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(
+        tap,
+        "dep-lib",
+        '''  test do
+    ENV["PYBREW_DEP_ENV_LEAK"] = "leaked"
+    Object.const_set(:PYBREW_DEP_CONST_LEAK, "leaked")
+    assert_equal "leaked", ENV["PYBREW_DEP_ENV_LEAK"]
+    assert_equal "leaked", PYBREW_DEP_CONST_LEAK
+  end''',
+    )
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  ENV["PARENT_MARKER"] = "parent"
+  Formula["dep-lib"].test
+  assert_nil ENV["PYBREW_DEP_ENV_LEAK"]
+  refute Object.const_defined?(:PYBREW_DEP_CONST_LEAK)
+  assert_equal "parent", ENV["PARENT_MARKER"]
+end
+""",
+        taps=[tap],
+    )
+    formula.dependencies = [Dependency(name="dep-lib")]
+    _install_keg(config, "dep-lib", output="dep-ok")
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_hardware_cpu_expanded_helpers(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  assert_equal :arm64, Hardware::CPU.arch
+  assert_equal :arm, Hardware::CPU.type
+  assert_equal :arm, Hardware::CPU.family
+  assert_equal "Apple M-test", Hardware::CPU.model
+  assert_equal 64, Hardware::CPU.bits
+  assert Hardware::CPU.is_64_bit?
+  assert_equal 8, Hardware::CPU.cores
+  assert_equal 4, Hardware::CPU.physical_cores
+  assert Hardware::CPU.neon?
+  assert Hardware::CPU.sse3?
+  assert Hardware::CPU.ssse3?
+  assert Hardware::CPU.sse4?
+  assert Hardware::CPU.sse4_1?
+  assert Hardware::CPU.sse4_2?
+  assert Hardware::CPU.avx?
+  assert Hardware::CPU.avx2?
+  assert Hardware::CPU.avx512?
+  assert Hardware::CPU.feature?(:avx2)
+end
+""",
+    )
+    result = run_formula_test(
+        formula,
+        config,
+        ruby=_REAL_RUBY,
+        env={
+            "PYBREW_CPU_ARCH": "arm64",
+            "PYBREW_CPU_MODEL": "Apple M-test",
+            "PYBREW_CPU_BITS": "64",
+            "PYBREW_CPU_CORES": "8",
+            "PYBREW_CPU_PHYSICAL_CORES": "4",
+            "PYBREW_CPU_FLAGS": "neon asimd sse3 pni ssse3 sse4_1 sse4_2 avx avx2 avx512f",
+        },
+    )
+    assert result.success is True
+
+
+@requires_ruby
+def test_macos_xcode_clt_development_tools_helpers(tmp_path: Path) -> None:
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  assert MacOS::CLT.installed?
+  assert_equal "16.4.0", MacOS::CLT.version
+  assert_equal "/tmp/fake-clang", MacOS::CLT.clang
+  assert MacOS::Xcode.installed?
+  assert_equal "16.4", MacOS::Xcode.version
+  assert_equal "/Applications/Xcode.app", MacOS::Xcode.path
+  assert_equal :clang, DevelopmentTools.default_compiler
+  assert_equal :clang, DevelopmentTools.preferred_compiler
+  assert_equal "16.0.0", DevelopmentTools.clang_version
+  assert_equal "1600.0.26.6", DevelopmentTools.clang_build_version
+  assert DevelopmentTools.installed?
+  refute DevelopmentTools.needs_clt?
+  assert DevelopmentTools.xcode_installed?
+  assert_equal "/Applications/Xcode-beta.app/Contents/Developer",
+               MacOS.active_developer_dir
+  assert_equal "5.34", MacOS.preferred_perl_version
+  assert_equal ["en", "de"], MacOS.languages
+  assert_equal "en", MacOS.language
+  assert_equal "26", MacOS::Version.from_symbol(:tahoe).to_s
+  assert_equal "27", MacOS::Version.from_symbol(:golden_gate).to_s
+  assert_nil MacOS::Version.from_symbol(:not_a_release)
+end
+""",
+    )
+    result = run_formula_test(
+        formula,
+        config,
+        ruby=_REAL_RUBY,
+        env={
+            "PYBREW_CLT_INSTALLED": "1",
+            "PYBREW_CLT_VERSION": "16.4.0",
+            "PYBREW_CLANG": "/tmp/fake-clang",
+            "PYBREW_XCODE_INSTALLED": "1",
+            "PYBREW_XCODE_VERSION": "16.4",
+            "PYBREW_CLANG_VERSION": "16.0.0",
+            "PYBREW_CLANG_BUILD_VERSION": "1600.0.26.6",
+            "PYBREW_DEVELOPER_DIR": "/Applications/Xcode-beta.app/Contents/Developer",
+            "PYBREW_PERL_VERSION": "5.34",
+            "PYBREW_LANGUAGES": "en,de",
+        },
+    )
+    assert result.success is True
+
+
+@requires_ruby
+def test_dsl_token_upstream_subclasses_and_factory(tmp_path: Path) -> None:
+    source = """do
+  assert Version::AlphaToken < Version::PreReleaseToken
+  assert Version::PreReleaseToken < Version::CompositeToken
+  assert Version::CompositeToken < Version::StringToken
+  assert Version::StringToken < Version::Token
+  assert Version::RCToken < Version::PreReleaseToken
+  assert Version::PatchToken < Version::CompositeToken
+  assert Version::PostToken < Version::CompositeToken
+  assert Version::NumericToken < Version::Token
+  assert Version::NullToken < Version::Token
+  assert Version::LetterToken.equal?(Version::StringToken)
+  assert Version::RcToken.equal?(Version::RCToken)
+  assert Version::PToken.equal?(Version::PatchToken)
+  assert Version::MissingToken.equal?(Version::NullToken)
+
+  numeric = Version::Token.create("1")
+  assert numeric.is_a?(Version::NumericToken)
+  assert numeric.numeric?
+  assert_equal 1, numeric.to_i
+  assert_in_delta 1.0, numeric.to_f, 0.001
+
+  alpha = Version::Token.create("alpha2")
+  assert alpha.is_a?(Version::AlphaToken)
+  assert alpha.is_a?(Version::CompositeToken)
+  assert_equal 2, alpha.rev
+  assert_equal 2, alpha.revision
+  refute alpha.numeric?
+
+  patch = Version::Token.create("p1")
+  assert patch.is_a?(Version::PatchToken)
+  assert_equal 1, patch.rev
+  post = Version::Token.create("post1")
+  assert post.is_a?(Version::PostToken)
+  assert_equal 1, post.rev
+  assert Version::Token.create("foo").is_a?(Version::StringToken)
+  assert Version::Token.from(nil).null?
+  assert Version::NULL_TOKEN.null?
+  assert_equal 0, Version::NULL_TOKEN.to_i
+  assert_equal "", Version::NULL_TOKEN.to_s
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_minitest_remaining_assertion_surface(tmp_path: Path) -> None:
+    source = """do
+  assert_operator 1, :positive?
+  refute_operator 0, :positive?
+  assert_send [[1, 2], :include?, 1]
+  assert_throws(:done) { throw :done }
+  error = assert_raises(RuntimeError, "custom context") { raise "boom" }
+  assert_equal "boom", error.message
+  assert_silent { }
+  assert_predicate 1, :positive?
+  refute_predicate 0, :positive?
+  assert_kind_of Integer, 1
+  assert_instance_of Integer, 1
+  refute_respond_to Object.new, :no_such_method
+  assert_nil nil
+  refute_nil 0
+  assert_in_delta 1.0, 1.0, 0.01
+  refute_in_delta 1.0, 2.0, 0.01
+  assert_in_epsilon 1.0, 1.0, 0.01
+  object = Object.new
+  assert_same object, object
+  refute_same Object.new, Object.new
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_dependency_source_alias_lookup_is_resolved(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(tap, "dep-lib", None, aliases=["dep-alias"])
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  dep = Formula["dep-alias"]
+  assert_equal "dep-lib", dep.name
+  assert dep.installed?
+end
+""",
+        taps=[tap],
+    )
+    formula.dependencies = [Dependency(name="dep-alias")]
+    _install_keg(config, "dep-lib", output="dep-ok")
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True

@@ -954,6 +954,16 @@ def _cask_from_result(
     zap = data.get("zap") or []
     if isinstance(zap, list):
         cask.zap.extend(str(item) for item in zap)
+    zap_directives = data.get("zap_directives")
+    if isinstance(zap_directives, dict):
+        for directive in ("delete", "rmdir", "pkgutil"):
+            values = zap_directives.get(directive)
+            if values is None:
+                continue
+            values = values if isinstance(values, list) else [values]
+            cask.zap_directives.setdefault(directive, []).extend(
+                str(item) for item in values
+            )
 
     depends_on = data.get("depends_on") or {}
     if isinstance(depends_on, dict):
@@ -1394,6 +1404,7 @@ class PybrewCaskDSL
       "uninstall" => {},
       "uninstall_args" => [],
       "zap" => [],
+      "zap_directives" => {},
       "depends_on" => {},
       "conflicts_with" => {},
       "auto_updates" => false,
@@ -1813,6 +1824,10 @@ class PybrewCaskDSL
     @data["uninstall"]
   end
 
+  # Upstream zap keys available from the local cask DSL:
+  # trash (protected paths), delete, rmdir and pkgutil.
+  ZAP_DIRECTIVES = %w[delete rmdir pkgutil].freeze
+
   def zap(*args)
     positional, kwargs = PybrewCaskJSON.split_args(args)
     trash = kwargs.delete("trash")
@@ -1823,10 +1838,17 @@ class PybrewCaskDSL
         @data["zap"] << trash.to_s
       end
     end
+    ZAP_DIRECTIVES.each do |directive|
+      value = kwargs.delete(directive)
+      next if value.nil?
+      values = value.is_a?(Array) ? value : [value]
+      @data["zap_directives"][directive] ||= []
+      @data["zap_directives"][directive].concat(values.map(&:to_s))
+    end
     unless kwargs.empty?
       record_unsupported(
         "zap", [kwargs], false,
-        "cask `zap` options other than `trash` are not supported by pybrew"
+        "unsupported cask `zap` options; pybrew supports trash/delete/rmdir/pkgutil"
       )
     end
     record_unsupported("zap", positional) unless positional.empty?

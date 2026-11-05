@@ -946,3 +946,86 @@ def test_ruby_shim_exposes_macos_release_names_and_version_helpers() -> None:
         "def language",
     ):
         assert snippet in _CASK_SCRIPT_SHIM
+
+
+# ---------------------------------------------------------------------------
+# Runtime coverage of the generated shim's script-context delegators
+# ---------------------------------------------------------------------------
+
+
+def _run_shim_body(
+    tmp_path: Path, body: str, *, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    import os
+
+    from pybrew.cask_installer import _CASK_SCRIPT_SHIM
+
+    ruby = shutil.which("ruby")
+    if ruby is None:
+        pytest.skip("Ruby is not available for a shim runtime check")
+    shim = tmp_path / "cask_script_shim.rb"
+    shim.write_text(_CASK_SCRIPT_SHIM, encoding="utf-8")
+    body_path = tmp_path / "body.rb"
+    body_path.write_text(body + "\n", encoding="utf-8")
+    script_env = dict(os.environ)
+    if env:
+        script_env.update(env)
+    return subprocess.run(
+        [
+            ruby,
+            str(shim),
+            "preflight",
+            "runtime-token",
+            "1.0",
+            str(tmp_path / "appdir"),
+            str(tmp_path / "staged"),
+            str(tmp_path / "bin"),
+            str(tmp_path / "prefix"),
+            str(body_path),
+        ],
+        text=True,
+        capture_output=True,
+        env=script_env,
+        timeout=60,
+    )
+
+
+def test_generated_shim_exposes_runtime_script_context_delegators(
+    tmp_path: Path,
+) -> None:
+    proc = _run_shim_body(
+        tmp_path,
+        'puts "caskroom=#{caskroom_path}"\n'
+        'puts "arch=#{arch}"\n'
+        'puts "language=#{language}"\n'
+        'puts "release=#{MacOS.version.release_name}"\n'
+        'puts "pretty=#{MacOS.version.pretty_name}"\n'
+        'puts "sym=#{MacOS.version.to_sym}"\n'
+        'puts "outdated=#{MacOS.version.outdated_release?}"',
+        env={
+            "PYBREW_CASK_ARCH": "arm64",
+            "PYBREW_CASK_LANGUAGE": "fr",
+            "PYBREW_MACOS_VERSION": "14.5",
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    lines = proc.stdout.splitlines()
+    assert f"caskroom={tmp_path / 'prefix' / 'Caskroom' / 'runtime-token'}" in lines
+    assert "arch=arm64" in lines
+    assert "language=fr" in lines
+    assert "release=Sonoma" in lines
+    assert "pretty=Sonoma" in lines
+    assert "sym=sonoma" in lines
+    # The shim intentionally follows Homebrew's oldest-supported release.
+    assert "outdated=true" in lines
+
+
+def test_generated_shim_rejects_sudo_at_runtime(tmp_path: Path) -> None:
+    proc = _run_shim_body(
+        tmp_path,
+        'system_command "/bin/echo", args: ["hi"], sudo: true',
+    )
+
+    assert proc.returncode != 0
+    assert "sudo is not supported" in proc.stderr

@@ -3820,3 +3820,153 @@ def test_cask_install_from_content_preserves_metadata_source(
     installed = installer.installed_caskfile("content-fixture")
     assert installed is not None
     assert installed.read_text() == source
+
+
+# ---------------------------------------------------------------------------
+# Documented parity gaps: livecheck url_options + installed JSON fallback
+# ---------------------------------------------------------------------------
+
+
+def test_livecheck_status_forwards_livecheck_url_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import Cask
+
+    opener = _patch_livecheck_opener(monkeypatch, b"tool-2.0")
+    cask = Cask(
+        token="lcopts",
+        version="2.0",
+        livecheck={
+            "url": "https://example.com/tool",
+            "regex": r"tool-(\d+(?:\.\d+)*)",
+            "url_options": {
+                "header": ["X-Live: yes"],
+                "user_agent": "livecheck-agent",
+                "referer": "https://ref.example",
+                "cookies": {"session": "abc"},
+            },
+        },
+    )
+
+    status = cask.livecheck_status(online=True)
+
+    assert status["status"] == "up_to_date"
+    request = opener.requests[0]
+    assert request.get_header("X-live") == "yes"
+    assert request.get_header("User-agent") == "livecheck-agent"
+    assert request.get_header("Referer") == "https://ref.example"
+    assert request.get_header("Cookie") == "session=abc"
+
+
+def test_livecheck_url_options_override_cask_url_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.cask import Cask
+
+    opener = _patch_livecheck_opener(monkeypatch, b"v2.0")
+    cask = Cask(
+        token="lcopts-override",
+        version="2.0",
+        url_options={"user_agent": "cask-agent", "header": ["X-Live: cask"]},
+        livecheck={
+            "url": "https://example.com/tool",
+            "regex": r"v(\d+(?:\.\d+)*)",
+            "url_options": {"user_agent": "livecheck-agent"},
+        },
+    )
+
+    cask.livecheck_status(online=True)
+
+    request = opener.requests[0]
+    assert request.get_header("User-agent") == "livecheck-agent"
+    # Livecheck options are additive over the cask-level headers.
+    assert request.get_header("X-live") == "cask"
+
+
+def test_installed_caskfile_json_fallback(tmp_path: Path) -> None:
+    from pybrew.cask_installer import CaskLoader
+
+    config = Config.default(
+        prefix=tmp_path / "prefix",
+        taps=[tmp_path / "tap"],
+        cache=tmp_path / "cache",
+    )
+    config.ensure()
+    installer = CaskInstaller(config)
+    metadata = config.caskroom / "jsoncask" / "1.0" / ".metadata" / "Casks"
+    metadata.mkdir(parents=True)
+    payload = {
+        "token": "jsoncask",
+        "version": "1.0",
+        "installed_versions": ["1.0"],
+        "artifacts": [
+            {"app": ["Json.app"]},
+            {"zap": [{"trash": ["~/.json-cache"]}]},
+        ],
+    }
+    json_path = metadata / "jsoncask.json"
+    json_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    found = installer.installed_caskfile("jsoncask")
+    assert found == json_path
+
+    loader = CaskLoader(discover_taps([tmp_path / "tap"]))
+    cask = loader.load_from_installed_caskfile(found)
+    assert cask.token == "jsoncask"
+    assert cask.version == "1.0"
+    assert [artifact.source for artifact in cask.artifacts] == ["Json.app"]
+    assert cask.zap == ["~/.json-cache"]
+
+
+def test_installed_caskfile_prefers_ruby_over_json(tmp_path: Path) -> None:
+    config = Config.default(
+        prefix=tmp_path / "prefix",
+        taps=[tmp_path / "tap"],
+        cache=tmp_path / "cache",
+    )
+    config.ensure()
+    installer = CaskInstaller(config)
+    metadata = config.caskroom / "both" / "1.0" / ".metadata" / "Casks"
+    metadata.mkdir(parents=True)
+    ruby_path = metadata / "both.rb"
+    ruby_path.write_text(
+        'cask "both" do\n  version "1.0"\n  stage_only true\nend\n',
+        encoding="utf-8",
+    )
+    (metadata / "both.json").write_text(
+        json.dumps({"token": "both", "version": "1.0"}), encoding="utf-8"
+    )
+
+    assert installer.installed_caskfile("both") == ruby_path
+
+
+def test_installed_caskfile_invalid_json_raises(tmp_path: Path) -> None:
+    from pybrew.cask_installer import CaskLoader, CaskNotFound
+
+    path = tmp_path / "broken.json"
+    path.write_text("{not json", encoding="utf-8")
+    loader = CaskLoader(discover_taps([tmp_path / "tap"]))
+    with pytest.raises(CaskNotFound, match="invalid installed cask JSON"):
+        loader.load_from_installed_caskfile(path)
+
+
+def test_installed_json_minimal_hash_falls_back(tmp_path: Path) -> None:
+    """The minimal ``to_installed_json_hash`` payload is loadable too."""
+
+    from pybrew.cask_installer import CaskLoader
+
+    path = tmp_path / "minimal.json"
+    path.write_text(
+        json.dumps(
+            {
+                "token": "minimal",
+                "version": "2.0",
+                "installed_versions": ["2.0"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    loader = CaskLoader(discover_taps([tmp_path / "tap"]))
+    cask = loader.load_from_installed_caskfile(path)
+    assert cask.token == "minimal"
+    assert cask.version == "2.0"

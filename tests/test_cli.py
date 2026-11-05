@@ -225,3 +225,34 @@ def test_doctor_linkage_json(run_cli, sample) -> None:
     assert payload["ok"] is True
     assert payload["linkage"]["issues"] == []
     assert isinstance(payload["linkage"]["checked"], int)
+
+
+def test_search_falls_back_to_homebrew_formula_index(run_cli, tmp_path: Path) -> None:
+    index = tmp_path / "formula.json"
+    index.write_text(
+        '[{"name":"remote-only","desc":"Remote fixture","aliases":["remote-alias"],'
+        '"versions":{"stable":"1.2"},"homepage":"https://example.com"}]'
+    )
+    proc = run_cli(
+        "search",
+        "remote-only",
+        extra_env={"PYBREW_FORMULA_SEARCH_API": index.as_uri()},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "remote-only: Remote fixture" in proc.stdout
+
+
+def test_search_falls_back_to_homebrew_cask_index(run_cli, tmp_path: Path) -> None:
+    index = tmp_path / "cask.json"
+    index.write_text(
+        '[{"token":"remote-cask","name":["Remote Cask"],"desc":"Cask fixture",'
+        '"version":"2.0"}]'
+    )
+    proc = run_cli(
+        "search",
+        "--cask",
+        "remote-cask",
+        extra_env={"PYBREW_CASK_SEARCH_API": index.as_uri()},
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "remote-cask: Remote Cask Cask fixture" in proc.stdout

@@ -314,3 +314,31 @@ def test_version_legacy_hash_consistency() -> None:
         assert Version("1.0") == Version("01.0")
         assert hash(Version("1.0")) == hash(Version("01.0"))
         assert hash(PkgVersion("1.0", 0)) == hash(Version("1.0"))
+
+
+def test_token_hierarchy_factory_and_predicates() -> None:
+    from pybrew.version import (
+        NULL_TOKEN,
+        AlphaToken,
+        CompositeToken,
+        LetterToken,
+        NumericToken,
+        StringToken,
+        Token,
+    )
+
+    assert issubclass(AlphaToken, StringToken)
+    assert issubclass(CompositeToken, StringToken)
+    alpha = Token.create("alpha5")
+    assert isinstance(alpha, AlphaToken)
+    assert alpha.rev == 5
+    assert alpha.to_s() == "alpha5"
+    assert Token.create(3).numeric
+    assert Token.create(None) is NULL_TOKEN
+    assert NULL_TOKEN.null and NULL_TOKEN.blank
+    assert NumericToken(12).to_i() == 12
+    assert NumericToken(12).to_f() == 12.0
+    assert LetterToken("x").to_i() == 0
+    composite = CompositeToken([NumericToken(1), LetterToken("a")])
+    assert composite.to_s() == "1a"
+    assert isinstance(composite, StringToken)

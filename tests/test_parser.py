@@ -233,3 +233,22 @@ end
     )
     assert formula.livecheck_source
     assert "regex" in formula.livecheck_source
+
+
+def test_brace_patch_block_is_parsed() -> None:
+    digest = "a" * 64
+    formula = parse_formula_source(
+        'class BracePatch < Formula\n'
+        '  url "https://example.com/brace-patch-1.0.tar.gz"\n'
+        f'  sha256 "{digest}"\n'
+        '  patch { url "https://example.com/fix.patch"; sha256 "' + digest + '"; strip :p0 }\n'
+        '  def install; end\n'
+        'end\n',
+        name="brace-patch",
+    )
+    assert len(formula.patches) == 1
+    patch = formula.patches[0]
+    assert patch.url == "https://example.com/fix.patch"
+    assert patch.sha256 == digest
+    assert patch.strip == 0
+    assert patch.unsupported_reason is None

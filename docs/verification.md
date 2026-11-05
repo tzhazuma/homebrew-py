@@ -1,5 +1,36 @@
 # Verification record
 
+## Full parity batch 2026-11-05
+
+Closed the documented partial areas across all owners; full suite grew from
+1156 to **1218 passed, 6 skipped**.
+
+- **Cask**: evaluator `zap` now captures trash/delete/rmdir/pkgutil; livecheck
+  URL kwargs merge into request headers; installed caskfile falls back to JSON;
+  the script shim covers caskroom/arch/language/MacOS naming and rejects sudo.
+- **Test DSL**: forked dependency-test isolation, eager dynamic source aliases
+  for small taps, expanded MacOS/OS/Hardware/Xcode/CLT/SDK and DevelopmentTools
+  helpers, upstream-style Token subclasses/factory/predicates, and remaining
+  Minitest assertion forms.
+- **Superenv/build**: dependency include/lib/env paths, MAKEFLAGS and
+  `deparallelize`, compiler version/target probing, opt-in Python build
+  sandbox (`PYBREW_SANDBOX=1`) with sandbox-exec/bwrap plans, and patch target
+  containment via dry-run verification.
+- **Services/caveats/post_install**: unified launchd/systemd effective-env PATH
+  policy, Homebrew-style manual command quoting, root/working/log path
+  separation, interval timers, expanded caveats platform/path/formula context,
+  and isolated post_install HOME/TMPDIR/HOMEBREW_TEMP context.
+- **Ruby shim**: expanded sandbox rules/profile/apply, Formulary JWS/envelope
+  and remote API handling, codesign verification/entitlements helpers, GitHub
+  rate-limit helpers, and resource stage support.
+- **CLI search**: when no local tap matches, `pybrew search` now forwards to
+  `https://formulae.brew.sh/api/formula.json`; `search --cask` uses
+  `cask.json`. `PYBREW_FORMULA_SEARCH_API`/`PYBREW_CASK_SEARCH_API` override the
+  index (file:// fixtures work).
+- Real install verification: `REAL INSTALL VERIFIED`.
+- Inventory of the remaining 18 partial areas: `docs/parity-backlog.md`.
+
+
 ## Scheduled upstream check 2026-11-05 09:00
 
 - Homebrew/brew `6ceeda0fc6` → `de8798899c`; homebrew-core `28bbf746` → `ee8b2bc9`.

@@ -1037,16 +1037,21 @@ def verify_cask_url(cask: Cask, url: Optional[str] = None) -> None:
         )
 
 
-def cask_request_headers(cask: Cask) -> dict[str, str]:
-    """Translate ``Cask.url_options`` into HTTP request headers (best effort).
+def cask_request_headers(
+    cask: Cask, *, options: Optional[dict[str, Any]] = None
+) -> dict[str, str]:
+    """Translate cask URL options into HTTP request headers (best effort).
 
     Supports Homebrew's ``header:`` (String or list of ``"Name: value"``),
     ``user_agent:`` (String or ``:default``/``:fake`` symbol), ``referer:`` and
     ``cookies:`` (Hash or String) options.  Other options (``using:``,
-    ``verified:``, ...) are metadata only and are not sent.
+    ``verified:``, ...) are metadata only and are not sent.  Passing
+    ``options=`` translates a different option mapping (used for livecheck
+    ``url`` kwargs) instead of ``Cask.url_options``.
     """
 
-    options = cask.url_options or {}
+    if options is None:
+        options = cask.url_options or {}
     headers: dict[str, str] = {}
 
     header_value = options.get("header")
@@ -1178,6 +1183,10 @@ class CaskInstaller:
         if not rack.is_dir():
             return None
         candidates = sorted(rack.glob(f"**/Casks/{token}.rb"))
+        if not candidates:
+            # Installed casks can also be represented as JSON metadata
+            # (Homebrew API-style or pybrew's minimal installed JSON hash).
+            candidates = sorted(rack.glob(f"**/Casks/{token}.json"))
         return candidates[-1] if candidates else None
 
     def list_installed(self) -> list[dict[str, Any]]:

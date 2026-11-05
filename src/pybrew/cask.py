@@ -474,12 +474,23 @@ class Cask:
         return self.url
 
     def _livecheck_headers(self) -> dict[str, str]:
-        """Build request headers from the cask's ``url`` options (best effort)."""
+        """Build request headers from cask + livecheck ``url`` options.
+
+        Cask-level ``url_options`` are the base; livecheck-specific
+        ``url`` kwargs (captured by the opt-in evaluator) override them.
+        """
 
         try:
             from .cask_installer import cask_request_headers
 
-            return cask_request_headers(self)
+            headers = cask_request_headers(self)
+            if isinstance(self.livecheck, dict):
+                livecheck_options = self.livecheck.get("url_options")
+                if isinstance(livecheck_options, dict):
+                    headers.update(
+                        cask_request_headers(self, options=livecheck_options)
+                    )
+            return headers
         except Exception:  # pragma: no cover - avoids import-cycle edge cases
             return {}
 

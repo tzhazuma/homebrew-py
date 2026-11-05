@@ -9,6 +9,7 @@ handling on any host.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -20,6 +21,7 @@ from pybrew.caveats import (
     CaveatsRunner,
     has_caveats,
     render_caveats,
+    run_cask_caveats,
     run_caveats,
 )
 from pybrew.models import Formula
@@ -445,3 +447,203 @@ def test_cli_caveats_missing_formula(run_cli) -> None:
 
     assert proc.returncode == 1
     assert "no formula named" in proc.stderr.lower()
+
+
+# ---------------------------------------------------------------------------
+# platform, path and build helpers (Homebrew parity)
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_macos_os_and_hardware_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PYBREW_TARGET_OS", "darwin")
+    monkeypatch.setenv("PYBREW_TARGET_ARCH", "arm64")
+    monkeypatch.setenv("PYBREW_MACOS_VERSION", "14.5")
+    source = '''def caveats
+  <<~EOS
+    version=#{MacOS.version}
+    full=#{MacOS.full_version}
+    symbol=#{MacOS.version_symbol}
+    at_least_sonoma=#{(MacOS.version >= :sonoma).to_s}
+    before_sequoia=#{(MacOS.version < :sequoia).to_s}
+    os_version=#{OS.version}
+    os_mac=#{OS.mac?.to_s}
+    arm=#{Hardware::CPU.arm?.to_s}
+    cores=#{Hardware::CPU.cores}
+    bits=#{Hardware::CPU.bits}
+    is_64=#{Hardware::CPU.is_64_bit?.to_s}
+  EOS
+end
+'''
+    output = run_caveats(_formula(source), _config(tmp_path), ruby=_REAL_RUBY)
+
+    assert "version=14.5\n" in output
+    assert "full=14.5\n" in output
+    assert "symbol=sonoma\n" in output
+    assert "at_least_sonoma=true\n" in output
+    assert "before_sequoia=true\n" in output
+    assert "os_version=14.5\n" in output
+    assert "os_mac=true\n" in output
+    assert "arm=true\n" in output
+    assert "is_64=true\n" in output
+    assert "cores=" in output and int(output.split("cores=")[1].splitlines()[0]) >= 1
+
+
+@requires_ruby
+def test_homebrew_repository_constant_and_global_etc_var(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    source = '''def caveats
+  <<~EOS
+    repository=#{HOMEBREW_REPOSITORY}
+    env_repository=#{ENV["HOMEBREW_REPOSITORY"]}
+    etc=#{etc}
+    var=#{var}
+    opt_sbin=#{opt_sbin}
+    opt_lib=#{opt_lib}
+    opt_include=#{opt_include}
+    opt_share=#{opt_share}
+    opt_pkgshare=#{opt_pkgshare}
+    doc=#{doc}
+    info=#{info}
+    man1=#{man1}
+    bash=#{bash_completion}
+    zsh=#{zsh_completion}
+    fish=#{fish_completion}
+  EOS
+end
+'''
+    output = run_caveats(_formula(source), config, ruby=_REAL_RUBY)
+
+    keg = config.keg_path("hello-caveats", "1.0")
+    opt = config.opt_path("hello-caveats")
+    assert f"repository={config.prefix}\n" in output
+    assert f"env_repository={config.prefix}\n" in output
+    assert f"etc={config.prefix / 'etc'}\n" in output
+    assert f"var={config.prefix / 'var'}\n" in output
+    assert f"opt_sbin={opt / 'sbin'}\n" in output
+    assert f"opt_lib={opt / 'lib'}\n" in output
+    assert f"opt_include={opt / 'include'}\n" in output
+    assert f"opt_share={opt / 'share'}\n" in output
+    assert f"opt_pkgshare={opt / 'share' / 'hello-caveats'}\n" in output
+    assert f"doc={keg / 'share' / 'doc' / 'hello-caveats'}\n" in output
+    assert f"info={keg / 'share' / 'info'}\n" in output
+    assert f"man1={keg / 'share' / 'man' / 'man1'}\n" in output
+    assert f"bash={keg / 'etc' / 'bash_completion.d'}\n" in output
+    assert f"zsh={keg / 'share' / 'zsh' / 'site-functions'}\n" in output
+    assert f"fish={keg / 'share' / 'fish' / 'vendor_completions.d'}\n" in output
+
+
+@requires_ruby
+def test_formula_metadata_and_build_helpers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path)
+    formula = _formula(
+        '''def caveats
+  <<~EOS
+    full_name=#{full_name}
+    pkg_version=#{pkg_version}
+    revision=#{revision}
+    rack=#{rack}
+    keg_only=#{keg_only?.to_s}
+    installed=#{installed?.to_s}
+    head=#{build.head?.to_s}
+    stable=#{build.stable?.to_s}
+    bottle=#{build.bottle?.to_s}
+    with_foo=#{build.with?("with-foo").to_s}
+    without_bar=#{build.without?("nope").to_s}
+  EOS
+end
+''',
+        version="1.2.3",
+    )
+    formula.revision = 2
+    formula.keg_only = True
+    keg = config.keg_path("hello-caveats", formula.pkg_version)
+    keg.mkdir(parents=True)
+    (keg / "INSTALL_RECEIPT.json").write_text(
+        json.dumps(
+            {
+                "version": formula.pkg_version,
+                "poured_from_bottle": True,
+                "built_as_bottle": True,
+                "build": {"spec": "head", "from_bottle": True},
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PYBREW_BUILD_OPTIONS", "with-foo,bar")
+
+    output = run_caveats(formula, config, ruby=_REAL_RUBY)
+
+    assert "full_name=hello-caveats\n" in output
+    assert "pkg_version=1.2.3_2\n" in output
+    assert "revision=2\n" in output
+    assert "rack=hello-caveats\n" in output
+    assert "keg_only=true\n" in output
+    assert "installed=true\n" in output
+    assert "head=true\n" in output
+    assert "stable=false\n" in output
+    assert "bottle=true\n" in output
+    assert "with_foo=true\n" in output
+    assert "without_bar=true\n" in output
+
+
+@requires_ruby
+def test_utils_shell_helpers_are_available(tmp_path: Path) -> None:
+    source = '''def caveats
+  <<~EOS
+    quote=#{Utils::Shell.sh_quote("two words")}
+    export=#{Utils::Shell.export_value("PATH", "/opt/bin:$PATH")}
+  EOS
+end
+'''
+    output = run_caveats(_formula(source), _config(tmp_path), ruby=_REAL_RUBY)
+    assert "quote=two\\ words\n" in output
+    assert 'export=PATH="/opt/bin:$PATH"\n' in output
+
+
+@requires_ruby
+def test_cask_caveats_language_and_caskroom_helpers(tmp_path: Path) -> None:
+    from types import SimpleNamespace
+
+    config = _config(tmp_path)
+    cask = SimpleNamespace(
+        token="caveaty",
+        version="2.0",
+        caveats_source='''caveats do
+  <<~EOS
+    token=#{token}
+    language=#{language}
+    languages=#{languages.join(",")}
+    default=#{default_language_group}
+    caskroom=#{caskroom_path}
+    staged=#{staged_path}
+    appdir=#{appdir}
+  EOS
+end''',
+        caveats=None,
+        language="fr",
+        languages=lambda: ["fr", "en"],
+        language_groups={"fr": ["fr"], "en": ["en"]},
+        default_language_group="en",
+        caskroom_path=config.prefix / "Caskroom" / "caveaty",
+        staged_path=config.prefix / "Caskroom" / "caveaty" / "2.0",
+        appdir=None,
+    )
+
+    output = run_cask_caveats(cask, config, ruby=_REAL_RUBY)
+
+    assert "token=caveaty\n" in output
+    assert "language=fr\n" in output
+    assert "languages=fr,en\n" in output
+    assert "default=en\n" in output
+    assert f"caskroom={config.prefix / 'Caskroom' / 'caveaty'}\n" in output
+    assert (
+        f"staged={config.prefix / 'Caskroom' / 'caveaty' / '2.0'}\n" in output
+    )
+    assert f"appdir={config.applications}\n" in output

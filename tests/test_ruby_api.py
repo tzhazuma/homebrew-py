@@ -17,7 +17,9 @@ import os
 import platform
 import shutil
 import struct
+import subprocess
 import tarfile
+import time
 import zipfile
 from pathlib import Path
 
@@ -7498,7 +7500,7 @@ def test_formulary_api_jws_verification(
             '    Formulary.load_formula_from_api!\n'
             '    "none"\n'
             '  rescue => raised\n'
-            '    raised.class.name + "|" + raised.message.include?("unsupported API JWS alg").to_s\n'
+            '    raised.class.name + "|" + raised.message.include?("verification failed").to_s\n'
             '  end\n'
             '  ENV["PYBREW_FORMULA_API_CURL"] = "' + str(scripts["malformed"]) + '"\n'
             '  Formulary.clear_cache\n'
@@ -8211,3 +8213,681 @@ def test_keg_formula_preserve_rpath_from_installed_recipe(
     )
     keg = _run_raw_body(tmp_path, body, name="preserve-rpath")
     assert (keg / "preserve-rpath.txt").read_text().strip() == "true"
+
+
+# ---------------------------------------------------------------------------
+# Full-parity wave: Formulary RS256/envelope JWS + channels, Sandbox rules,
+# MacOS/SystemConfig host detection, GitHub rate limits, Keg codesign,
+# dynamic resources/patches and resource.stage target forms.
+# ---------------------------------------------------------------------------
+
+
+def _ruby_rsa_jws(
+    payload: dict,
+    *,
+    alg: str = "RS256",
+    envelope: bool = False,
+    b64: bool = True,
+    kid: str = "homebrew-1",
+    signing_key: str | None = None,
+) -> tuple[str, str, str]:
+    """Sign a synthetic API payload with a throwaway RSA key via host Ruby."""
+
+    signer = r'''
+require "openssl"
+require "json"
+require "base64"
+
+payload_text = ENV.fetch("JWS_PAYLOAD")
+alg = ENV.fetch("JWS_ALG")
+key = if ENV.fetch("JWS_KEY", "").empty?
+  OpenSSL::PKey::RSA.new(2048)
+else
+  OpenSSL::PKey::RSA.new(ENV.fetch("JWS_KEY"))
+end
+digest = case alg
+         when "RS256", "PS256" then "SHA256"
+         when "RS384", "PS384" then "SHA384"
+         else "SHA512"
+         end
+sign = lambda do |data|
+  if alg.start_with?("PS")
+    key.sign_pss(digest, data, salt_length: :digest, mgf1_hash: digest)
+  else
+    key.sign(digest, data)
+  end
+end
+if ENV["JWS_ENVELOPE"] == "1"
+  header = { "alg" => alg, "kid" => ENV.fetch("JWS_KID"), "b64" => ENV["JWS_B64"] == "1" }
+  protected = Base64.urlsafe_encode64(JSON.generate(header), padding: false)
+  signing_input = if ENV["JWS_B64"] == "1"
+    "#{protected}.#{Base64.urlsafe_encode64(payload_text, padding: false)}"
+  else
+    "#{protected}.#{payload_text}"
+  end
+  signature = Base64.urlsafe_encode64(sign.call(signing_input), padding: false)
+  puts JSON.generate({
+    "payload" => payload_text,
+    "signatures" => [{ "protected" => protected, "signature" => signature,
+                       "header" => { "kid" => ENV.fetch("JWS_KID") } }],
+  })
+else
+  header = Base64.urlsafe_encode64(JSON.generate({ "alg" => alg, "typ" => "JWT" }), padding: false)
+  encoded_payload = Base64.urlsafe_encode64(payload_text, padding: false)
+  signature = Base64.urlsafe_encode64(sign.call("#{header}.#{encoded_payload}"), padding: false)
+  puts "#{header}.#{encoded_payload}.#{signature}"
+end
+print key.to_pem
+print key.public_key.to_pem
+'''
+    env = dict(os.environ)
+    env.update(
+        JWS_PAYLOAD=json.dumps(payload),
+        JWS_ALG=alg,
+        JWS_ENVELOPE="1" if envelope else "0",
+        JWS_B64="1" if b64 else "0",
+        JWS_KID=kid,
+        JWS_KEY=signing_key or "",
+    )
+    env.setdefault("JWS_KEY", "")
+    result = subprocess.run(
+        [_RUBY, "-e", signer], capture_output=True, text=True, env=env
+    )
+    assert result.returncode == 0, result.stderr
+    token_line, _, pem_text = result.stdout.partition("\n")
+    public_marker = "-----BEGIN PUBLIC KEY-----"
+    assert public_marker in pem_text
+    private_pem, _, public_tail = pem_text.partition(public_marker)
+    public_pem = public_marker + public_tail
+    return token_line, private_pem.strip(), public_pem
+
+
+def test_formulary_rs256_envelope_jws_and_embedded_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    compact_payload = {
+        "formulae": [
+            {
+                "name": "rsa-compact",
+                "desc": "rs256 compact",
+                "homepage": "https://example.test/rsa",
+                "version": "5.0",
+                "license": "MIT",
+            }
+        ]
+    }
+    envelope_payload = {
+        "formulae": [
+            {
+                "name": "rsa-envelope",
+                "desc": "ps512 envelope",
+                "version": "6.0",
+            }
+        ]
+    }
+    compact_token, private_pem, public_pem = _ruby_rsa_jws(
+        compact_payload, alg="RS256"
+    )
+    envelope_token, _, _ = _ruby_rsa_jws(
+        envelope_payload, alg="PS512", envelope=True, b64=False,
+        signing_key=private_pem,
+    )
+    tampered = compact_token[:-1] + ("A" if compact_token[-1] != "A" else "B")
+    none_header = base64.urlsafe_b64encode(b'{"alg":"none"}').rstrip(b"=").decode()
+    none_token = f"{none_header}.e30.e30"
+
+    key_path = tmp_path / "api-public.pem"
+    key_path.write_text(public_pem)
+
+    def script(name: str, text: str) -> Path:
+        path = tmp_path / f"jws-{name}.sh"
+        path.write_text("#!/bin/sh\nprintf '%s' '" + text + "'\n")
+        path.chmod(0o755)
+        return path
+
+    compact_script = script("compact", compact_token)
+    envelope_script = script("envelope", envelope_token)
+    tampered_script = script("tampered", tampered)
+    none_script = script("none", none_token)
+    formula = _formula(
+        "ruby-rsa-jws",
+        "1.0",
+        (
+            '  ENV["PYBREW_FORMULA_API_URL"] = "https://api.example.test/formula.jws.json"\n'
+            '  ENV["PYBREW_FORMULA_API_JWS_PUBLIC_KEY"] = "' + str(key_path) + '"\n'
+            '  ENV.delete("PYBREW_FORMULA_API_JWS_KEY")\n'
+            '  ENV["PYBREW_FORMULA_API_CURL"] = "' + str(compact_script) + '"\n'
+            '  compact = Formulary.load_formula_from_api!\n'
+            '  ENV["PYBREW_FORMULA_API_CURL"] = "' + str(envelope_script) + '"\n'
+            '  Formulary.clear_cache\n'
+            '  envelope = Formulary.load_formula_from_api!\n'
+            '  ENV["PYBREW_FORMULA_API_CURL"] = "' + str(tampered_script) + '"\n'
+            '  Formulary.clear_cache\n'
+            '  tampered = begin\n'
+            '    Formulary.load_formula_from_api!\n'
+            '    "none"\n'
+            '  rescue => raised\n'
+            '    raised.class.name + "|" + raised.message.include?("verification failed").to_s\n'
+            '  end\n'
+            '  ENV["PYBREW_FORMULA_API_CURL"] = "' + str(none_script) + '"\n'
+            '  Formulary.clear_cache\n'
+            '  unsupported = begin\n'
+            '    Formulary.load_formula_from_api!\n'
+            '    "none"\n'
+            '  rescue => raised\n'
+            '    raised.class.name + "|" + raised.message.include?("unsupported API JWS alg").to_s\n'
+            '  end\n'
+            '  embedded = Formulary::JWS_PUBLIC_KEY_PEM.include?("BEGIN PUBLIC KEY")\n'
+            '  (prefix/"rsa-jws.txt").write [\n'
+            '    compact.loaded_name, compact.loaded_desc, compact.loaded_version,\n'
+            '    envelope.loaded_name, envelope.loaded_desc, envelope.loaded_version,\n'
+            '    tampered, unsupported, embedded.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "rsa-jws.txt").read_text().splitlines() == [
+        "rsa-compact",
+        "rs256 compact",
+        "5.0",
+        "rsa-envelope",
+        "ps512 envelope",
+        "6.0",
+        "PybrewFormulaUnavailableError|true",
+        "PybrewFormulaUnavailableError|true",
+        "true",
+    ]
+
+
+def test_formulary_channel_subset_merge_and_api_alias_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    api_path = tmp_path / "channel-subset.json"
+    api_path.write_text(
+        json.dumps(
+            {
+                "stable": {
+                    "formulae": [
+                        {
+                            "name": "multi-dyn",
+                            "full_name": "homebrew/core/multi-dyn",
+                            "desc": "stable desc",
+                            "homepage": "https://example.test/stable",
+                            "version": "1.0",
+                            "aliases": ["multi-alias"],
+                            "oldname": "multi-old",
+                        }
+                    ]
+                },
+                "beta": {
+                    "formulae": {
+                        "multi-dyn": {
+                            "desc": "beta desc",
+                            "version": "2.0",
+                        }
+                    }
+                },
+            }
+        )
+    )
+    monkeypatch.setenv("PYBREW_FORMULA_API_JSON", str(api_path))
+    monkeypatch.setenv("PYBREW_FORMULA_API_CHANNELS", "stable,beta")
+    formula = _formula(
+        "ruby-channel-subset",
+        "1.0",
+        (
+            '  loaded_result = Formulary.load_formula_from_api_channels!\n'
+            '  loaded = loaded_result.is_a?(Array) ? loaded_result.first : loaded_result\n'
+            '  alias_class = Formulary.formula_class_get_from_api("multi-alias")\n'
+            '  qualified = Formulary.formula_class_get_from_api("homebrew/core/multi-alias")\n'
+            '  canonical = Formulary.canonical_name("multi-old")\n'
+            '  factory = Formulary.factory("multi-alias")\n'
+            '  (prefix/"channel-subset.txt").write [\n'
+            '    Formulary.api_json_channels.join(","),\n'
+            '    loaded_result.is_a?(Array).to_s, loaded_result.is_a?(Class).to_s,\n'
+            '    loaded.loaded_name, loaded.loaded_desc,\n'
+            '    loaded.loaded_version, loaded.loaded_homepage,\n'
+            '    alias_class.loaded_version, qualified.loaded_name,\n'
+            '    canonical, factory.loaded_version\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    assert (keg / "channel-subset.txt").read_text().splitlines() == [
+        "stable,beta",
+        "false",
+        "true",
+        "multi-dyn",
+        "beta desc",
+        "2.0",
+        "https://example.test/stable",
+        "2.0",
+        "multi-dyn",
+        "multi-dyn",
+        "2.0",
+    ]
+
+
+def test_sandbox_filter_types_home_rules_and_hook_rules(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    fake_sandbox_exec = tmp_path / "sandbox-exec"
+    fake_sandbox_exec.write_text("#!/bin/sh\nexit 0\n")
+    fake_sandbox_exec.chmod(0o755)
+    home = tmp_path / "home"
+    (home / ".ssh").mkdir(parents=True)
+    (home / ".ssh" / "id_ed25519").write_text("key")
+    (home / ".aws").mkdir(parents=True)
+    fake_bwrap = tmp_path / "bwrap"
+    fake_bwrap.write_text("#!/bin/sh\nexit 0\n")
+    fake_bwrap.chmod(0o755)
+    body = (
+        '  ENV["PYBREW_SANDBOX"] = "1"\n'
+        '  ENV["PYBREW_SANDBOX_STRICT"] = "1"\n'
+        '  ENV["PYBREW_SANDBOX_PATH"] = "' + str(fake_sandbox_exec) + '"\n'
+        '  ENV["HOME"] = "' + str(home) + '"\n'
+        '  filter = Sandbox.path_filter("/tmp/literal", :literal)\n'
+        '  Sandbox.allow_read(path: "/tmp/literal", type: :literal)\n'
+        '  Sandbox.allow_read_if_exists("/tmp/does-not-exist")\n'
+        '  Sandbox.allow_write("/tmp/sub")\n'
+        '  Sandbox.allow_network("/tmp/socket", type: :literal)\n'
+        '  Sandbox.allow_process_exec("/bin/tool")\n'
+        '  Sandbox.deny_read_home(except: :git)\n'
+        '  git_allow = Sandbox.rules.any? do |rule|\n'
+        '    rule[:kind] == :allow_read && Sandbox.rule_paths(rule[:payload]).include?(ENV["HOME"] + "/.ssh")\n'
+        '  end\n'
+        '  aws_denied = Sandbox.rules.any? do |rule|\n'
+        '    rule[:kind] == :deny_read && Sandbox.rule_paths(rule[:payload]).include?(ENV["HOME"] + "/.aws")\n'
+        '  end\n'
+        '  whole_home_denied = Sandbox.rules.any? do |rule|\n'
+        '    rule[:kind] == :deny_read && Sandbox.rule_paths(rule[:payload]).include?(ENV["HOME"])\n'
+        '  end\n'
+        '  profile = Sandbox.sandbox_profile\n'
+        '  wrapped = Sandbox.wrapped_command("echo", "hi")\n'
+        '  applied = Sandbox.apply!\n'
+        '  applied_policy = Sandbox.applied_policy\n'
+        '  Sandbox.reset_rules!\n'
+        '  Sandbox.add_install_hook_rules(network_access_allowed: false)\n'
+        '  hook_disabled = Sandbox.sandbox_profile\n'
+        '  hook_rules = Sandbox.rules.map { |rule| rule[:kind].to_s }.join(",")\n'
+        '  Sandbox.reset_rules!\n'
+        '  Sandbox.add_install_hook_rules(network_access_allowed: true)\n'
+        '  hook_enabled = Sandbox.sandbox_profile\n'
+        '  Sandbox.allow_read(path: "/tmp/literal", type: :literal)\n'
+        '  ENV["PYBREW_SANDBOX_PATH"] = "' + str(fake_bwrap) + '"\n'
+        '  bwrap = Sandbox.bwrap_policy_args.join(",")\n'
+        '  (prefix/"sandbox-filters.txt").write [\n'
+        '    filter[:path], filter[:type].to_s, Sandbox.path_filter.inspect,\n'
+        '    profile.include?("(literal \\"/tmp/literal\\")").to_s,\n'
+        '    profile.include?("(allow file-write-setugid (subpath \\"/tmp/sub\\"))").to_s,\n'
+        '    profile.include?("(allow file-write-mode (subpath \\"/tmp/sub\\"))").to_s,\n'
+        '    profile.include?("(allow network* (literal \\"/tmp/socket\\"))").to_s,\n'
+        '    git_allow.to_s, aws_denied.to_s, whole_home_denied.to_s,\n'
+        '    wrapped[2].include?("(deny default)").to_s,\n'
+        '    applied.to_s, applied_policy["strict"].to_s,\n'
+        '    hook_disabled.include?("(deny network*)").to_s,\n'
+        '    hook_rules, hook_enabled.include?("(deny network*)").to_s,\n'
+        '    bwrap.include?("--ro-bind-try,/tmp/literal,/tmp/literal").to_s\n'
+        '  ].join("\\n")\n'
+    )
+    keg = _run_raw_body(tmp_path, body, name="ruby-sandbox-filters")
+    assert (keg / "sandbox-filters.txt").read_text().splitlines() == [
+        "/tmp/literal",
+        "literal",
+        "nil",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "false",
+        "true",
+        "true",
+        "true",
+        "true",
+        "allow_write,allow_write,deny_write,deny_read,deny_network",
+        "false",
+        "true",
+    ]
+
+
+def test_macos_sdk_scan_and_system_config_host_details(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    sdk_prefix = tmp_path / "SDKs"
+    for version in ("14.5", "15.0"):
+        sdk_dir = sdk_prefix / f"MacOSX{version}.sdk"
+        sdk_dir.mkdir(parents=True)
+        (sdk_dir / "SDKSettings.json").write_text(json.dumps({"Version": version}))
+    sdk_dir = sdk_prefix / "MacOSX15.0.sdk"
+    monkeypatch.setenv("HOMEBREW_SDK_PREFIX", str(sdk_prefix))
+    monkeypatch.setenv("HOMEBREW_MACOS_VERSION", "14.5")
+    monkeypatch.setenv("HOMEBREW_XCODE_VERSION", "15.3")
+    monkeypatch.setenv("HOMEBREW_CLT_VERSION", "15.3.0.1")
+    monkeypatch.setenv("HOMEBREW_SDKROOT", str(sdk_dir))
+    monkeypatch.setenv("HOMEBREW_SDK_VERSION", "15.0")
+    body = (
+        '  versions = MacOS::SDK.all_sdks.map { |sdk| sdk.version.to_s }.join(",")\n'
+        '  latest = MacOS::SDK.latest_sdk.version.to_s\n'
+        '  selected = MacOS::SDK.sdk_for("14").version.to_s\n'
+        '  read = MacOS::SDK.read_sdk_version(MacOS::SDK.all_sdks.first.path).to_s\n'
+        '  xcode = SystemConfig.describe_xcode\n'
+        '  clt = SystemConfig.describe_clt\n'
+        '  sdk = SystemConfig.describe_sdk\n'
+        '  os = SystemConfig.describe_os\n'
+        '  dump = SystemConfig.dump(StringIO.new).string\n'
+        '  (prefix/"host-details.txt").write [\n'
+        '    versions, latest, selected, read, MacOS.version.to_s,\n'
+        '    MacOS.version_symbol.to_s, xcode, clt, sdk, os,\n'
+        '    dump.include?("OS:").to_s, dump.include?("SDK:").to_s\n'
+        '  ].join("\\n")\n'
+    )
+    keg = _run_raw_body(tmp_path, body, name="ruby-host-details")
+    lines = (keg / "host-details.txt").read_text().splitlines()
+    assert lines[0] == "14.5,15.0"
+    assert lines[1] == "15.0"
+    assert lines[2] == "14.5"
+    assert lines[3] == "14.5"
+    assert lines[4] == "14"
+    assert lines[5] == "sonoma"
+    if is_macos():
+        assert "15.3" in lines[6]
+        assert lines[7] == "15.3.0.1"
+        assert lines[8].startswith("15.0 => ")
+        assert lines[9].startswith("macOS 14.5")
+        assert lines[10:] == ["true", "true"]
+    else:
+        assert lines[10:] == ["true", "true"]
+
+
+def test_github_secondary_rate_limit_errors_and_sync_sleep(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    reset_epoch = int(time.time()) + 120
+    reset_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(reset_epoch))
+    script = tmp_path / "github-errors-curl"
+    script.write_text(
+        "#!/bin/sh\n"
+        'headers=""\n'
+        'prev=""\n'
+        'url=""\n'
+        'for arg in "$@"; do\n'
+        '  if [ "$prev" = "-D" ]; then headers="$arg"; fi\n'
+        '  case "$arg" in http*) url="$arg" ;; esac\n'
+        '  prev="$arg"\n'
+        'done\n'
+        'case "$url" in\n'
+        "  *rate403*) printf 'HTTP/1.1 403 Forbidden\\r\\nx-ratelimit-remaining: 0\\r\\n"
+        "x-ratelimit-reset: __RESET__\\r\\nx-ratelimit-resource: core\\r\\n"
+        "x-ratelimit-limit: 5000\\r\\n\\r\\n' > \"$headers\"; "
+        "printf '%s' '{\"message\":\"API rate limit exceeded\"}' ;;\n"
+        "  *secondary*) printf 'HTTP/1.1 403 Forbidden\\r\\nretry-after: 2\\r\\n\\r\\n' > \"$headers\"; "
+        "printf '%s' '{\"message\":\"You have exceeded a secondary rate limit\"}' ;;\n"
+        "  *rate429*) printf 'HTTP/1.1 429 Too Many Requests\\r\\nretry-after: 1\\r\\n\\r\\n' > \"$headers\"; "
+        "printf '%s' '{\"message\":\"Too many requests\"}' ;;\n"
+        "  *auth*) printf 'HTTP/1.1 401 Unauthorized\\r\\n\\r\\n' > \"$headers\"; "
+        "printf '%s' '{\"message\":\"Bad credentials\"}' ;;\n"
+        "  *notfound*) printf 'HTTP/1.1 404 Not Found\\r\\n\\r\\n' > \"$headers\"; "
+        "printf '%s' '{\"message\":\"Not Found\"}' ;;\n"
+        "  *validate*) printf 'HTTP/1.1 422 Unprocessable Entity\\r\\n\\r\\n' > \"$headers\"; "
+        "printf '%s' '{\"message\":\"Validation Failed\",\"errors\":[{\"code\":\"missing\"}]}' ;;\n"
+        "  *graphql*) printf '%s' '{\"errors\":[{\"type\":\"RATE_LIMITED\",\"message\":\"API rate limit exceeded\"}],"
+        "\"data\":{\"rateLimit\":{\"resetAt\":\"__RESET_AT__\"}}}' ;;\n"
+        "  *) printf 'HTTP/1.1 200 OK\\r\\n\\r\\n' > \"$headers\"; printf '%s' '{\"ok\":true}' ;;\n"
+        "esac\n"
+    )
+    script.write_text(
+        script.read_text()
+        .replace("__RESET_AT__", reset_at)
+        .replace("__RESET__", str(reset_epoch))
+    )
+    script.chmod(0o755)
+    body = (
+        '  ENV["PYBREW_GITHUB_CURL"] = "' + str(script) + '"\n'
+        '  ENV.delete("PYBREW_GITHUB_TOKEN")\n'
+        '  base = "https://api.github.com"\n'
+        '  core = begin\n'
+        '    Utils::GitHub.get_json(base + "/rate403")\n'
+        '    "none"\n'
+        '  rescue => error\n'
+        '    [error.class.name, error.respond_to?(:reset).to_s, error.resource,\n'
+        '     error.limit.to_s, error.message.include?("Rate limit exceeded").to_s,\n'
+        '     (error.reset - Time.now.to_i).between?(60, 200).to_s].join("|")\n'
+        '  end\n'
+        '  secondary = begin\n'
+        '    Utils::GitHub.get_json(base + "/secondary")\n'
+        '    "none"\n'
+        '  rescue => error\n'
+        '    [error.class.name, error.resource,\n'
+        '     (error.reset - Time.now.to_i).between?(1, 10).to_s].join("|")\n'
+        '  end\n'
+        '  too_many = begin\n'
+        '    Utils::GitHub.get_json(base + "/rate429")\n'
+        '    "none"\n'
+        '  rescue => error\n'
+        '    [error.class.name, error.resource].join("|")\n'
+        '  end\n'
+        '  auth = begin\n'
+        '    Utils::GitHub.get_json(base + "/auth")\n'
+        '    "none"\n'
+        '  rescue => error\n'
+        '    error.class.name\n'
+        '  end\n'
+        '  not_found = begin\n'
+        '    Utils::GitHub.get_json(base + "/notfound")\n'
+        '    "none"\n'
+        '  rescue => error\n'
+        '    error.class.name\n'
+        '  end\n'
+        '  missing = begin\n'
+        '    Utils::GitHub.get_json(base + "/notfound", scopes: ["repo"])\n'
+        '    "none"\n'
+        '  rescue => error\n'
+        '    error.class.name\n'
+        '  end\n'
+        '  validation = begin\n'
+        '    Utils::GitHub.get_json(base + "/validate")\n'
+        '    "none"\n'
+        '  rescue => error\n'
+        '    [error.class.name, error.errors.length.to_s].join("|")\n'
+        '  end\n'
+        '  ok = Utils::GitHub.get_json(base + "/ok")["ok"].to_s\n'
+        '  graphql = begin\n'
+        '    Utils::GitHub.graphql_data("query { viewer { login } }")\n'
+        '    "none"\n'
+        '  rescue => error\n'
+        '    [error.class.name, error.resource].join("|")\n'
+        '  end\n'
+        '  constants = [defined?(Utils::GitHub::API::RateLimitExceededError).to_s,\n'
+        '               defined?(GitHub::API::RateLimitExceededError).to_s,\n'
+        '               Utils::GitHub.respond_to?(:sleep_for_rate_limit).to_s].join(",")\n'
+        '  past = Utils::GitHub::API::RateLimitExceededError.new(\n'
+        '    "past", reset: Time.now.to_i - 30, resource: "core", limit: 1\n'
+        '  )\n'
+        '  slept = GitHub::API.sleep_for_rate_limit(past)\n'
+        '  rate_limit_check = Utils::GitHub.rate_limit_error?(past).to_s\n'
+        '  (prefix/"github-errors.txt").write [\n'
+        '    core, secondary, too_many, auth, not_found, missing, validation,\n'
+        '    ok, graphql, constants, slept.to_s, rate_limit_check\n'
+        '  ].join("\\n")\n'
+    )
+    keg = _run_raw_body(tmp_path, body, name="ruby-github-errors")
+    assert (keg / "github-errors.txt").read_text().splitlines() == [
+        "Utils::GitHub::API::RateLimitExceededError|true|core|5000|true|true",
+        "Utils::GitHub::API::RateLimitExceededError|secondary|true",
+        "Utils::GitHub::API::RateLimitExceededError|secondary",
+        "Utils::GitHub::API::AuthenticationFailedError",
+        "Utils::GitHub::API::HTTPNotFoundError",
+        "Utils::GitHub::API::MissingAuthenticationError",
+        "Utils::GitHub::API::ValidationFailedError|1",
+        "true",
+        "Utils::GitHub::API::RateLimitExceededError|graphql",
+        "constant,constant,true",
+        "1",
+        "true",
+    ]
+
+
+def test_keg_codesign_verification_entitlements_and_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    sign_log = tmp_path / "codesign-verify.log"
+
+    def fake_codesign(name: str, verify_exit: int) -> Path:
+        path = tmp_path / name
+        path.write_text(
+            "#!/bin/sh\n"
+            'printf \'%s\\n\' "$@" >> "' + str(sign_log) + '"\n'
+            'case "$1" in\n'
+            '  -d) printf \'%s\' \'<plist><dict><key>com.apple.security.cs.allow-jit</key><true/></dict></plist>\' ;;\n'
+            '  --verify) exit ' + str(verify_exit) + ' ;;\n'
+            "esac\n"
+            "exit 0\n"
+        )
+        path.chmod(0o755)
+        return path
+
+    good = fake_codesign("codesign-good", 0)
+    bad = fake_codesign("codesign-bad", 1)
+    monkeypatch.setenv("PYBREW_INSTALL_NAME_TOOL", shutil.which("true") or "/usr/bin/true")
+    monkeypatch.setenv("PYBREW_CODESIGN", str(good))
+    monkeypatch.setenv("PYBREW_CODESIGN_IDENTITY", "Test Identity")
+    body = (
+        '  (prefix/"bin").mkpath\n'
+        '  macho = prefix/"bin"/"macho"\n'
+        '  macho.binwrite([0xCF, 0xFA, 0xED, 0xFE].pack("C*") + "dummy")\n'
+        '  keg = Keg.new(prefix)\n'
+        '  result = keg.relocate_binary_files({ "/old" => "/new" }, files: [macho], codesign: true)\n'
+        '  plan = keg.binary_relocation_plan({ "/old" => "/new" }, files: [macho], codesign: true)\n'
+        '  single = keg.codesign_patched_binary(macho)\n'
+        '  ENV["PYBREW_CODESIGN"] = "' + str(bad) + '"\n'
+        '  non_strict = keg.relocate_binary_files({ "/old" => "/new" }, files: [macho], codesign: true)\n'
+        '  strict = begin\n'
+        '    keg.relocate_binary_files({ "/old" => "/new" }, files: [macho], codesign: true, strict: true)\n'
+        '    "none"\n'
+        '  rescue => error\n'
+        '    error.class.name + "|" + error.message.include?("codesign verification failed").to_s\n'
+        '  end\n'
+        '  log = Pathname.new(ENV["FAKE_CODESIGN_VERIFY_LOG"]).read\n'
+        '  count = lambda do |token|\n'
+        '    log.lines.map(&:strip).count { |line| line == token }\n'
+        '  end\n'
+        '  (prefix/"codesign-verify.txt").write [\n'
+        '    result["codesigned"].length.to_s,\n'
+        '    result["codesign_verified"].first["verified"].to_s,\n'
+        '    result["entitlements"].first["present"].to_s,\n'
+        '    result["entitlements"].first["raw"].include?("allow-jit").to_s,\n'
+        '    log.include?("--preserve-metadata=entitlements,requirements,flags,runtime").to_s,\n'
+        '    log.include?("Test Identity").to_s,\n'
+        '    plan["codesign_verify_commands"].length.to_s,\n'
+        '    single["signed"].to_s, single["verified"].to_s,\n'
+        '    non_strict["codesign_verified"].first["verified"].to_s,\n'
+        '    strict,\n'
+        '    (count.call("--verify") >= 4).to_s\n'
+        '  ].join("\\n")\n'
+    )
+    monkeypatch.setenv("FAKE_CODESIGN_VERIFY_LOG", str(sign_log))
+    keg = _run_raw_body(tmp_path, body, name="ruby-keg-codesign-verify")
+    assert (keg / "codesign-verify.txt").read_text().splitlines() == [
+        "1",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "1",
+        "true",
+        "true",
+        "false",
+        "RuntimeError|true",
+        "true",
+    ]
+
+
+def test_dynamic_resource_names_stage_target_and_declared_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    archive = _tar_resource(
+        tmp_path / "src" / "dynamic-thing.tar.gz",
+        "dynamic-thing-1.0",
+        {"inner.txt": "dynamic resource\n"},
+    )
+    formula = _formula(
+        "ruby-dynamic-resource",
+        "1.0",
+        (
+            '  name = "dyn" + "-thing"\n'
+            '  resource = resource(name)\n'
+            '  target = prefix/"stage-target"\n'
+            '  returned = resource.stage(target)\n'
+            '  block_value = resource.stage(prefix/"stage-target-2") do |dir|\n'
+            '    (prefix/"stage-block-dir.txt").write dir.to_s\n'
+            '    "blocked"\n'
+            '  end\n'
+            '  (prefix/"dynamic-resource.txt").write [\n'
+            '    resource.name,\n'
+            '    File.file?((target/"dynamic-thing-1.0"/"inner.txt").to_s).to_s,\n'
+            '    (returned.to_s == target.to_s).to_s,\n'
+            '    block_value,\n'
+            '    File.file?((prefix/"stage-target-2"/"dynamic-thing-1.0"/"inner.txt").to_s).to_s,\n'
+            '    resource.stage.to_s == resource.staged_path.to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    formula.resources["dyn-thing"] = SourceSpec(
+        url=archive.as_uri(), sha256=_sha256(archive)
+    )
+    keg = _build(tmp_path, formula, downloader=_downloader(tmp_path))
+    assert (keg / "dynamic-resource.txt").read_text().splitlines() == [
+        "dyn-thing",
+        "true",
+        "true",
+        "blocked",
+        "true",
+        "true",
+    ]
+
+    # Class-body declarations with interpolated names are captured by the
+    # Formulary source loader as real metadata objects.
+    loaded_body = (
+        '  path = prefix/"dynamic-meta.rb"\n'
+        "  path.write <<~'RUBY'\n"
+        '    class DynamicMeta < Formula\n'
+        '      version "3.0"\n'
+        '      resource "res-#{version}" do\n'
+        '        url "https://example.test/res-#{version}.tar.gz"\n'
+        '        sha256 "abc123"\n'
+        '      end\n'
+        '      patch "https://example.test/patch-#{version}.diff"\n'
+        '      patch :DATA\n'
+        '      def install; end\n'
+        '    end\n'
+        '  RUBY\n'
+        '  klass = Formulary.load_formula_from_path("dynamic-meta", path)\n'
+        '  instance = klass.new\n'
+        '  resource = instance.resources.first\n'
+        '  (prefix/"dynamic-meta.txt").write [\n'
+        '    resource.name, resource.url, resource.sha256,\n'
+        '    instance.resource("res-3.0").equal?(resource).to_s,\n'
+        '    instance.patches.length.to_s, instance.patches[0].url,\n'
+        '    instance.patches[1].data?.to_s\n'
+        '  ].join("\\n")\n'
+    )
+    keg2 = _run_raw_body(tmp_path, loaded_body, name="ruby-dynamic-meta")
+    assert (keg2 / "dynamic-meta.txt").read_text().splitlines() == [
+        "res-3.0",
+        "https://example.test/res-3.0.tar.gz",
+        "abc123",
+        "true",
+        "2",
+        "https://example.test/patch-3.0.diff",
+        "true",
+    ]
