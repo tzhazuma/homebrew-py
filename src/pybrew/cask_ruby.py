@@ -962,15 +962,24 @@ def _cask_from_result(
             "pkgutil",
             "quit",
             "login_item",
+            "launchctl",
+            "kext",
+            "script",
+            "early_script",
         ):
             values = zap_directives.get(directive)
             if values is None:
                 continue
             values = values if isinstance(values, list) else [values]
-            cask.zap_directives.setdefault(directive, []).extend(
-                str(item) if not isinstance(item, dict) else dict(item)
-                for item in values
-            )
+            if directive in ("script", "early_script", "login_item"):
+                cask.zap_directives.setdefault(directive, []).extend(
+                    dict(item) if isinstance(item, dict) else str(item)
+                    for item in values
+                )
+            else:
+                cask.zap_directives.setdefault(directive, []).extend(
+                    str(item) for item in values
+                )
         signals = zap_directives.get("signal")
         if signals is not None:
             signals = signals if isinstance(signals, list) else [signals]
@@ -1877,6 +1886,20 @@ class PybrewCaskDSL
       values = login_item.is_a?(Array) ? login_item : [login_item]
       @data["zap_directives"]["login_item"] ||= []
       @data["zap_directives"]["login_item"].concat(values.map { |v| PybrewCaskJSON.value(v) })
+    end
+    %w[launchctl kext].each do |directive|
+      value = kwargs.delete(directive)
+      next if value.nil?
+      values = value.is_a?(Array) ? value : [value]
+      (@data["zap_directives"][directive] ||= []).concat(values.map(&:to_s))
+    end
+    %w[script early_script].each do |directive|
+      value = kwargs.delete(directive)
+      next if value.nil?
+      values = value.is_a?(Array) ? value : [value]
+      (@data["zap_directives"][directive] ||= []).concat(
+        values.map { |v| PybrewCaskJSON.value(v) }
+      )
     end
     unless kwargs.empty?
       record_unsupported(

@@ -3,7 +3,7 @@
 ## Full parity batch 2026-11-05
 
 Closed the documented partial areas across all owners; full suite grew from
-1156 to **1272 passed, 6 skipped**.
+1156 to **1311 passed, 6 skipped**.
 
 - **Cask**: evaluator `zap` now captures trash/delete/rmdir/pkgutil; livecheck
   URL kwargs merge into request headers; installed caskfile falls back to JSON;
@@ -29,8 +29,29 @@ Closed the documented partial areas across all owners; full suite grew from
   index (file:// fixtures work).
 - Real install verification: `REAL INSTALL VERIFIED`.
 - Commits `57d927e` + `54fa7c5`; CI `41973914882` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
-- Inventory of the remaining 18 partial areas: `docs/parity-backlog.md`.
+- Inventory of the remaining 17 partial areas: `docs/parity-backlog.md`.
 
+
+## Residual parity batch 2026-11-05 (round 4)
+
+- Cask: zap `early_script`/`launchctl`/`kext`/`script` actions with bounded
+  fake-tool execution and directive ordering; deferred/date-based livecheck
+  skips; brace livecheck parsing; literal `url_options` propagation.
+- Test DSL: paths-only lazy catalog for >10000-name taps with bounded source
+  prefix scan; short alias/HEAD Version semantics and canonical token hashes;
+  explicit non-fork isolation capability mode.
+- Services: canonical `sh.brew.*` labels are now the default with legacy
+  aliases; doctor/cleanup label recognition; negative-nice validation; service
+  option hash persistence.
+- Superenv: minimum macOS/arch matrix and cross-target warnings, space-safe
+  dependency flags, sandbox backend capability reporting (seccomp/capability
+  drop availability), stricter sandbox boundary tests.
+- Ruby shim: Formulary loader ambiguity matrix/channel namespace edges, 50-page
+  GraphQL reviews/team/sponsorships/tiers, local Xcode/CLT/SDK detection and
+  richer SystemConfig, FormulaInstaller Tab/SBOM receipt fields.
+- Python Version: short pre-release aliases (`a4`/`b2`), HEAD ordering, and
+  canonical raw-token hashes.
+- Full suite: **1311 passed, 6 skipped**; real install verified.
 
 ## Residual parity batch 2026-11-05 (round 3)
 

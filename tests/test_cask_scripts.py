@@ -1029,3 +1029,28 @@ def test_generated_shim_rejects_sudo_at_runtime(tmp_path: Path) -> None:
 
     assert proc.returncode != 0
     assert "sudo is not supported" in proc.stderr
+
+
+def test_generated_shim_rejects_sudo_as_root_at_runtime(
+    tmp_path: Path,
+) -> None:
+    proc = _run_shim_body(
+        tmp_path,
+        'system_command "/bin/echo", args: ["hi"], sudo_as_root: true',
+    )
+
+    assert proc.returncode != 0
+    assert "sudo is not supported" in proc.stderr
+    assert "sudo_as_root" in proc.stderr
+
+
+def test_generated_shim_allows_explicit_sudo_false(tmp_path: Path) -> None:
+    proc = _run_shim_body(
+        tmp_path,
+        'result = system_command "/bin/echo", args: ["ok"], '
+        'sudo: false, sudo_as_root: false\n'
+        'puts result.stdout',
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert "ok" in proc.stdout

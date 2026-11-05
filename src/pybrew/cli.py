@@ -1310,7 +1310,7 @@ def cmd_services(args: argparse.Namespace) -> int:
     loader = _loader(config)
     manager = ServiceManager(config)
     if args.action == "cleanup":
-        removed = manager.cleanup()
+        removed = manager.cleanup(installed_formulae(config, loader))
         for path in removed:
             print(f"Removed orphan service: {path}")
         return 0

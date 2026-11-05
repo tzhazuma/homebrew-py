@@ -1113,6 +1113,11 @@ _SYSTEM_LIBRARY_ROOTS = (
     "/lib",
     "/lib64",
 )
+_SYSTEM_FRAMEWORK_ROOTS = (
+    "/System/Library/Frameworks",
+    "/Library/Frameworks",
+    "/usr/local/lib",
+)
 _RPATH_PREFIXES = (
     "-Wl,-rpath,",
     "-Wl,-rpath=",
@@ -1148,6 +1153,22 @@ def _flag_value(
         return "include", token[2:], 1
     if token.startswith("-isystem") and len(token) > len("-isystem"):
         return "include", token[len("-isystem") :], 1
+    if token in ("-F", "-iframework"):
+        if index + 1 < len(arguments):
+            return "framework", arguments[index + 1], 2
+        return None
+    if token.startswith("-iframework") and len(token) > len("-iframework"):
+        return "framework", token[len("-iframework") :], 1
+    if token.startswith("-F") and len(token) > 2:
+        return "framework", token[2:], 1
+    if token in ("-iquote", "-idirafter"):
+        if index + 1 < len(arguments):
+            return "include", arguments[index + 1], 2
+        return None
+    if token.startswith("-iquote") and len(token) > len("-iquote"):
+        return "include", token[len("-iquote") :], 1
+    if token.startswith("-idirafter") and len(token) > len("-idirafter"):
+        return "include", token[len("-idirafter") :], 1
     if token == "-isysroot":
         if index + 1 < len(arguments):
             return "sysroot", arguments[index + 1], 2
@@ -1175,6 +1196,22 @@ def _flag_value(
         return None
     if token.startswith("-L") and len(token) > 2:
         return "library", token[2:], 1
+    if token in ("-Wl,-L", "-Wl,-L,") and index + 1 < len(arguments):
+        return "library", arguments[index + 1], 2
+    for prefix in ("-Wl,-L,", "-Wl,-L="):
+        if token.startswith(prefix) and len(token) > len(prefix):
+            return "library", token[len(prefix) :], 1
+    if (
+        token == "-Xlinker"
+        and index + 2 < len(arguments)
+        and arguments[index + 1] == "-L"
+    ):
+        return "library", arguments[index + 2], 3
+    if token in ("-Wl,--sysroot",) and index + 1 < len(arguments):
+        return "sysroot", arguments[index + 1], 2
+    for prefix in ("-Wl,--sysroot=", "-Wl,--sysroot,"):
+        if token.startswith(prefix) and len(token) > len(prefix):
+            return "sysroot", token[len(prefix) :], 1
     if token.startswith("-Wa,") and len(token) > len("-Wa,"):
         return "assembler", token[len("-Wa,") :], 1
     for prefix in _RPATH_PREFIXES:
@@ -1372,6 +1409,9 @@ def sanitize_flag_list(
         if kind == "include":
             unsafe = _path_under(normalised, _SYSTEM_INCLUDE_ROOTS)
             is_prefix = normalised == prefix_include
+        elif kind == "framework":
+            unsafe = _path_under(normalised, _SYSTEM_FRAMEWORK_ROOTS)
+            is_prefix = False
         elif kind == "library":
             unsafe = _path_under(normalised, _SYSTEM_LIBRARY_ROOTS)
             is_prefix = normalised == prefix_library
@@ -1451,6 +1491,11 @@ SYSTEM_LIBRARY_ROOTS = (
     "/lib",
     "/lib64",
 )
+SYSTEM_FRAMEWORK_ROOTS = (
+    "/System/Library/Frameworks",
+    "/Library/Frameworks",
+    "/usr/local/lib",
+)
 RPATH_PREFIXES = (
     "-Wl,-rpath,",
     "-Wl,-rpath=",
@@ -1485,6 +1530,22 @@ def flag_value(args, index):
         return "include", token[2:], 1
     if token.startswith("-isystem") and len(token) > len("-isystem"):
         return "include", token[len("-isystem"):], 1
+    if token in ("-F", "-iframework"):
+        if index + 1 < len(args):
+            return "framework", args[index + 1], 2
+        return None
+    if token.startswith("-iframework") and len(token) > len("-iframework"):
+        return "framework", token[len("-iframework"):], 1
+    if token.startswith("-F") and len(token) > 2:
+        return "framework", token[2:], 1
+    if token in ("-iquote", "-idirafter"):
+        if index + 1 < len(args):
+            return "include", args[index + 1], 2
+        return None
+    if token.startswith("-iquote") and len(token) > len("-iquote"):
+        return "include", token[len("-iquote"):], 1
+    if token.startswith("-idirafter") and len(token) > len("-idirafter"):
+        return "include", token[len("-idirafter"):], 1
     if token == "-isysroot":
         if index + 1 < len(args):
             return "sysroot", args[index + 1], 2
@@ -1512,6 +1573,23 @@ def flag_value(args, index):
         return None
     if token.startswith("-L") and len(token) > 2:
         return "library", token[2:], 1
+    if token in ("-Wl,-L", "-Wl,-L,") and index + 1 < len(args):
+        return "library", args[index + 1], 2
+    for flag_prefix in ("-Wl,-L,", "-Wl,-L="):
+        if token.startswith(flag_prefix) and len(token) > len(flag_prefix):
+            return "library", token[len(flag_prefix):], 1
+    if (
+        token == "-Xlinker"
+        and index + 2 < len(args)
+        and args[index + 1] == "-L"
+    ):
+        return "library", args[index + 2], 3
+    if token == "-Wl,--sysroot" and index + 1 < len(args):
+        return "sysroot", args[index + 1], 2
+    if token.startswith("-Wl,--sysroot=") and len(token) > len("-Wl,--sysroot="):
+        return "sysroot", token[len("-Wl,--sysroot="):], 1
+    if token.startswith("-Wl,--sysroot,") and len(token) > len("-Wl,--sysroot,"):
+        return "sysroot", token[len("-Wl,--sysroot,"):], 1
     if token.startswith("-Wa,") and len(token) > len("-Wa,"):
         return "assembler", token[len("-Wa,"):], 1
     for flag_prefix in RPATH_PREFIXES:
@@ -1803,6 +1881,9 @@ while index < len(arguments):
     if kind == "include":
         unsafe = path_under(normalised, SYSTEM_INCLUDE_ROOTS)
         duplicate_prefix = normalised == PREFIX_INCLUDE
+    elif kind == "framework":
+        unsafe = path_under(normalised, SYSTEM_FRAMEWORK_ROOTS)
+        duplicate_prefix = False
     elif kind == "library":
         unsafe = path_under(normalised, SYSTEM_LIBRARY_ROOTS)
         duplicate_prefix = normalised == PREFIX_LIBRARY
@@ -1890,6 +1971,7 @@ class BuildEnvironment:
     env: dict[str, str]
     compiler: CompilerSelection
     superenv: Optional[SuperenvShims] = None
+    warnings: tuple[str, ...] = ()
 
 
 def _first_environment_value(
@@ -2097,10 +2179,18 @@ def _merge_flags(existing: str, additions: Iterable[str]) -> str:
     """Append build flags to ``existing`` without dropping user values."""
 
     result = (existing or "").strip()
-    parts = result.split()
+    try:
+        parts = shlex.split(result)
+    except ValueError:
+        parts = result.split()
     for addition in additions:
-        if addition not in parts:
-            result = f"{result} {addition}".strip()
+        rendered = (
+            shlex.quote(addition)
+            if any(character.isspace() for character in addition)
+            else addition
+        )
+        if addition not in parts and rendered not in parts:
+            result = f"{result} {rendered}".strip()
             parts.append(addition)
     return result
 
@@ -2239,6 +2329,134 @@ _LINUX_ARCH_FLAGS = {
     "i686": "-m32",
     "x86": "-m32",
 }
+
+
+_MINIMUM_MACOS_BY_ARCH = {
+    "arm64": "11.0",
+    "aarch64": "11.0",
+    "x86_64": "10.13",
+    "amd64": "10.13",
+}
+_VERSION_RE = re.compile(r"^\d+(?:\.\d+){0,2}$")
+
+
+def _version_tuple(value: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in value.split("."))
+
+
+def minimum_platform_version(
+    environment: Optional[Mapping[str, str]] = None,
+    *,
+    system: Optional[str] = None,
+    machine: Optional[str] = None,
+) -> Optional[str]:
+    """Return a bounded macOS deployment target from the arch/version matrix.
+
+    Only an explicit ``PYBREW_MIN_OS``/``MACOSX_DEPLOYMENT_TARGET`` enables this;
+    the architecture floor is applied when the request is lower (arm64 11.0,
+    x86_64 10.13).  Non-macOS hosts have no minimum-version matrix here.
+    """
+
+    env = os.environ if environment is None else environment
+    host = platform.system() if system is None else system
+    if host != "Darwin":
+        return None
+    raw = _first_environment_value(
+        env, ("PYBREW_MIN_OS", "MACOSX_DEPLOYMENT_TARGET")
+    )
+    if raw is None or not _VERSION_RE.fullmatch(raw):
+        return None
+    arch = (
+        _first_environment_value(env, ("PYBREW_ARCH",)) or machine or platform.machine()
+    ).lower()
+    floor = _MINIMUM_MACOS_BY_ARCH.get(arch)
+    if floor is not None and _version_tuple(raw) < _version_tuple(floor):
+        return floor
+    return raw
+
+
+def minimum_version_warning(
+    environment: Optional[Mapping[str, str]] = None,
+    *,
+    system: Optional[str] = None,
+    machine: Optional[str] = None,
+) -> Optional[str]:
+    env = os.environ if environment is None else environment
+    host = platform.system() if system is None else system
+    if host != "Darwin":
+        return None
+    explicit = _first_environment_value(
+        env, ("PYBREW_MIN_OS", "MACOSX_DEPLOYMENT_TARGET")
+    )
+    if explicit is None or not _VERSION_RE.fullmatch(explicit):
+        return None
+    arch = (
+        _first_environment_value(env, ("PYBREW_ARCH",)) or machine or platform.machine()
+    ).lower()
+    floor = _MINIMUM_MACOS_BY_ARCH.get(arch)
+    if floor is not None and _version_tuple(explicit) < _version_tuple(floor):
+        return (
+            f"minimum macOS {explicit} is below the {arch} floor {floor}; "
+            "using the architecture floor"
+        )
+    return None
+
+
+def _environment_target_triple(environment: Mapping[str, str]) -> Optional[str]:
+    explicit = _first_environment_value(environment, ("PYBREW_TARGET",))
+    if explicit:
+        return explicit
+    for name in ("CFLAGS", "CXXFLAGS", "LDFLAGS"):
+        try:
+            tokens = shlex.split(environment.get(name, ""))
+        except ValueError:
+            tokens = environment.get(name, "").split()
+        for index, token in enumerate(tokens):
+            if token in ("-target", "--target") and index + 1 < len(tokens):
+                return tokens[index + 1]
+            if token.startswith("--target=") and len(token) > len("--target="):
+                return token[len("--target="):]
+            if token.startswith("-target=") and len(token) > len("-target="):
+                return token[len("-target="):]
+    return None
+
+
+def cross_target_warning(
+    environment: Optional[Mapping[str, str]] = None,
+    *,
+    system: Optional[str] = None,
+    machine: Optional[str] = None,
+) -> Optional[str]:
+    """Warn when an explicit target triple conflicts with the host/arch matrix."""
+
+    env = os.environ if environment is None else environment
+    triple = _environment_target_triple(env)
+    if not triple:
+        return None
+    host = platform.system() if system is None else system
+    expected_arch = (
+        _first_environment_value(env, ("PYBREW_ARCH",)) or machine or platform.machine()
+    ).lower()
+    expected_arch = {"aarch64": "arm64", "amd64": "x86_64"}.get(
+        expected_arch, expected_arch
+    )
+    triple_arch = triple.split("-", 1)[0].lower()
+    triple_arch = {"aarch64": "arm64", "amd64": "x86_64"}.get(
+        triple_arch, triple_arch
+    )
+    lowered = triple.lower()
+    expected_os = "darwin" if host == "Darwin" else "linux"
+    os_matches = (
+        any(part in lowered for part in ("darwin", "apple"))
+        if expected_os == "darwin"
+        else "linux" in lowered
+    )
+    if triple_arch != expected_arch or not os_matches:
+        return (
+            f"target triple {triple!r} is not in the host/arch matrix "
+            f"(expected {expected_arch}/{expected_os})"
+        )
+    return None
 
 
 def architecture_flag(
@@ -2857,6 +3075,71 @@ def _sandbox_executable(environment: Mapping[str, str]) -> Optional[str]:
     return None
 
 
+def sandbox_backend_capabilities(
+    environment: Optional[Mapping[str, str]] = None,
+    *,
+    system: Optional[str] = None,
+    executable: Optional[str] = None,
+) -> dict[str, Any]:
+    """Report the isolation capabilities of the selected sandbox backend.
+
+    This is reporting, not a security guarantee: sandbox-exec uses its policy
+    profile, bwrap reports capability-drop/network support, and an explicit
+    custom backend is reported as unverified.
+    """
+
+    env = os.environ if environment is None else environment
+    host = platform.system() if system is None else system
+    found = executable or _sandbox_executable(env)
+    if found is None:
+        return {
+            "available": False,
+            "backend": "none",
+            "network_isolation": False,
+            "capability_drop": False,
+            "seccomp": False,
+            "seccomp_enforced": False,
+            "in_process_write_boundary": True,
+        }
+    name = Path(found).name
+    if name == "sandbox-exec":
+        return {
+            "available": True,
+            "backend": "sandbox-exec",
+            "network_isolation": True,
+            "capability_drop": False,
+            "seccomp": False,
+            "seccomp_enforced": False,
+            "in_process_write_boundary": True,
+        }
+    if name in ("bwrap", "bubblewrap"):
+        seccomp_available = host == "Linux" and (
+            Path("/proc/self/status").is_file()
+            or Path("/proc/sys/kernel/seccomp/actions_avail").is_file()
+        )
+        return {
+            "available": True,
+            "backend": "bwrap",
+            "network_isolation": True,
+            "capability_drop": True,
+            "seccomp": seccomp_available,
+            "seccomp_enforced": False,
+            "in_process_write_boundary": True,
+        }
+    return {
+        "available": True,
+        "backend": "explicit",
+        "network_isolation": False,
+        "capability_drop": False,
+        "seccomp": False,
+        "seccomp_enforced": False,
+        "in_process_write_boundary": True,
+    }
+
+
+sandbox_capabilities = sandbox_backend_capabilities
+
+
 def plan_build_sandbox(
     command: Iterable[str],
     *,
@@ -2872,6 +3155,10 @@ def plan_build_sandbox(
     sandbox-exec/bwrap is auto-detected.  Enabled-but-unavailable is a hard
     error rather than a silent unsandboxed build.  Rules are intentionally
     bounded: read-only root, explicit writable roots, and no network.
+
+    The Python DSL additionally enforces a best-effort in-process write
+    boundary (build root/keg/cwd) while sandboxing is enabled.  That boundary
+    is Python-level validation, not an OS-enforced seccomp/LSM policy.
     """
 
     env = os.environ if environment is None else environment
@@ -2930,6 +3217,8 @@ def plan_build_sandbox(
         args = [
             executable,
             "--die-with-parent",
+            "--cap-drop",
+            "ALL",
             "--ro-bind",
             "/",
             "/",
@@ -3091,7 +3380,7 @@ def build_environment(
         )
     elif "OBJCXXFLAGS" in env:
         env["OBJCXXFLAGS"] = _merge_flags(
-            env["OBJCXXFLAGS"], include_flags
+            env["OBJCXXFLAGS"], compile_flags
         )
 
     c_standard, cxx_standard = language_standard_flags(env)
@@ -3118,6 +3407,21 @@ def build_environment(
         env["OBJCXXFLAGS"] = _ensure_language_standard(
             env["OBJCXXFLAGS"], effective_objcxx_standard
         )
+
+    warnings: list[str] = []
+    minimum_version = minimum_platform_version(env)
+    minimum_warning = minimum_version_warning(env)
+    if minimum_warning:
+        warnings.append(minimum_warning)
+    if minimum_version is not None:
+        env["MACOSX_DEPLOYMENT_TARGET"] = minimum_version
+        min_flag = f"-mmacosx-version-min={minimum_version}"
+        for name in ("CFLAGS", "CXXFLAGS", "OBJCFLAGS", "OBJCXXFLAGS", "LDFLAGS"):
+            if name in env:
+                env[name] = _merge_flags(env[name], [min_flag])
+    target_warning = cross_target_warning(env)
+    if target_warning:
+        warnings.append(target_warning)
 
     arch = architecture_flag(env)
     if arch is not None:
@@ -3151,8 +3455,15 @@ def build_environment(
         env["CXX"] = compiler.cxx
     if env.get("PYBREW_SUPERENV") == "1":
         env, shims = install_superenv_shims(config, env)
-        return BuildEnvironment(env=env, compiler=compiler, superenv=shims)
-    return BuildEnvironment(env=env, compiler=compiler)
+        return BuildEnvironment(
+            env=env,
+            compiler=compiler,
+            superenv=shims,
+            warnings=tuple(warnings),
+        )
+    return BuildEnvironment(
+        env=env, compiler=compiler, warnings=tuple(warnings)
+    )
 
 
 class SourceBuilder:
@@ -3205,6 +3516,16 @@ class SourceBuilder:
             env=self._build_env(keg),
             cwd=build_root,
         )
+        if context.env.get("PYBREW_SANDBOX") == "1":
+            # Validate the backend before any in-process write or system command;
+            # enabled-but-unavailable must fail instead of silently running
+            # unsandboxed.
+            plan_build_sandbox(
+                ["true"],
+                cwd=context.cwd,
+                writable_roots=self._sandbox_writable_roots(context),
+                environment=context.env,
+            )
         for action in actions:
             self._execute(action, context)
         if not any(keg.iterdir()):
@@ -3400,6 +3721,35 @@ class SourceBuilder:
                 paths.append(candidate)
         return paths
 
+    def _sandbox_writable_roots(self, ctx: BuildContext) -> tuple[Path, ...]:
+        roots = (ctx.cwd, ctx.build_root, ctx.keg)
+        unique: list[Path] = []
+        for root in roots:
+            resolved = root.resolve()
+            if resolved not in unique:
+                unique.append(resolved)
+        return tuple(unique)
+
+    def _check_sandbox_write(self, path: Path, ctx: BuildContext) -> None:
+        """Enforce the in-process DSL write boundary when sandboxing is enabled."""
+
+        if ctx.env.get("PYBREW_SANDBOX") != "1":
+            return
+        candidate = path if path.is_absolute() else ctx.cwd / path
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            resolved = candidate.absolute()
+        for root in self._sandbox_writable_roots(ctx):
+            try:
+                resolved.relative_to(root)
+                return
+            except ValueError:
+                continue
+        raise BuildError(
+            f"{self.formula.name}: in-process sandbox write boundary rejects {resolved}"
+        )
+
     def _build_env(self, keg: Path) -> dict[str, str]:
         prepared = build_environment(
             self.config,
@@ -3408,6 +3758,8 @@ class SourceBuilder:
         )
         if prepared.compiler.warning:
             print(f"warning: {prepared.compiler.warning}", file=sys.stderr)
+        for message in prepared.warnings:
+            print(f"warning: {message}", file=sys.stderr)
         return prepared.env
 
     # -- AST evaluation --------------------------------------------------
@@ -3430,7 +3782,9 @@ class SourceBuilder:
             name = action.name
             value = self._scalar(self._resolve(action.value, ctx))
             if action.create:
-                Path(value).mkdir(parents=True, exist_ok=True)
+                created = Path(value)
+                self._check_sandbox_write(created, ctx)
+                created.mkdir(parents=True, exist_ok=True)
             current = ctx.env.get(name, "")
             ctx.env[name] = os.pathsep.join([value, current]) if current else value
         elif isinstance(action, EnvDelete):
@@ -3448,6 +3802,7 @@ class SourceBuilder:
                     file_path = Path(path)
                     if not file_path.is_file():
                         continue
+                    self._check_sandbox_write(file_path, ctx)
                     text = file_path.read_text(errors="replace")
                     if search not in text:
                         raise BuildError(
@@ -3489,6 +3844,7 @@ class SourceBuilder:
                     hint=f"{ctx.formula.name}-{action.name}",
                 )
                 stage = self._resource_stage_path(ctx.build_root, action.name)
+                self._check_sandbox_write(stage, ctx)
                 if stage.exists():
                     shutil.rmtree(stage)
                 stage.mkdir(parents=True)
@@ -3721,6 +4077,7 @@ class SourceBuilder:
 
     def _install_files(self, action: InstallFiles, ctx: BuildContext) -> None:
         target_dir = self._destination_dir(action.directory, ctx)
+        self._check_sandbox_write(target_dir, ctx)
         target_dir.mkdir(parents=True, exist_ok=True)
         if not action.args:
             return
@@ -3740,6 +4097,7 @@ class SourceBuilder:
                 copied = True
                 source = Path(match)
                 destination = target_dir / source.name
+                self._check_sandbox_write(destination, ctx)
                 if destination.exists() or destination.is_symlink():
                     if destination.is_dir() and not destination.is_symlink():
                         shutil.rmtree(destination)
@@ -3784,12 +4142,15 @@ class SourceBuilder:
         args = [self._resolve(arg, ctx) for arg in action.args]
         if action.kind == "mkdir":
             for value in self._flatten(args):
-                (ctx.cwd / str(value)).mkdir(parents=True, exist_ok=True)
+                target = ctx.cwd / str(value)
+                self._check_sandbox_write(target, ctx)
+                target.mkdir(parents=True, exist_ok=True)
         elif action.kind in ("mv", "cp"):
             if len(args) < 2:
                 raise BuildError(f"{self.formula.name}: {action.kind} needs two arguments")
             source = ctx.cwd / str(self._scalar(args[0]))
             destination = ctx.cwd / str(self._scalar(args[1]))
+            self._check_sandbox_write(destination, ctx)
             if action.kind == "mv":
                 shutil.move(str(source), str(destination))
             elif source.is_dir():
@@ -3799,6 +4160,7 @@ class SourceBuilder:
         elif action.kind == "rm":
             for value in self._flatten(args):
                 target = ctx.cwd / str(value)
+                self._check_sandbox_write(target, ctx)
                 if target.is_dir() and not target.is_symlink():
                     shutil.rmtree(target, ignore_errors=True)
                 else:
@@ -3811,10 +4173,14 @@ class SourceBuilder:
                 raise BuildError(f"{self.formula.name}: chmod needs mode and path")
             mode = int(str(args[0]), 8) if isinstance(args[0], str) else int(args[0])
             for value in self._flatten(args[1:]):
-                os.chmod(ctx.cwd / str(value), mode)
+                target = ctx.cwd / str(value)
+                self._check_sandbox_write(target, ctx)
+                os.chmod(target, mode)
         elif action.kind == "touch":
             for value in self._flatten(args):
-                (ctx.cwd / str(value)).touch()
+                target = ctx.cwd / str(value)
+                self._check_sandbox_write(target, ctx)
+                target.touch()
         elif action.kind == "env_append":
             if len(args) < 2:
                 raise BuildError(f"{self.formula.name}: ENV append needs name and value")
@@ -3830,6 +4196,7 @@ class SourceBuilder:
                 raise BuildError(f"{self.formula.name}: write_exec_script needs a source")
             source = ctx.cwd / str(args[1])
             target = ctx.keg / "bin" / source.name
+            self._check_sandbox_write(target, ctx)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
             os.chmod(target, 0o755)

@@ -2717,6 +2717,12 @@ def test_superenv_shim_scrubs_separated_wl_rpath_forms(tmp_path: Path) -> None:
             "/usr/local/lib",
             "-Wl,-R",
             "/lib64",
+            "-F",
+            "/System/Library/Frameworks",
+            "-Wl,-L,/usr/lib",
+            "-Xlinker",
+            "-L",
+            "/usr/lib64",
             "-c",
             "unit.c",
         ],
@@ -2729,3 +2735,219 @@ def test_superenv_shim_scrubs_separated_wl_rpath_forms(tmp_path: Path) -> None:
     assert not any("/usr/lib" in token for token in argv)
     assert not any("/usr/local/lib" in token for token in argv)
     assert not any("/lib64" in token for token in argv)
+
+
+def test_full_flag_scrub_policy_framework_linker_and_space_safe(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    tokens = source_builder.sanitize_flag_list(
+        [
+            "-F",
+            "/System/Library/Frameworks",
+            "-iframework",
+            "/Library/Frameworks",
+            "-F/opt/foreign/Frameworks",
+            "-iquote",
+            "/usr/include",
+            "-idirafter",
+            "/usr/local/include",
+            "-Wl,-L,/usr/lib",
+            "-Wl,-L=/lib",
+            "-Xlinker",
+            "-L",
+            "/usr/lib64",
+            "-Wl,--sysroot,/SDK",
+            "-std=c11",
+        ],
+        tmp_path / "prefix",
+    )
+    text = " ".join(tokens)
+    assert "/System/Library/Frameworks" not in text
+    assert "/Library/Frameworks" not in text
+    assert "/usr/include" not in text
+    assert "/usr/local/include" not in text
+    assert "/usr/lib" not in text
+    assert "/usr/lib64" not in text
+    assert "/opt/foreign/Frameworks" in text
+    assert "-Wl,--sysroot,/SDK" in text
+    assert "-std=c11" in tokens
+
+    dependency = tmp_path / "dependency with space"
+    (dependency / "include").mkdir(parents=True)
+    (dependency / "lib").mkdir()
+    config = Config.default(
+        prefix=tmp_path / "prefix with space",
+        taps=[],
+        cache=tmp_path / "cache",
+    )
+    env = source_builder.build_environment(
+        config,
+        {"PATH": "/usr/bin:/bin"},
+        dependency_paths=[dependency],
+    ).env
+    assert f"-I{dependency / 'include'}" in shlex.split(env["CFLAGS"])
+    assert f"-L{dependency / 'lib'}" in shlex.split(env["LDFLAGS"])
+    assert f"-I{config.prefix / 'include'}" in shlex.split(env["CPPFLAGS"])
+
+
+def test_minimum_version_matrix_and_cross_target_validation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pybrew.source_builder as source_builder
+
+    assert (
+        source_builder.minimum_platform_version(
+            {"PYBREW_MIN_OS": "10.9", "PYBREW_ARCH": "arm64"},
+            system="Darwin",
+            machine="arm64",
+        )
+        == "11.0"
+    )
+    assert (
+        source_builder.minimum_platform_version(
+            {"PYBREW_MIN_OS": "10.9", "PYBREW_ARCH": "x86_64"},
+            system="Darwin",
+            machine="x86_64",
+        )
+        == "10.13"
+    )
+    warning = source_builder.minimum_version_warning(
+        {"PYBREW_MIN_OS": "10.9", "PYBREW_ARCH": "arm64"},
+        system="Darwin",
+        machine="arm64",
+    )
+    assert warning is not None and "floor" in warning
+    assert (
+        source_builder.minimum_platform_version(
+            {"PYBREW_MIN_OS": "bogus"}, system="Darwin", machine="arm64"
+        )
+        is None
+    )
+
+    mismatched = source_builder.cross_target_warning(
+        {"PYBREW_TARGET": "x86_64-apple-darwin"},
+        system="Darwin",
+        machine="arm64",
+    )
+    assert mismatched is not None and "matrix" in mismatched
+    assert (
+        source_builder.cross_target_warning(
+            {"PYBREW_TARGET": "arm64-apple-darwin"},
+            system="Darwin",
+            machine="arm64",
+        )
+        is None
+    )
+
+    monkeypatch.setattr(source_builder.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(source_builder.platform, "machine", lambda: "arm64")
+    config = Config.default(prefix=tmp_path / "prefix", cache=tmp_path / "cache")
+    prepared = source_builder.build_environment(
+        config,
+        {
+            "PATH": "/usr/bin:/bin",
+            "PYBREW_MIN_OS": "10.9",
+            "PYBREW_ARCH": "arm64",
+        },
+    )
+    assert prepared.env["MACOSX_DEPLOYMENT_TARGET"] == "11.0"
+    assert "-mmacosx-version-min=11.0" in shlex.split(prepared.env["CFLAGS"])
+    assert any("floor" in item for item in prepared.warnings)
+
+
+def test_sandbox_inprocess_write_boundary_and_capabilities(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    build_root = tmp_path / "build-root"
+    build_root.mkdir()
+    keg = tmp_path / "keg"
+    keg.mkdir()
+    formula = Formula(name="boundary", version="1.0")
+    context = source_builder.BuildContext(
+        formula=formula,
+        config=config,
+        keg=keg,
+        build_root=build_root,
+        env={"PYBREW_SANDBOX": "1"},
+        cwd=build_root,
+    )
+    builder = source_builder.SourceBuilder(formula, config)
+    builder._check_sandbox_write(build_root / "allowed.txt", context)
+    with pytest.raises(source_builder.BuildError, match="boundary rejects"):
+        builder._check_sandbox_write(tmp_path / "outside.txt", context)
+
+    fake_bwrap = tmp_path / "bwrap"
+    fake_bwrap.write_text("#!/bin/sh\nexit 0\n")
+    fake_bwrap.chmod(0o755)
+    bwrap = source_builder.sandbox_backend_capabilities(
+        {"PYBREW_SANDBOX_BINARY": str(fake_bwrap)},
+        system="Linux",
+    )
+    assert bwrap["backend"] == "bwrap"
+    assert bwrap["capability_drop"] is True
+    assert bwrap["network_isolation"] is True
+    assert bwrap["in_process_write_boundary"] is True
+
+    fake_exec = tmp_path / "sandbox-exec"
+    fake_exec.write_text("#!/bin/sh\nexit 0\n")
+    fake_exec.chmod(0o755)
+    sandbox_exec = source_builder.sandbox_backend_capabilities(
+        {"PYBREW_SANDBOX_BINARY": str(fake_exec)},
+        system="Darwin",
+    )
+    assert sandbox_exec["backend"] == "sandbox-exec"
+    assert sandbox_exec["seccomp"] is False
+    assert sandbox_exec["capability_drop"] is False
+
+    missing = source_builder.sandbox_backend_capabilities(
+        {"PYBREW_SANDBOX_PATH": ""}, system="Darwin"
+    )
+    assert missing["available"] is False
+
+
+def test_sandbox_rejects_dsl_write_outside_build_root(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    project = tmp_path / "boundary-src"
+    project.mkdir()
+    (project / "README").write_text("boundary\n")
+    outside = tmp_path / "outside.txt"
+    outside.write_text("outside\n")
+    tap, _ = _make_tap(
+        tmp_path,
+        "boundary-dsl",
+        "1.0",
+        project,
+        "\n".join(
+            [
+                f'    mkdir "{outside}"',
+                '    bin.install "README"',
+            ]
+        ),
+    )
+    config = Config.default(
+        prefix=tmp_path / "boundary-prefix",
+        taps=[tap],
+        cache=tmp_path / "boundary-cache",
+    )
+    config.ensure()
+    loader = FormulaLoader(discover_taps([tap]))
+    formula = loader.load("boundary-dsl")
+    sandbox = tmp_path / "boundary-sandbox"
+    sandbox.write_text("#!/bin/sh\nexec \"$@\"\n")
+    sandbox.chmod(0o755)
+    installer = Installer(
+        config,
+        loader,
+        environment={
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "PYBREW_SANDBOX": "1",
+            "PYBREW_SANDBOX_BINARY": str(sandbox),
+        },
+    )
+    with pytest.raises(source_builder.BuildError, match="boundary rejects"):
+        installer.install(formula, InstallOptions(build_from_source=True))
+    assert outside.read_text() == "outside\n"

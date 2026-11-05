@@ -2244,3 +2244,43 @@ def test_literal_parser_livecheck_strategy_executes(allow_ruby: None) -> None:
 
     assert result["executed"] is True
     assert result["result"] == ["2.0"]
+
+
+@requires_ruby
+def test_evaluator_captures_zap_launchctl_kext_scripts(
+    allow_ruby: None,
+) -> None:
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  zap launchctl: ["com.example.agent"],\n'
+            '      kext: ["com.example.kext"],\n'
+            '      early_script: { executable: "/bin/echo", args: ["early"] },\n'
+            '      script: { executable: "/bin/echo", args: ["late"] }\n'
+        )
+    )
+
+    assert cask.zap_directives["launchctl"] == ["com.example.agent"]
+    assert cask.zap_directives["kext"] == ["com.example.kext"]
+    assert cask.zap_directives["early_script"] == [
+        {"executable": "/bin/echo", "args": ["early"]}
+    ]
+    assert cask.zap_directives["script"] == [
+        {"executable": "/bin/echo", "args": ["late"]}
+    ]
+
+
+@requires_ruby
+def test_literal_brace_livecheck_strategy_executes(allow_ruby: None) -> None:
+    cask = parse_cask_source(
+        'cask "brace-strategy" do\n'
+        '  version "2.0"\n'
+        '  livecheck { url "https://example.com/tool"; '
+        'strategy :page_match { |page| page.scan(/tool-(\\d+)/).flatten } }\n'
+        'end\n'
+    )
+
+    result = cask.check_livecheck(page="tool-2.0")
+
+    assert result["executed"] is True
+    assert result["result"] == ["2"]

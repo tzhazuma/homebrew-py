@@ -67,6 +67,9 @@ KEEP_ALIVE_KEYS = (
 PROCESS_TYPES = ("background", "standard", "interactive", "adaptive")
 RUN_TYPES = ("immediate", "interval", "cron")
 
+#: Homebrew's accepted ``nice`` range (``-20`` highest priority to ``19``).
+NICE_RANGE = (-20, 19)
+
 #: Socket protocols understood by launchd's ``Sockets`` dictionary.
 SOCKET_TYPES = ("tcp", "udp")
 
@@ -127,13 +130,13 @@ def service_path_mode(default: str = "pybrew") -> str:
     return default
 
 
-def service_name_style(default: str = "pybrew") -> str:
+def service_name_style(default: str = "canonical") -> str:
     """Return the default service label style (``canonical`` or ``pybrew``).
 
-    ``PYBREW_SERVICE_NAME_STYLE=canonical`` selects Homebrew's
-    ``sh.brew.<name>`` labels; unset/unknown values keep the caller's default
-    (pybrew's legacy ``homebrew.mxcl.<name>``).  Aliases are always resolvable
-    regardless of style, so switching does not strand existing service files.
+    Homebrew's canonical ``sh.brew.<name>`` labels are the default now;
+    ``PYBREW_SERVICE_NAME_STYLE=pybrew|legacy|mxcl`` opts back into pybrew's
+    historical ``homebrew.mxcl.<name>`` default.  Both forms always remain
+    resolvable as aliases, so switching does not strand existing service files.
     """
 
     raw = os.environ.get(SERVICE_NAME_STYLE_ENV, "").strip().lower()
@@ -524,6 +527,12 @@ class ServiceSpec:
     #: schedule fields so directly constructed specs keep working.
     run_type_explicit: bool = False
 
+    def __post_init__(self) -> None:
+        # Homebrew validates the cross-field nice/require_root constraints when
+        # the Service object is constructed; keep direct ServiceSpec callers
+        # equally safe (the parser/from_hash validate again after directives).
+        validate_service_spec(self)
+
     @classmethod
     def from_hash(cls, data: dict[str, Any]) -> "ServiceSpec":
         """Build a spec from a Homebrew-style service hash or ``to_hash()``.
@@ -625,7 +634,9 @@ class ServiceSpec:
         if isinstance(values.get("process_type"), str):
             values["process_type"] = values["process_type"].lstrip(":").lower()
 
-        return cls(**values)
+        spec = cls(**values)
+        validate_service_spec(spec)
+        return spec
 
     def to_hash(self) -> dict[str, Any]:
         """Return a Homebrew-shaped service hash for persistence/API use.
@@ -779,19 +790,21 @@ class ServiceSpec:
         return bool(self.require_root)
 
     def nice_requires_root_p(self) -> bool:
-        return bool(self.nice) and bool(self.require_root)
+        """Return true when a negative nice value lacks ``require_root``.
 
-    def default_service_name(self, formula_name: str) -> str:
-        """Return pybrew's historical default label (``homebrew.mxcl.*``).
-
-        Kept for backward compatibility; Homebrew's canonical label is
-        :meth:`canonical_service_name` and :meth:`service_names` lists both.
+        Mirrors Homebrew's ``Service#nice_requires_root?``: negative nice values
+        raise process priority and therefore require root.
         """
 
-        return self.pybrew_legacy_service_name(formula_name)
+        return bool(self.nice is not None and self.nice < 0 and not self.require_root)
+
+    def default_service_name(self, formula_name: str) -> str:
+        """Return the default service label (Homebrew canonical ``sh.brew.*``)."""
+
+        return self.canonical_service_name(formula_name)
 
     def default_plist_name(self, formula_name: str) -> str:
-        return f"{self.default_service_name(formula_name)}.plist"
+        return self.canonical_plist_name(formula_name)
 
     @staticmethod
     def canonical_service_name(formula_name: str) -> str:
@@ -1039,6 +1052,28 @@ class ServiceSpec:
         return mapping.get(str(weekday), str(weekday))
 
 
+def validate_service_spec(spec: ServiceSpec) -> None:
+    """Validate Homebrew's cross-field service constraints.
+
+    Homebrew rejects ``nice`` values outside ``-20..19`` and negative nice
+    values without ``require_root: true`` (raising during ``Service.new``).
+    Both service parsers and ``ServiceSpec.from_hash`` call this after all
+    directives are known so the directive order does not matter.
+    """
+
+    if spec.nice is None:
+        return
+    low, high = NICE_RANGE
+    if not low <= spec.nice <= high:
+        raise ServiceError(
+            f"nice must be between {low} and {high}, got {spec.nice}"
+        )
+    if spec.nice < 0 and not spec.require_root:
+        raise ServiceError(
+            "nice: require_root true is required for negative nice values"
+        )
+
+
 #: Cron keys accepted by Homebrew's service DSL.
 CRON_KEY_ALIASES = {
     "minute": "Minute",
@@ -1084,6 +1119,19 @@ class _ServiceValueParser:
         if token.kind == "sym":
             self.advance()
             return str(token.value)
+        if (
+            token.kind == "punct"
+            and token.value == "-"
+            and self.peek(1).kind == "num"
+        ):
+            # Negative numeric literals (notably ``nice -5``) arrive as a
+            # separate minus token followed by a number.
+            self.advance()
+            value = self.advance().value
+            try:
+                return -float(value) if isinstance(value, float) else -int(value)
+            except (TypeError, ValueError):
+                return f"-{value}"
         if token.kind == "num":
             self.advance()
             return token.value
@@ -1275,6 +1323,7 @@ def parse_service_block(
     if context is not None:
         spec.user_config_home = str(context)
     spec.formula_name = str(formula.name)
+    validate_service_spec(spec)
     return spec
 
 
@@ -1747,7 +1796,7 @@ class ServiceManager:
         if self.backend is None:
             self.backend = "systemd" if sys.platform.startswith("linux") else "launchd"
         self.name_style = (
-            service_name_style("pybrew")
+            service_name_style("canonical")
             if name_style is None
             else ("canonical" if name_style == "canonical" else "pybrew")
         )
@@ -1773,9 +1822,10 @@ class ServiceManager:
         """Return the label written by this manager.
 
         Explicit ``name macos:/linux:`` stanzas always win.  Otherwise
-        ``sh.brew.<name>`` is used when ``PYBREW_SERVICE_NAME_STYLE=canonical``
-        (or ``name_style="canonical"``) and pybrew's historical
-        ``homebrew.mxcl.<name>`` stays the default for compatibility.
+        Homebrew's canonical ``sh.brew.<name>`` is the default;
+        ``PYBREW_SERVICE_NAME_STYLE=pybrew|legacy|mxcl`` (or
+        ``name_style="pybrew"``) opts back into pybrew's historical
+        ``homebrew.mxcl.<name>`` label.  Both are always resolvable as aliases.
         """
 
         if spec is not None:
@@ -2249,27 +2299,35 @@ class ServiceManager:
                 return "started"
         return "stopped"
 
-    def cleanup(self) -> list[Path]:
+    def cleanup(
+        self, formulae: Optional[Iterable[Formula]] = None
+    ) -> list[Path]:
         """Remove service files belonging to formulae that are no longer installed.
 
-        Recognises both canonical ``sh.brew.*`` and pybrew's legacy
-        ``homebrew.mxcl.*`` file names.  Explicit custom labels cannot be
-        attributed back to a formula and are left alone (documented limitation).
+        Recognises canonical ``sh.brew.*``, Homebrew legacy ``homebrew.<name>``
+        and pybrew legacy ``homebrew.mxcl.*`` labels, plus explicit custom
+        labels when ``formulae`` (normally installed formulae from the loader)
+        is supplied.  Without ``formulae`` custom labels cannot be attributed
+        back to a formula and are treated as orphans.
         """
 
         removed: list[Path] = []
         if not self.directory.is_dir():
             return removed
-        prefixes = (CANONICAL_SERVICE_PREFIX, PYBREW_LEGACY_SERVICE_PREFIX)
-        suffix_ok = (".plist", ".service", ".timer", ".socket")
+        known = known_service_labels(formulae or [], self.config, manager=self)
         for path in sorted(self.directory.iterdir()):
-            name = path.name
-            prefix = next((item for item in prefixes if name.startswith(item)), None)
-            if prefix is None or not name.endswith(suffix_ok):
+            label = service_label_from_path(path.name)
+            if label is None:
                 continue
-            formula_name = name[len(prefix) :].rsplit(".", 1)[0]
-            if self.config.opt_path(formula_name).is_dir():
+            owner = known.get(label)
+            if owner is not None and self.config.opt_path(owner).is_dir():
                 continue
+            formula_name = service_formula_name_from_label(label)
+            if formula_name is not None and self.config.opt_path(formula_name).is_dir():
+                continue
+            if owner is not None:
+                # Known custom label but its owner is no longer installed.
+                pass
             try:
                 path.unlink()
                 removed.append(path)
@@ -2303,6 +2361,80 @@ class ServiceManager:
                 }
             )
         return rows
+
+
+#: Service file suffixes managed by launchd/systemd.
+SERVICE_FILE_SUFFIXES = (".plist", ".service", ".timer", ".socket")
+
+
+def service_label_from_path(name: str) -> Optional[str]:
+    """Return the service label for a filename, or ``None`` when unrelated."""
+
+    for suffix in SERVICE_FILE_SUFFIXES:
+        if name.endswith(suffix):
+            label = name[: -len(suffix)]
+            return label or None
+    return None
+
+
+def service_formula_name_from_label(label: str) -> Optional[str]:
+    """Return the formula name encoded in a standard service label.
+
+    Handles ``sh.brew.<name>``, ``homebrew.mxcl.<name>`` (pybrew/launchd
+    legacy) and ``homebrew.<name>`` (Homebrew systemd legacy).  Custom labels
+    return ``None`` and need the installed-formula label index.
+    """
+
+    for prefix in (
+        CANONICAL_SERVICE_PREFIX,
+        PYBREW_LEGACY_SERVICE_PREFIX,
+        HOMEBREW_LEGACY_SERVICE_PREFIX,
+    ):
+        if label.startswith(prefix):
+            name = label[len(prefix) :]
+            return name or None
+    return None
+
+
+def formula_service_labels(
+    formula: Formula, spec: Optional[ServiceSpec] = None
+) -> set[str]:
+    """Return every label an installed formula's service may use.
+
+    Includes all standard prefix/legacy forms for the formula name and any
+    explicit ``name macos:/linux:`` labels captured in the spec.
+    """
+
+    labels = {
+        ServiceSpec.canonical_service_name(formula.name),
+        ServiceSpec.pybrew_legacy_service_name(formula.name),
+        ServiceSpec.legacy_service_name(formula.name),
+    }
+    if spec is not None:
+        if spec.plist_name:
+            labels.add(str(spec.plist_name))
+        if spec.service_name:
+            labels.add(str(spec.service_name))
+    return labels
+
+
+def known_service_labels(
+    formulae: Iterable[Formula],
+    config: Config,
+    manager: Optional["ServiceManager"] = None,
+) -> dict[str, str]:
+    """Map every service label of installed ``formulae`` to its formula name."""
+
+    manager = manager or ServiceManager(config)
+    known: dict[str, str] = {}
+    for formula in formulae:
+        try:
+            spec = manager.spec_for(formula)
+        except (ServiceError, OSError, ValueError):
+            spec = None
+        for label in formula_service_labels(formula, spec):
+            known.setdefault(label, formula.name)
+    return known
 
 
 def installed_formulae(config: Config, loader) -> list[Formula]:

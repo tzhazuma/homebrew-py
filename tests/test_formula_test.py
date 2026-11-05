@@ -3052,6 +3052,8 @@ def test_dependency_non_fork_fallback_runs_in_process(tmp_path: Path) -> None:
     formula, config = _installed_formula(
         tmp_path,
         """do
+  assert_equal :in_process_explicit,
+               FormulaTestContext.dependency_isolation_mode
   ENV["PARENT_TESTPATH"] = testpath.to_s
   Formula["dep-lib"].test
   assert_path_exists testpath/"fallback-marker"
@@ -3237,4 +3239,90 @@ end
         ruby=_REAL_RUBY,
         env={"PYBREW_DEPENDENCY_TIMEOUT": "0.3"},
     )
+    assert result.success is True
+
+
+@requires_ruby
+def test_lazy_alias_and_canonical_beyond_eager_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(formula_test_module, "MAX_EAGER_FORMULA_ENTRIES", 3)
+    monkeypatch.setattr(formula_test_module, "MAX_EAGER_SOURCE_ALIAS_ENTRIES", 3)
+    tap = tmp_path / "lazy-tap"
+    for index in range(6):
+        _write_tap_formula(tap, f"tool-{index}", None)
+    _write_tap_formula(tap, "zz-target", None, aliases=["lazy-alias"])
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  alias_ref = Formula[["lazy", "alias"].join("-")]
+  assert_equal "zz-target", alias_ref.name
+  direct = Formula[["tool", "5"].join("-")]
+  assert_equal "tool-5", direct.name
+end
+""",
+        taps=[tap],
+    )
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_minitest_pattern_host_version_differences(tmp_path: Path) -> None:
+    source = """do
+  assert_kind_of Class, NoMatchingPatternError
+  assert FormulaTestContext::NO_MATCHING_PATTERN_ERROR.equal?(NoMatchingPatternError)
+  if RUBY_VERSION >= "2.7"
+    value = eval("case [1, 2]; in [Integer, Integer]; true; end")
+    assert_equal true, value
+    mismatch = begin
+      assert_pattern { eval("case [1]; in [Integer, Integer]; true; end") }
+    rescue FormulaTestFailure => error
+      error
+    end
+    assert_match(/does not match|length|pattern/i, mismatch.message)
+    refute_pattern { eval("case [1]; in [Integer, Integer]; true; end") }
+  else
+    assert_pattern { 1 + 1 }
+    mismatch = begin
+      assert_pattern { raise NoMatchingPatternError, "simulated 2.6 mismatch" }
+    rescue FormulaTestFailure => error
+      error
+    end
+    assert_match(/simulated 2.6 mismatch/, mismatch.message)
+    refute_pattern { raise NoMatchingPatternError, "simulated 2.6 mismatch" }
+  end
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_dsl_version_short_aliases_and_head_edges(tmp_path: Path) -> None:
+    source = """do
+  assert Version.new("1.2.3a4") == Version.new("1.2.3alpha4")
+  assert Version.new("1.2.3b2") == Version.new("1.2.3beta2")
+  assert Version.new("1.2.3alpha4") < Version.new("1.2.3beta2")
+  assert Version.new("1.2.3a4") < Version.new("1.2.3")
+  assert Version.new("1.2.3") > Version.new("1.2.3b2")
+  assert Version.new("1.2.3-p34") > Version.new("1.2.3")
+  assert_equal ["numeric", "numeric", "numeric", "alpha"],
+               Version.new("1.2.3a4").token_classes
+  assert Version.new("HEAD") > Version.new("1.2.3")
+  assert Version.new("HEAD-fedcba") > Version.new("1.2.3")
+  assert Version.new("1.2.3") < Version.new("HEAD")
+  assert Version.new("HEAD-abcdef") == Version.new("HEAD-fedcba")
+  assert_equal Version.new("HEAD").hash, Version.new("HEAD-abc").hash
+  assert PkgVersion.parse("HEAD_2") > Version.new("1.2.3")
+
+  assert_equal Version::AlphaToken.new("a", 4).hash,
+               Version::AlphaToken.new("alpha", 4).hash
+  assert Version::Token.create("a4").is_a?(Version::AlphaToken)
+  assert Version::Token.create("b2").is_a?(Version::BetaToken)
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
     assert result.success is True

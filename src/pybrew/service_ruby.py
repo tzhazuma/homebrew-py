@@ -99,6 +99,7 @@ from .services import (
     service_path_mode,
     service_paths,
     std_service_path_env_value,
+    validate_service_spec,
 )
 
 #: Environment variable that opts a caller into arbitrary-Ruby service parsing.
@@ -508,6 +509,7 @@ def _spec_from_result(
     if isinstance(shim_warnings, list):
         collected.extend(str(warning) for warning in shim_warnings)
     spec.warnings = collected
+    validate_service_spec(spec)
     return spec
 
 
@@ -800,7 +802,7 @@ class PybrewServiceDSL
   end
 
   def nice_requires_root?
-    !@data["nice"].nil? && require_root
+    !@data["nice"].nil? && @data["nice"].to_i.negative? && !require_root
   end
 
   # Homebrew's canonical label is ``sh.brew.<name>``; pybrew keeps the legacy

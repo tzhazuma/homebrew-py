@@ -767,8 +767,11 @@ class PybrewCaskScriptContext
     must_succeed = options.key?(:must_succeed) ? options.delete(:must_succeed) : true
     input = options.delete(:input)
     timeout = options.delete(:timeout)
-    if options.delete(:sudo) || options.delete(:sudo_as_root)
-      raise ArgumentError, "system_command: sudo is not supported by pybrew cask scripts"
+    sudo = options.delete(:sudo)
+    sudo_as_root = options.delete(:sudo_as_root)
+    if sudo || sudo_as_root
+      raise ArgumentError,
+        "system_command: sudo is not supported by pybrew cask scripts (sudo_as_root is also unsupported)"
     end
     arguments = [command, *Array(args_option), *positional]
     environment, argv, spawn_options =
@@ -3390,6 +3393,116 @@ class CaskInstaller:
         {"HUP", "INT", "QUIT", "TERM", "KILL", "USR1", "USR2", "STOP", "CONT"}
     )
 
+    def _zap_scripts(self, cask: Cask, directive: str) -> None:
+        """Run bounded ``early_script``/``script`` zap directives."""
+
+        for item in cask.zap_directives.get(directive, []):
+            if isinstance(item, dict):
+                executable = item.get("executable")
+                args = item.get("args") or []
+                sudo = item.get("sudo") or item.get("sudo_as_root")
+                must_succeed = bool(item.get("must_succeed", True))
+            elif isinstance(item, (list, tuple)):
+                executable = item[0] if item else None
+                args = list(item[1:])
+                sudo = False
+                must_succeed = True
+            else:
+                executable = item
+                args = []
+                sudo = False
+                must_succeed = True
+            if executable is None or not str(executable).strip():
+                raise CaskError(
+                    f"{cask.token}: zap {directive} directive requires an executable"
+                )
+            if sudo:
+                raise CaskError(
+                    f"{cask.token}: zap {directive} sudo is not supported by pybrew"
+                )
+            path = Path(os.path.expanduser(str(executable)))
+            resolved = str(path) if path.is_absolute() else shutil.which(str(executable))
+            if resolved is None or not Path(resolved).exists():
+                message = (
+                    f"{cask.token}: zap {directive} executable not found: "
+                    f"{executable}"
+                )
+                if must_succeed:
+                    raise CaskError(message)
+                continue
+            command_args = [str(arg) for arg in args]
+            try:
+                result = subprocess.run(
+                    [resolved, *command_args],
+                    text=True,
+                    capture_output=True,
+                    timeout=30,
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                if must_succeed:
+                    raise CaskError(
+                        f"{cask.token}: zap {directive} failed: {error}"
+                    ) from error
+                continue
+            if result.returncode != 0 and must_succeed:
+                detail = (result.stderr or result.stdout or "").strip()
+                raise CaskError(
+                    f"{cask.token}: zap {directive} exited "
+                    f"{result.returncode}: {detail}"
+                )
+
+    def _zap_launchctl(self, cask: Cask) -> None:
+        services = cask.zap_directives.get("launchctl", [])
+        if not services:
+            return
+        executable = (
+            os.environ.get("PYBREW_LAUNCHCTL")
+            or ("/bin/launchctl" if Path("/bin/launchctl").exists() else None)
+        )
+        if not executable:
+            return
+        for service in services:
+            value = str(service)
+            if not value.strip():
+                continue
+            if value.endswith(".plist") or "/" in value:
+                args = ["unload", "-w", "--", value]
+            else:
+                args = ["remove", value]
+            try:
+                subprocess.run(
+                    [executable, *args],
+                    text=True,
+                    capture_output=True,
+                    timeout=15,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+
+    def _zap_kext(self, cask: Cask) -> None:
+        kexts = cask.zap_directives.get("kext", [])
+        if not kexts:
+            return
+        executable = (
+            os.environ.get("PYBREW_KEXTUNLOAD")
+            or ("/sbin/kextunload" if Path("/sbin/kextunload").exists() else None)
+        )
+        if not executable:
+            return
+        for kext in kexts:
+            bundle_id = str(kext).strip()
+            if not bundle_id:
+                continue
+            try:
+                subprocess.run(
+                    [executable, "-b", bundle_id],
+                    text=True,
+                    capture_output=True,
+                    timeout=15,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+
     def _zap_osascript(self, script: str) -> None:
         """Run one best-effort AppleScript when osascript is available."""
 
@@ -3486,12 +3599,17 @@ class CaskInstaller:
 
     def zap(self, cask: Cask) -> list[Path]:
         removed: list[Path] = []
-        # Homebrew runs these directives before deleting paths; all are
+        # Homebrew's directive order: early_script, launchctl, quit, signal,
+        # login_item, kext, script, pkgutil/delete/trash/rmdir.  Commands are
         # best-effort and can be stubbed with PYBREW_OSASCRIPT/PYBREW_PGREP/
-        # PYBREW_KILL in tests (no real processes are killed by the tests).
+        # PYBREW_KILL/PYBREW_LAUNCHCTL/PYBREW_KEXTUNLOAD in tests.
+        self._zap_scripts(cask, "early_script")
+        self._zap_launchctl(cask)
         self._zap_quit(cask)
         self._zap_signal(cask)
         self._zap_login_item(cask)
+        self._zap_kext(cask)
+        self._zap_scripts(cask, "script")
         patterns = [*cask.zap, *cask.zap_directives.get("delete", [])]
         for pattern in patterns:
             expanded = os.path.expanduser(pattern)

@@ -4025,3 +4025,117 @@ def test_literal_parser_livecheck_regex_status_offline() -> None:
     outdated = cask.livecheck_status(page="tool-3.0")
     assert outdated["status"] == "outdated"
     assert outdated["latest_version"] == "3.0"
+
+
+# ---------------------------------------------------------------------------
+# Deferred/date-based livecheck skip conditions
+# ---------------------------------------------------------------------------
+
+
+def test_livecheck_skips_date_deferred_deprecation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fixed_cask_today(monkeypatch, "2024-06-01")
+    past = parse_cask_source(
+        'cask "past-dep" do\n  version "1.0"\n'
+        '  deprecate! date: "2024-01-01", because: "old"\nend\n'
+    )
+    status = past.livecheck_status(page="v1")
+    assert status["status"] == "skipped"
+    assert status["reason"] == "cask is deprecated"
+
+    future = parse_cask_source(
+        'cask "future-dep" do\n  version "1.0"\n'
+        '  deprecate! date: "2025-01-01", because: "later"\nend\n'
+    )
+    status = future.livecheck_status()
+    assert status["status"] == "unknown"
+    assert status["reason"] != "cask is deprecated"
+
+
+def test_livecheck_skips_date_deferred_disable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fixed_cask_today(monkeypatch, "2024-06-01")
+    past = parse_cask_source(
+        'cask "past-disable" do\n  version "1.0"\n'
+        '  disable! date: "2024-01-01", because: "broken"\nend\n'
+    )
+    assert past.livecheck_status()["status"] == "skipped"
+    assert past.livecheck_status()["reason"] == "cask is disabled"
+
+    # A future disable is promoted to a deferred deprecation.
+    future = parse_cask_source(
+        'cask "future-disable" do\n  version "1.0"\n'
+        '  disable! date: "2025-01-01", because: "broken later"\nend\n'
+    )
+    status = future.livecheck_status()
+    assert status["status"] == "skipped"
+    assert status["reason"] == "cask is deprecated"
+
+
+def test_livecheck_explicit_skip_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    _fixed_cask_today(monkeypatch, "2024-06-01")
+    cask = parse_cask_source(
+        'cask "skip-livecheck" do\n  version "1.0"\n'
+        '  livecheck do\n    skip "upstream is dark"\n  end\nend\n'
+    )
+    status = cask.livecheck_status(page="v1")
+    assert status["status"] == "skipped"
+    assert status["reason"] == "upstream is dark"
+
+
+def test_livecheck_defined_overrides_deprecation_skip(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _fixed_cask_today(monkeypatch, "2024-06-01")
+    cask = parse_cask_source(
+        'cask "dep-with-livecheck" do\n  version "1.0"\n'
+        '  deprecate! date: "2024-01-01", because: "old"\n'
+        '  livecheck do\n    regex(/v(\\d+)/)\n  end\nend\n'
+    )
+    status = cask.livecheck_status(page="v2")
+    assert status["status"] == "outdated"
+    assert status["latest_version"] == "2"
+
+
+# ---------------------------------------------------------------------------
+# Brace livecheck blocks and full URL options (literal parser)
+# ---------------------------------------------------------------------------
+
+
+def test_literal_parser_livecheck_brace_block() -> None:
+    cask = parse_cask_source(
+        'cask "literal-brace" do\n'
+        '  version "1.0"\n'
+        '  livecheck { url "https://example.com/x"; regex(/v(\\d+)/) }\n'
+        'end\n'
+    )
+    assert cask.livecheck_defined is True
+    assert cask.livecheck["url"] == "https://example.com/x"
+    assert cask.livecheck["regex"] == r"v(\d+)"
+    assert cask.livecheck_status(page="v1")["status"] == "up_to_date"
+
+
+def test_literal_livecheck_full_url_options_online(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    opener = _patch_livecheck_opener(monkeypatch, b"v2.0")
+    cask = parse_cask_source(
+        'cask "literal-options" do\n  version "2.0"\n'
+        '  livecheck do\n'
+        '    url "https://example.com/tool", header: ["X-Live: yes"], '
+        'user_agent: "lc-agent", referer: "https://ref.example", '
+        'cookies: { "session" => "abc" }, using: :homebrew_curl\n'
+        '    regex(/v(\\d+(?:\\.\\d+)*)/)\n'
+        '  end\nend\n'
+    )
+
+    status = cask.livecheck_status(online=True)
+
+    assert status["status"] == "up_to_date"
+    request = opener.requests[0]
+    assert request.get_header("X-live") == "yes"
+    assert request.get_header("User-agent") == "lc-agent"
+    assert request.get_header("Referer") == "https://ref.example"
+    assert request.get_header("Cookie") == "session=abc"

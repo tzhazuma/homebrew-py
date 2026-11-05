@@ -2255,3 +2255,96 @@ def test_generic_artifact_steps_unknown_option_is_precise(
         CaskError, match="only steps/dirmethod/base_dir are bounded"
     ):
         cask_env.installer.install(cask_env.loader.load("generic-audit"))
+
+
+# ---------------------------------------------------------------------------
+# Zap early_script/launchctl/kext/script directives (bounded, test-safe)
+# ---------------------------------------------------------------------------
+
+
+def test_zap_extended_directives_test_safe(
+    cask_env: SimpleNamespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    log = tmp_path / "extended.log"
+    early = _fake_command(
+        tmp_path / "early.sh",
+        "printf 'early:%s\\n' \"$*\" >> " + str(log),
+    )
+    late = _fake_command(
+        tmp_path / "late.sh",
+        "printf 'late:%s\\n' \"$*\" >> " + str(log),
+    )
+    launchctl_log = tmp_path / "launchctl.log"
+    launchctl = _fake_command(
+        tmp_path / "launchctl",
+        "printf '%s\\n' \"$@\" >> " + str(launchctl_log),
+    )
+    kext_log = tmp_path / "kextunload.log"
+    kextunload = _fake_command(
+        tmp_path / "kextunload",
+        "printf '%s\\n' \"$@\" >> " + str(kext_log),
+    )
+    monkeypatch.setenv("PYBREW_LAUNCHCTL", str(launchctl))
+    monkeypatch.setenv("PYBREW_KEXTUNLOAD", str(kextunload))
+
+    cask = parse_cask_source(
+        'cask "zappy-extended" do\n  version "1.0"\n'
+        f'  zap early_script: {{ executable: "{early}", args: ["one"] }},\n'
+        '      launchctl: ["com.example.agent", "/Library/LaunchAgents/com.example.plist"],\n'
+        '      kext: ["com.example.kext"],\n'
+        f'      script: {{ executable: "{late}", args: ["two"], must_succeed: true }}\n'
+        'end\n'
+    )
+
+    removed = cask_env.installer.zap(cask)
+
+    assert removed == []
+    assert log.read_text().splitlines() == ["early:one", "late:two"]
+    assert launchctl_log.read_text().splitlines() == [
+        "remove",
+        "com.example.agent",
+        "unload",
+        "-w",
+        "--",
+        "/Library/LaunchAgents/com.example.plist",
+    ]
+    assert kext_log.read_text().splitlines() == ["-b", "com.example.kext"]
+
+
+def test_zap_script_failure_and_sudo_are_bounded(
+    cask_env: SimpleNamespace, tmp_path: Path
+) -> None:
+    failing = _fake_command(
+        tmp_path / "failing.sh", "echo boom >&2\nexit 7"
+    )
+    cask = parse_cask_source('cask "zappy-script" do\n  version "1.0"\nend\n')
+    cask.zap_directives["script"] = [
+        {"executable": str(failing), "must_succeed": True}
+    ]
+    with pytest.raises(CaskError, match="zap script exited 7"):
+        cask_env.installer.zap(cask)
+
+    cask.zap_directives["script"] = [
+        {"executable": str(failing), "must_succeed": False}
+    ]
+    cask_env.installer.zap(cask)
+
+    cask.zap_directives["script"] = [
+        {"executable": str(failing), "sudo": True}
+    ]
+    with pytest.raises(CaskError, match="sudo is not supported"):
+        cask_env.installer.zap(cask)
+
+
+def test_zap_script_missing_executable(
+    cask_env: SimpleNamespace,
+) -> None:
+    cask = parse_cask_source('cask "zappy-missing" do\n  version "1.0"\nend\n')
+    cask.zap_directives["early_script"] = [
+        {"executable": "/nonexistent/pybrew-zap-script"}
+    ]
+
+    with pytest.raises(CaskError, match="executable not found"):
+        cask_env.installer.zap(cask)

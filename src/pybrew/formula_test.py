@@ -176,6 +176,9 @@ class FormulaTestContext
   # Available on Ruby 2.7+ and defined by the runner on older Rubies.
   NO_MATCHING_PATTERN_ERROR = NoMatchingPatternError
 
+  # Only a bounded prefix of each source is read when resolving a name lazily.
+  LAZY_SOURCE_ALIAS_BYTES = 8192
+
   attr_reader :testpath
 
   class << self
@@ -218,7 +221,7 @@ class FormulaTestContext
       "rc" => 3, "p" => 4, "post" => 5,
     }.freeze
 
-    TOKEN_PATTERN = /(\d+)|(preview|alpha|beta|post|pre|rc|p)(\d*)|([A-Za-z]+)/i
+    TOKEN_PATTERN = /(\d+)|([ab])(\d+)|(preview|alpha|beta|post|pre|rc|p)(\d*)|([A-Za-z]+)/i
 
     class << self
       # Homebrew null-token comparison is the default; ``legacy`` (or the
@@ -418,6 +421,10 @@ class FormulaTestContext
           NumericToken.new(text)
         when /\A\.?post(\d*)\z/i
           PostToken.new("post", Regexp.last_match(1).to_i)
+        when /\A([ab])(\d+)\z/i
+          word = Regexp.last_match(1).downcase
+          token_class = word == "a" ? AlphaToken : BetaToken
+          token_class.new(word, Regexp.last_match(2).to_i)
         when /\A(alpha|beta|pre|rc|p)\.?(\d*)\z/i
           word = Regexp.last_match(1).downcase
           PRE_TOKEN_CLASSES[word].new(word, Regexp.last_match(2).to_i)
@@ -484,6 +491,12 @@ class FormulaTestContext
       def rank
         0
       end
+
+      # ``a4`` is the short spelling of ``alpha4``; equal tokens must hash
+      # equally.
+      def hash
+        "alpha#{revision}".hash
+      end
     end
 
     class BetaToken < PreReleaseToken
@@ -493,6 +506,10 @@ class FormulaTestContext
 
       def rank
         1
+      end
+
+      def hash
+        "beta#{revision}".hash
       end
     end
 
@@ -647,8 +664,20 @@ class FormulaTestContext
     # numeric zero compares equal to it, pre-release words sort before it,
     # and p/post/unknown letters sort after it.  The default <=> keeps the
     # historical pybrew extra-numeric behavior for compatibility.
+    # Homebrew treats HEAD (with or without a commit suffix) as newer than
+    # every numeric version, while all HEAD spellings compare equal.
+    def head?
+      text = to_s
+      text == "HEAD" || text.start_with?("HEAD-")
+    end
+
     def homebrew_compare(other)
       other = self.class.new(other.to_s) unless other.is_a?(Version)
+      if head? || other.head?
+        return 0 if head? && other.head?
+
+        return head? ? 1 : -1
+      end
       if other.is_a?(PkgVersion) && !is_a?(PkgVersion)
         comparison = homebrew_compare(other.version)
         return comparison unless comparison.zero?
@@ -703,6 +732,11 @@ class FormulaTestContext
       return homebrew_compare(other) if self.class.homebrew_enabled?
 
       other = self.class.new(other.to_s) unless other.is_a?(Version)
+      if head? || other.head?
+        return 0 if head? && other.head?
+
+        return head? ? 1 : -1
+      end
       if other.is_a?(PkgVersion) && !is_a?(PkgVersion)
         # Compare the revision-bearing string form so a plain Version that
         # already carries ``_N`` matches the equivalent PkgVersion.
@@ -741,9 +775,13 @@ class FormulaTestContext
     end
 
     def version_tokens
-      to_s.scan(TOKEN_PATTERN).map do |numeric, pre, revision, letter|
+      to_s.scan(TOKEN_PATTERN).map do |numeric, short, short_revision, pre, revision, letter|
         if numeric
           NumericToken.new(numeric.to_i)
+        elsif short
+          word = short.downcase
+          token_class = word == "a" ? AlphaToken : BetaToken
+          token_class.new(word, short_revision.to_i)
         elsif pre
           word = pre.downcase
           word = "pre" if word == "preview"
@@ -1219,6 +1257,7 @@ class FormulaTestContext
       @paths[name.to_s] = Pathname.new(value.to_s)
     end
     @formulae = config["formulae"] || {}
+    @source_catalog = config["source_catalog"] || []
     prefix_path = @paths["prefix"] || Pathname.new(config["prefix"].to_s)
     @formulae[name] ||= {
       "name" => name,
@@ -1239,6 +1278,10 @@ class FormulaTestContext
     name = name.to_s
     info = @formulae[name]
     if info.nil?
+      info = lazy_formula_info(name)
+      @formulae[name] ||= info if info
+    end
+    if info.nil?
       available = @formulae.keys.sort
       listing = available.first(20).join(", ")
       listing += ", ..." if available.length > 20
@@ -1251,6 +1294,77 @@ class FormulaTestContext
     canonical_name = info["name"]
     canonical_name = name if canonical_name.nil? || canonical_name.to_s.empty?
     Formula.new(self, canonical_name, info)
+  end
+
+  # Fully lazy name/alias lookup for taps beyond the eager metadata budget.
+  # The source catalog contains paths only; sources are read (bounded prefix)
+  # only when a name is actually requested at test runtime.
+  def lazy_formula_info(name)
+    return nil if @source_catalog.empty?
+
+    qualified = name.split("/")
+    requested = qualified.last.to_s
+    tap_hint = qualified.length > 1 ? qualified[-2].to_s : nil
+
+    direct = @source_catalog.find do |entry|
+      entry["name"].to_s == requested &&
+        (tap_hint.nil? || entry["tap"].to_s == tap_hint)
+    end
+    return register_lazy_info(direct, requested) if direct
+
+    @source_catalog.each do |entry|
+      next if tap_hint && entry["tap"].to_s != tap_hint
+
+      path = entry["path"].to_s
+      next if path.empty?
+
+      source = begin
+        File.open(path, "rb") { |handle| handle.read(LAZY_SOURCE_ALIAS_BYTES).to_s }
+      rescue StandardError
+        next
+      end
+      aliases = source.scan(/^\s*alias\s+["']([^"']+)["']/).map do |match|
+        match.is_a?(Array) ? match.first : match
+      end
+      return register_lazy_info(entry, entry["name"].to_s) if aliases.include?(requested)
+    end
+    nil
+  end
+
+  def register_lazy_info(entry, canonical)
+    tap = entry["tap"].to_s
+    info = @formulae[canonical] || @formulae["#{tap}/#{canonical}"]
+    info ||= lazy_formula_metadata(canonical, tap)
+    @formulae[canonical] ||= info
+    @formulae["#{tap}/#{canonical}"] ||= info unless tap.empty?
+    info
+  end
+
+  def lazy_formula_metadata(canonical, tap)
+    rack = @cellar/canonical
+    installed = rack.directory?
+    version = begin
+      installed ? Dir.children(rack.to_s).sort.first.to_s : ""
+    rescue StandardError
+      ""
+    end
+    prefix = installed && !version.empty? ? (rack/version).to_s : ""
+    {
+      "name" => canonical,
+      "full_name" => tap.empty? ? canonical : "#{tap}/#{canonical}",
+      "version" => version,
+      "revision" => 0,
+      "pkg_version" => version,
+      "prefix" => prefix,
+      "opt_prefix" => (@homebrew_prefix/"opt"/canonical).to_s,
+      "installed" => installed,
+      "dependencies" => [],
+      "test_defined" => false,
+      "test_source" => "",
+      "test_source_error" =>
+        "formula source was resolved lazily; its test body was not preloaded",
+      "aliases" => [],
+    }
   end
 
   # Create an isolated throw-away testpath for a dependency's test body.
@@ -1268,6 +1382,14 @@ class FormulaTestContext
   # Whether dependency test bodies run in a forked subprocess.  Fork isolates
   # Ruby constants/arbitrary ENV at the OS level; it is unavailable on some
   # hosts, where the same-process fallback keeps the older bounded isolation.
+  def self.dependency_isolation_mode
+    raw = ENV["PYBREW_TEST_ISOLATE_DEPENDENCIES"].to_s.strip.downcase
+    return :fork if dependency_subprocess_enabled?
+    return :in_process_explicit if %w[0 false no off].include?(raw)
+
+    :in_process_unavailable
+  end
+
   def self.dependency_subprocess_enabled?
     return false unless Process.respond_to?(:fork)
 
@@ -3052,6 +3174,23 @@ def _formula_entry(
     return entry
 
 
+def _formula_source_catalog(config: Config) -> list[dict[str, str]]:
+    """Paths only, for fully lazy name/alias resolution in the Ruby shim.
+
+    The catalog is only sent when the tap exceeds the eager metadata budget.
+    It deliberately contains no parsed formula data: the Ruby shim reads a
+    bounded source prefix on demand when a lookup actually misses.
+    """
+
+    index = _tap_index(config)
+    catalog: list[dict[str, str]] = []
+    for name, (tap, path) in sorted(index.by_name.items()):
+        if len(catalog) >= MAX_TAP_FORMULA_INDEX:
+            break
+        catalog.append({"name": name, "tap": tap.name, "path": str(path)})
+    return catalog
+
+
 def _formula_entries(
     formula: Formula, config: Config, keg: Path
 ) -> dict[str, dict[str, object]]:
@@ -3314,6 +3453,13 @@ def run_formula_test(
     body = root / "test_body.rb"
     body.write_text(source, encoding="utf-8")
     config_path = root / "config.json"
+    entries = _formula_entries(formula, config, keg)
+    source_catalog: list[dict[str, str]] = []
+    try:
+        if len(_tap_index(config).by_name) > MAX_EAGER_FORMULA_ENTRIES:
+            source_catalog = _formula_source_catalog(config)
+    except Exception:  # noqa: BLE001 - optional lazy lookup must not break tests
+        source_catalog = []
     payload = {
         "name": formula.name,
         "version": formula.version or "HEAD",
@@ -3322,7 +3468,8 @@ def run_formula_test(
         "homebrew_prefix": str(config.prefix),
         "cellar": str(config.cellar),
         "paths": _test_paths(formula.name, config, keg),
-        "formulae": _formula_entries(formula, config, keg),
+        "formulae": entries,
+        "source_catalog": source_catalog,
     }
     config_path.write_text(json.dumps(payload), encoding="utf-8")
 

@@ -340,9 +340,11 @@ class Cask:
         """Run a bounded livecheck and compare it with the current version.
 
         Returns a structured, JSON-friendly dict with ``status`` one of
-        ``up_to_date``/``outdated``/``unknown``/``error`` plus the normalized
-        candidates.  No network is performed unless the caller injects a
-        ``fetcher``; a strategy block additionally requires the usual
+        ``up_to_date``/``outdated``/``skipped``/``unknown``/``error`` plus the
+        normalized candidates.  Explicit livecheck ``skip`` and (for casks
+        without a livecheck block) date-deferred deprecation/disable produce
+        ``skipped`` before any fetch.  No network is performed unless the
+        caller injects a ``fetcher``; a strategy block additionally requires the usual
         ``PYBREW_ALLOW_CASK_RUBY=1`` opt-in.  When no strategy block exists but
         a livecheck ``regex`` is configured, the regex is applied to the page.
         """
@@ -360,6 +362,23 @@ class Cask:
             "source": None,
             "result": None,
         }
+
+        # Homebrew's livecheck skip conditions: an explicit livecheck `skip`
+        # always wins; cask deprecation/disable (already date-deferred by the
+        # parser) only skips when no livecheck was defined for the cask.
+        if bool(livecheck.get("skip")):
+            status.update(
+                status="skipped",
+                reason=str(livecheck.get("skip_msg") or "livecheck is skipped"),
+            )
+            return status
+        if not self.livecheck_defined:
+            if bool(getattr(self, "disabled", False)):
+                status.update(status="skipped", reason="cask is disabled")
+                return status
+            if bool(getattr(self, "deprecated", False)):
+                status.update(status="skipped", reason="cask is deprecated")
+                return status
 
         effective_fetcher = fetcher
         if effective_fetcher is None and online:
@@ -1571,6 +1590,12 @@ class CaskParser:
                 self.advance()
                 continue
             name = str(self.advance().value)
+            if name == "livecheck":
+                self.skip_newlines()
+                if self.peek().kind == "punct" and self.peek().value == "{":
+                    brace_opener = self.advance()
+                    self._parse_livecheck_block(brace_opener)
+                    continue
             args, kwargs = self._parse_arguments()
             # Blocks.
             save = self.pos
@@ -1752,6 +1777,8 @@ class CaskParser:
             if token.kind == "punct" and token.value == ",":
                 self.advance()
                 continue
+            if not parenthesised and token.kind == "punct" and token.value == ";":
+                break
             if (
                 token.kind in ("id", "const", "str", "sym")
                 and self.peek(1).kind == "punct"
@@ -2015,6 +2042,20 @@ class CaskParser:
             if login_item is not None:
                 values = login_item if isinstance(login_item, list) else [login_item]
                 cask.zap_directives.setdefault("login_item", []).extend(values)
+            for directive in ("launchctl", "kext"):
+                value = kwargs.get(directive) or kwargs.get(f":{directive}")
+                if value is None:
+                    continue
+                values = value if isinstance(value, list) else [value]
+                cask.zap_directives.setdefault(directive, []).extend(
+                    str(item) for item in values
+                )
+            for directive in ("script", "early_script"):
+                value = kwargs.get(directive) or kwargs.get(f":{directive}")
+                if value is None:
+                    continue
+                values = value if isinstance(value, list) else [value]
+                cask.zap_directives.setdefault(directive, []).extend(values)
         elif name == "os":
             for key, value in kwargs.items():
                 if key in ("macos", "linux"):

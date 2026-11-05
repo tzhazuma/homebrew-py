@@ -278,3 +278,40 @@ def test_doctor_reports_formula_deleted_from_tap(run_cli, sample) -> None:
     proc = run_cli("doctor")
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "no longer in its tap" in proc.stdout
+
+
+def test_cli_services_cleanup_keeps_custom_installed_labels(
+    run_cli, sample
+) -> None:
+    text = sample.formula.read_text(encoding="utf-8")
+    service_block = (
+        "  service do\n"
+        '    run [opt_bin/"hello"]\n'
+        '    name macos: "com.example.hello", linux: "custom-hello"\n'
+        "  end\n"
+    )
+    sample.formula.write_text(
+        text.rsplit("end", 1)[0] + service_block + "end\n", encoding="utf-8"
+    )
+    install = run_cli("install", "hello", bottle_tag=sample.tag)
+    assert install.returncode == 0, install.stderr + install.stdout
+
+    agents = sample.root / "service-agents"
+    agents.mkdir(parents=True, exist_ok=True)
+    kept = [
+        agents / "com.example.hello.plist",
+        agents / "sh.brew.hello.plist",
+    ]
+    stale = [
+        agents / "com.example.ghost.plist",
+        agents / "homebrew.ghost.service",
+    ]
+    for path in [*kept, *stale]:
+        path.write_text("service", encoding="utf-8")
+
+    proc = run_cli("services", "cleanup")
+
+    assert proc.returncode == 0, proc.stderr + proc.stdout
+    assert all(path.exists() for path in kept)
+    assert all(not path.exists() for path in stale)
+    assert "com.example.ghost.plist" in proc.stdout

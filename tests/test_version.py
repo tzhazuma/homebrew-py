@@ -342,3 +342,50 @@ def test_token_hierarchy_factory_and_predicates() -> None:
     composite = CompositeToken([NumericToken(1), LetterToken("a")])
     assert composite.to_s() == "1a"
     assert isinstance(composite, StringToken)
+
+
+def test_homebrew_short_prerelease_aliases_and_head() -> None:
+    from pybrew.version import AlphaToken, Version, compare_versions
+
+    assert compare_versions("1.2.3alpha4", "1.2.3a4") == 0
+    assert compare_versions("1.2.3beta2", "1.2.3b2") == 0
+    assert compare_versions("1.2.3", "1.2.3a") == -1
+    assert compare_versions("1.2.3a4", "1.2.3") == -1
+    assert compare_versions("1.2.3alpha4", "1.2.3beta2") == -1
+    assert compare_versions("1.2.3beta2", "1.2.3rc3") == -1
+    assert compare_versions("1.2.3", "1.2.3-p34") == -1
+    assert compare_versions("HEAD", "1.2.3") == 1
+    assert compare_versions("1.2.3", "HEAD-fedcba") == -1
+    assert compare_versions("HEAD-abcdef", "HEAD-fedcba") == 0
+    tokens = Version("1.2.3a4").tokens
+    assert isinstance(tokens[-1], AlphaToken)
+    assert tokens[-1].revision == 4
+
+
+def test_version_short_alias_and_head_edges() -> None:
+    assert compare_versions("1.2.3a4", "1.2.3alpha4") == 0
+    assert compare_versions("1.2.3b2", "1.2.3beta2") == 0
+    assert compare_versions("1.2.3a4", "1.2.3") < 0
+    assert compare_versions("1.2.3", "1.2.3b2") > 0
+    assert compare_versions("1.2.3-p34", "1.2.3") > 0
+    assert Version("1.2.3a4") == Version("1.2.3alpha4")
+    assert Version("1.2.3b2") == Version("1.2.3beta2")
+    assert hash(Version("1.2.3a4")) == hash(Version("1.2.3alpha4"))
+    assert Version("1.2.3a4").tokens[-1].class_name == "alpha"
+    assert Version("1.2.3b2").tokens[-1].class_name == "beta"
+    assert Version("1.2.3a4").tokens[-1].revision == 4
+    assert Version("HEAD") > Version("1.2.3")
+    assert Version("HEAD-fedcba") > Version("1.2.3")
+    assert Version("1.2.3") < Version("HEAD")
+    assert Version("HEAD-abcdef") == Version("HEAD-fedcba")
+    assert hash(Version("HEAD")) == hash(Version("HEAD-abc"))
+    assert PkgVersion.parse("HEAD_2") > Version("1.2.3")
+
+
+def test_short_alias_token_hash_is_canonical() -> None:
+    from pybrew.version import AlphaToken, BetaToken
+
+    assert AlphaToken("a", 4) == AlphaToken("alpha", 4)
+    assert hash(AlphaToken("a", 4)) == hash(AlphaToken("alpha", 4))
+    assert BetaToken("b", 2) == BetaToken("beta", 2)
+    assert hash(BetaToken("b", 2)) == hash(BetaToken("beta", 2))

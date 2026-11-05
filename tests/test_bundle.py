@@ -385,7 +385,7 @@ def test_bundle_restart_service_starts_service(monkeypatch, sample, tmp_path) ->
     log = tmp_path / "launchctl.log"
     assert log.is_file(), "launchctl was not invoked for restart_service"
     assert "bootstrap" in log.read_text()
-    assert (tmp_path / "agents" / "homebrew.mxcl.svc.plist").is_file()
+    assert (tmp_path / "agents" / "sh.brew.svc.plist").is_file()
 
 
 def test_bundle_restart_service_dry_run_does_not_start(monkeypatch, sample, tmp_path) -> None:

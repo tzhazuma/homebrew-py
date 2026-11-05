@@ -658,6 +658,7 @@ class PybrewChecksumMismatch < RuntimeError; end
 class PybrewFormulaUnavailableError < RuntimeError; end
 class PybrewFormulaUnreadableError < PybrewFormulaUnavailableError; end
 class PybrewFormulaClassUnavailableError < PybrewFormulaUnavailableError; end
+class PybrewFormulaAmbiguityError < PybrewFormulaUnavailableError; end
 class PybrewGitHubGraphqlError < RuntimeError; end
 
 class PybrewVersion < String
@@ -970,22 +971,37 @@ module MacOS
   end
 
   module SDK
+    def self.clt_sdk_prefix
+      Pathname.new("/Library/Developer/CommandLineTools/SDKs")
+    end
+
     def self.sdk_prefix
       override = ENV["HOMEBREW_SDK_PREFIX"].to_s.strip
       return Pathname.new(override) unless override.empty?
 
-      Xcode.bundle_path/"Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs"
+      xcode_sdks = Xcode.bundle_path/"Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs"
+      return xcode_sdks if xcode_sdks.directory?
+
+      clt_sdk_prefix
     end
 
     # Versioned SDK directories in ``sdk_prefix`` (bounded local directory
     # scan; no commands and no network).
     def self.sdk_directories
-      prefix = sdk_prefix
-      return [] unless prefix.directory?
-
-      prefix.children.select do |child|
-        child.directory? && child.basename.to_s.start_with?("MacOSX") &&
-          child.extname == ".sdk"
+      primary = sdk_prefix
+      roots = if !ENV["HOMEBREW_SDK_PREFIX"].to_s.strip.empty?
+        [primary]
+      elsif primary.directory? && primary != clt_sdk_prefix
+        [primary]
+      else
+        [primary, clt_sdk_prefix].uniq
+      end
+      roots = roots.select(&:directory?)
+      roots.flat_map do |prefix|
+        prefix.children.select do |child|
+          child.directory? && child.basename.to_s.start_with?("MacOSX") &&
+            child.extname == ".sdk"
+        end
       end.sort_by { |child| child.basename.to_s }
     rescue StandardError
       []
@@ -1041,12 +1057,27 @@ module MacOS
   end
 
   module CLT
-    def self.installed?
+    def self.developer_dir
       override = ENV["HOMEBREW_DEVELOPER_DIR"].to_s.strip
-      return File.directory?(override) unless override.empty?
+      return Pathname.new(override) unless override.empty?
 
       path = MacOS.run_local_tool(MacOS.xcode_select_executable, "-print-path").to_s.strip
-      !path.empty? && File.directory?(path)
+      path.empty? ? nil : Pathname.new(path)
+    rescue StandardError
+      nil
+    end
+
+    def self.local_install_dir
+      dir = Pathname.new("/Library/Developer/CommandLineTools")
+      dir.directory? ? dir : nil
+    end
+
+    def self.installed?
+      found = developer_dir
+      return true if !found.nil? && found.directory?
+      return true if !local_install_dir.nil?
+
+      false
     rescue StandardError
       false
     end
@@ -1059,13 +1090,26 @@ module MacOS
         MacOS.pkgutil_executable, "--pkg-info=com.apple.pkg.CLTools_Executables"
       ).to_s
       match = raw[/^version:\s*(\S+)/, 1]
-      match.nil? || match.empty? ? nil : PybrewVersion.new(match)
+      return PybrewVersion.new(match) unless match.nil? || match.empty?
+
+      CLT.clang_version
     rescue StandardError
       nil
     end
 
     def self.sdk_path
       MacOS.sdk_path
+    end
+
+    def self.clang_version
+      clang = local_install_dir
+      return nil if clang.nil?
+
+      output = MacOS.run_local_tool(clang/"usr/bin/clang", "--version").to_s
+      version = output[/clang version\s+(\S+)/, 1]
+      version.nil? ? nil : PybrewVersion.new(version)
+    rescue StandardError
+      nil
     end
   end
 
@@ -1115,7 +1159,21 @@ module MacOS
       "/Applications/Xcode.app/Contents/Developer"
     end
 
+    # Discover the Xcode bundle from the active developer dir (xcode-select)
+    # or a bounded local /Applications scan instead of assuming one path.
     def self.bundle_path
+      override = ENV["PYBREW_XCODE_APP"].to_s.strip
+      return Pathname.new(override) unless override.empty?
+
+      developer = MacOS.active_developer_dir.to_s
+      match = developer.match(%r{\A(.+?\.app)/Contents/Developer\z})
+      return Pathname.new(match[1]) unless match.nil?
+
+      candidates = Dir.glob("/Applications/Xcode*.app").sort
+      return Pathname.new(candidates.last) unless candidates.empty?
+
+      Pathname.new("/Applications/Xcode.app")
+    rescue StandardError
       Pathname.new("/Applications/Xcode.app")
     end
 
@@ -4661,7 +4719,54 @@ class FormulaInstaller
 
   RECEIPT_FILENAME = "INSTALL_RECEIPT.json".freeze
 
-  # Minimal Homebrew INSTALL_RECEIPT.json for a Formulary-loaded install.
+  # Deterministic (sorted, size/hash bounded) SBOM of the installed keg,
+  # matching the Tab fields Homebrew writes for a source build.
+  def install_sbom_data
+    files = {}
+    return { "files" => files } unless formula.respond_to?(:prefix)
+
+    root = formula.prefix
+    return { "files" => files } unless root.directory?
+
+    count = 0
+    Dir.glob((root/"**/*").to_s, File::FNM_DOTMATCH).sort.each do |entry|
+      path = Pathname.new(entry)
+      next unless path.file?
+      next if path.basename.to_s == RECEIPT_FILENAME
+      next if path.to_s.include?("/.git/")
+
+      relative = path.relative_path_from(root).to_s
+      next if relative.start_with?("..")
+      next if relative.include?("/../")
+
+      count += 1
+      break if count > 1000
+
+      digest = begin
+        Digest::SHA256.file(path.to_s).hexdigest
+      rescue StandardError
+        nil
+      end
+      files[relative] = {
+        "path" => relative,
+        "sha256" => digest,
+        "size" => path.size,
+      }
+    end
+    { "files" => files }
+  end
+
+  def formula_tap_name
+    return formula.tap.to_s if formula.respond_to?(:tap) && !formula.tap.to_s.empty?
+
+    source_path = formula.respond_to?(:path) ? formula.path.to_s : ""
+    match = source_path.match(%r{/Library/Taps/([^/]+/[^/]+)/})
+    match.nil? ? nil : match[1]
+  rescue StandardError
+    nil
+  end
+
+  # Homebrew-compatible Tab fields for a Formulary-loaded install.
   # ``Tab.for_keg(prefix)`` reads this back.
   def install_receipt_data
     runtime_dependencies = []
@@ -4675,11 +4780,31 @@ class FormulaInstaller
         runtime_dependencies << dep_name
       end
     end
+    source_path = formula.respond_to?(:path) ? formula.path : nil
+    source_modified_time = if !source_path.nil? && source_path.file?
+      File.mtime(source_path.to_s).to_f
+    end
+    stdlib = OS.mac? ? "libc++" : "libstdc++"
     {
       "version" => formula.version.to_s,
       "installed_on_request" => installed_on_request?,
+      "installed_as_dependency" => !installed_on_request?,
       "runtime_dependencies" => runtime_dependencies,
       "poured_from_bottle" => false,
+      "built_as_bottle" => false,
+      "homebrew_version" => HOMEBREW_VERSION,
+      "time" => Time.now.to_i,
+      "source_modified_time" => source_modified_time,
+      "compiler" => DevelopmentTools.default_compiler.to_s,
+      "arch" => Hardware::CPU.arch.to_s,
+      "stdlib" => stdlib,
+      "changed_files" => [],
+      "source" => {
+        "path" => source_path.nil? ? nil : source_path.to_s,
+        "checksum" => nil,
+      },
+      "tap" => formula_tap_name,
+      "sbom" => install_sbom_data,
     }
   end
 
@@ -8483,6 +8608,11 @@ class Tab
     @data["sbom"].is_a?(Hash) ? @data["sbom"] : {}
   end
 
+  def sbom_files
+    files = sbom["files"]
+    files.is_a?(Hash) ? files : {}
+  end
+
   def sbom=(value)
     @data["sbom"] = value.is_a?(Hash) ? value : {}
   end
@@ -8730,6 +8860,66 @@ module SystemConfig
       "N/A"
     end
 
+    def describe_kernel
+      uname = Etc.uname
+      [uname[:sysname], uname[:release], uname[:machine]].compact.join(" ")
+    rescue StandardError
+      RUBY_PLATFORM.to_s
+    end
+
+    def describe_compiler
+      compiler = DevelopmentTools.default_compiler.to_s
+      version = DevelopmentTools.compiler_version(compiler)
+      version.nil? ? compiler : "#{compiler} #{version}"
+    rescue StandardError
+      "N/A"
+    end
+
+    def describe_ruby
+      [RUBY_VERSION, RUBY_PLATFORM, RbConfig.ruby].compact.join(" => ")
+    rescue StandardError
+      RUBY_VERSION.to_s
+    end
+
+    def describe_taps
+      taps = Array(PYBREW_CONFIG["taps"]).map(&:to_s).reject(&:empty?)
+      taps.empty? ? "(none)" : taps.join(", ")
+    rescue StandardError
+      "(none)"
+    end
+
+    def describe_arch
+      [Hardware::CPU.arch.to_s, Hardware::CPU.bits.to_s,
+       Hardware::CPU.arm? ? "arm" : "intel"].join(" ")
+    rescue StandardError
+      RUBY_PLATFORM.to_s
+    end
+
+    def kernel_config(out = $stdout)
+      out.puts "Kernel: #{describe_kernel}"
+      out
+    end
+
+    def compiler_config(out = $stdout)
+      out.puts "Compiler: #{describe_compiler}"
+      out.puts "Ruby: #{describe_ruby}"
+      out
+    end
+
+    def taps_config(out = $stdout)
+      out.puts "Taps: #{describe_taps}"
+      out
+    end
+
+    def macos_config(out = $stdout)
+      out.puts "macOS: #{describe_os}" if OS.mac?
+      out.puts "SDK: #{describe_sdk}" if OS.mac?
+      out.puts "Xcode: #{describe_xcode}" if OS.mac?
+      out.puts "CLT: #{describe_clt}" if OS.mac?
+      out.puts "Arch: #{describe_arch}"
+      out
+    end
+
     def kernel
       Etc.uname[:machine].to_s
     end
@@ -8777,7 +8967,11 @@ module SystemConfig
     end
 
     def config_sections
-      [:homebrew_config, :homebrew_env_config, :hardware_config, :host_software_config]
+      [
+        :homebrew_config, :homebrew_env_config, :hardware_config,
+        :host_software_config, :kernel_config, :compiler_config,
+        :taps_config, :macos_config,
+      ]
     end
 
     def homebrew_config(out = $stdout)
@@ -9261,6 +9455,7 @@ class PybrewLoadedFormula
                   :loaded_caveats_block, :loaded_post_install_block,
                   :loaded_bottle, :loaded_service, :loaded_livecheck,
                   :loaded_resources, :loaded_patches, :loaded_options,
+                  :loaded_channel, :loaded_channels,
                   :loaded_head, :loaded_stable, :loaded_fetch_block,
                   :loaded_fails_with, :loaded_namespace, :loaded_class_name,
                   :loaded_dependencies, :loaded_path
@@ -9719,10 +9914,34 @@ module Formulary
       end
     end
 
+    local_file = ref.to_s
+    if File.extname(local_file) == ".rb" && File.file?(local_file)
+      loaded = load_formula_from_path(
+        File.basename(local_file, ".rb"),
+        Pathname.new(local_file),
+        flags: options[:flags] || [],
+        ignore_errors: options[:ignore_errors] || false
+      )
+      (@factory_cache ||= {})[cache_key] = loaded if factory_cached?
+      return loaded
+    end
+
     tap_alias_formula = resolve_tap_alias(ref)
     unless tap_alias_formula.nil?
       (@factory_cache ||= {})[cache_key] = tap_alias_formula if factory_cached?
       return tap_alias_formula
+    end
+
+    local_tap_source = tap_formula_source_for(ref)
+    unless local_tap_source.nil?
+      tap_name, tap_path = local_tap_source
+      loaded = load_formula_from_path(
+        tap_name, tap_path,
+        flags: options[:flags] || [],
+        ignore_errors: options[:ignore_errors] || false
+      )
+      (@factory_cache ||= {})[cache_key] = loaded if factory_cached?
+      return loaded
     end
 
     reference = Formula[ref]
@@ -9737,6 +9956,110 @@ module Formulary
     formula = reference if formula.nil?
     (@factory_cache ||= {})[cache_key] = formula if factory_cached?
     formula
+  end
+
+  def tap_name_for_root(root)
+    parts = Pathname.new(root.to_s).each_filename.to_a
+    return parts.last(2).join("/") if parts.length >= 2
+    return parts.last.to_s if parts.length == 1
+
+    "(unknown)"
+  end
+
+  # Every local tap formula file matching ``ref`` (tap-qualified refs only look
+  # at the named tap; plain names look everywhere).
+  def tap_formula_candidates(ref)
+    raw = ref.to_s
+    return [] if raw.start_with?("http://", "https://", "file://")
+    return [] if raw.start_with?("/") || raw.include?("\\")
+
+    qualified = raw.match(%r{\A([^/]+/[^/]+)/(.+)\z})
+    if qualified.nil? && raw.include?("/")
+      return []
+    end
+    name = qualified.nil? ? File.basename(raw, ".rb") : qualified[2]
+    name = File.basename(name, ".rb")
+    return [] if name.empty?
+
+    candidates = []
+    tap_roots.each do |root|
+      tap_name = tap_name_for_root(root)
+      next if !qualified.nil? && tap_name != qualified[1]
+
+      formula_dir = root/"Formula"
+      next unless formula_dir.directory?
+
+      files = [formula_dir/"#{name}.rb"]
+      files.concat(Pathname.glob((formula_dir/"*/#{name}.rb").to_s))
+      files.each do |path|
+        next unless path.file?
+
+        candidates << [tap_name, name, path]
+      end
+    end
+    candidates.uniq { |entry| entry[2].to_s }
+  end
+
+  # Resolve a local tap formula, raising Homebrew-style ambiguity when a plain
+  # name exists in more than one tap.  Returns nil when no local tap has it.
+  def tap_formula_source_for(ref)
+    return nil if ref.is_a?(Pathname)
+
+    candidates = tap_formula_candidates(ref)
+    return nil if candidates.empty?
+
+    if candidates.length > 1
+      full_names = candidates.map { |tap_name, name, _path| "#{tap_name}/#{name}" }.sort
+      raise PybrewFormulaAmbiguityError,
+            "Formulae found in multiple taps: #{full_names.join(", ")}; " \
+            "use a fully-qualified name (tap/formula)"
+    end
+
+    _tap_name, name, path = candidates.first
+    [name, path]
+  end
+
+  # Loader choice matrix mirroring Homebrew's loader order
+  # (bottle -> uri -> api -> tap -> path -> name -> keg).
+  def loader_matrix(ref)
+    raw = ref.to_s
+    matrix = {}
+    matrix[:bottle] = File.file?(raw) && /\A.+?\.bottle(?:\.tar\.gz)?\z/.match?(raw)
+    matrix[:uri] = raw.start_with?("http://", "https://", "file://")
+    matrix[:api] = begin
+      if api_json_configured?
+        ensure_api_json_loaded
+        !formula_class_get_from_api(File.basename(raw, ".rb")).nil?
+      else
+        false
+      end
+    rescue ScriptError, StandardError
+      false
+    end
+    taps = begin
+      tap_formula_candidates(ref)
+    rescue ScriptError, StandardError
+      []
+    end
+    matrix[:tap] = taps.length == 1
+    matrix[:tap_ambiguous] = taps.length > 1
+    matrix[:path] = File.file?(raw) && File.extname(raw) == ".rb"
+    matrix[:name] = !matrix[:path] && !matrix[:uri] && !matrix[:bottle]
+    if matrix[:tap_ambiguous]
+      matrix[:ambiguity] = taps.map { |tap_name, name, _path| "#{tap_name}/#{name}" }.sort
+    end
+    matrix
+  end
+
+  def loader_choice(ref)
+    matrix = loader_matrix(ref)
+    return :bottle if matrix[:bottle]
+    return :uri if matrix[:uri]
+    return :api if matrix[:api]
+    return :tap if matrix[:tap]
+    return :path if matrix[:path]
+
+    :name
   end
 
   # Look up an API alias/rename in the bounded API cache; nil when no API is
@@ -9949,8 +10272,24 @@ module Formulary
   # Load every configured channel, merging duplicate formula names field-wise
   # (later channels win) before mapping structs to classes.  This keeps
   # channel files able to carry subsets of the full struct set.
+  # Deterministic per-channel namespace identifier; used for diagnostics and
+  # to prove channel subsets stay isolated while merging by formula name.
+  def api_channel_namespace(channel)
+    "FormulaNamespaceAPIChannel#{api_channel_suffix(channel)}"
+  end
+
+  def api_channel_index
+    @api_channel_index ||= {}
+  end
+
+  def api_channel_for_formula(name)
+    key = name.to_s.split("/").last
+    Array(api_channel_index[key])
+  end
+
   def load_formula_from_api_channels!
     entries_by_name = {}
+    channels_by_name = {}
     order = []
     api_json_channels.each do |channel|
       suffix = api_channel_suffix(channel)
@@ -9963,7 +10302,9 @@ module Formulary
                 "API JSON file for channel #{channel.inspect} not found: #{file}"
         end
         data = api_json_text_data(file.open("r") { |io| ensure_utf8_encoding(io).read }, file)
-        entries = api_json_entries(api_channel_data(data, channel), "channel #{channel}")
+        entries = api_json_entries(
+          api_channel_data(data, channel), "channel #{channel}", allow_empty: true
+        )
       elsif !channel_url.empty?
         unless channel_url.start_with?("http://", "https://")
           raise PybrewFormulaUnavailableError,
@@ -9975,7 +10316,9 @@ module Formulary
         url = api_json_url
         if !file.nil? && file.file?
           data = api_json_text_data(file.open("r") { |io| ensure_utf8_encoding(io).read }, file)
-          entries = api_json_entries(api_channel_data(data, channel), "channel #{channel}")
+          entries = api_json_entries(
+            api_channel_data(data, channel), "channel #{channel}", allow_empty: true
+          )
         elsif !url.nil?
           entries = remote_api_json_entries
         else
@@ -9985,6 +10328,8 @@ module Formulary
       end
       entries.each do |entry|
         name = api_struct_name(entry)
+        channels_by_name[name] ||= []
+        channels_by_name[name] << channel unless channels_by_name[name].include?(channel)
         if entries_by_name.key?(name)
           entries_by_name[name] = merge_api_struct(entries_by_name[name], entry)
         else
@@ -9993,10 +10338,20 @@ module Formulary
         end
       end
     end
+    if order.empty?
+      raise PybrewFormulaUnavailableError,
+            "no formula structs found in configured API channels " \
+            "(#{api_json_channels.join(", ")})"
+    end
 
+    api_channel_index.clear
     loaded = order.map do |name|
       entry = entries_by_name[name]
-      load_formula_from_struct!(api_struct_name(entry), entry)
+      klass = load_formula_from_struct!(api_struct_name(entry), entry)
+      klass.loaded_channels = channels_by_name[name] if klass.respond_to?(:loaded_channels=)
+      klass.loaded_channel = channels_by_name[name].first if klass.respond_to?(:loaded_channel=)
+      api_channel_index[name] = channels_by_name[name]
+      klass
     end
     values = loaded.compact
     values.length == 1 ? values.first : values
@@ -10428,7 +10783,7 @@ module Formulary
     entries
   end
 
-  def api_json_entries(data, source = nil)
+  def api_json_entries(data, source = nil, allow_empty: false)
     entries = case data
               when Hash
                 if data["formulae"].is_a?(Array)
@@ -10458,7 +10813,7 @@ module Formulary
                       "malformed API JSON at #{source}: expected an object or array"
               end
     entries = entries.select { |entry| entry.is_a?(Hash) }
-    if entries.empty?
+    if entries.empty? && !allow_empty
       raise PybrewFormulaUnavailableError,
             "malformed API JSON at #{source}: no formula structs found"
     end
@@ -12194,7 +12549,7 @@ module Utils
     # transport that writes a ``-D`` header file gets full HTTP semantics; one
     # that only prints JSON is treated as HTTP 200.
     def get_json(url, data: nil, method: "GET", scopes: [], raise_errors: true,
-                 retries: 0, max_backoff: nil)
+                 retries: 0, max_backoff: nil, transport_retries: nil)
       command = [curl_executable, "-sS", "-L", "-H", "Accept: application/vnd.github+json"]
       command += ["-H", "Authorization: Bearer #{token}"] unless token.nil?
       command += ["-X", method.to_s] unless method.to_s == "GET"
@@ -12221,7 +12576,22 @@ module Utils
           sleep sleep_seconds if sleep_seconds.positive?
           return get_json(url, data: data, method: method, scopes: scopes,
                           raise_errors: raise_errors, retries: remaining - 1,
-                          max_backoff: max_backoff)
+                          max_backoff: max_backoff,
+                          transport_retries: transport_retries)
+        rescue API::Error
+          transport_left = if transport_retries.nil?
+            github_transport_retries
+          else
+            [transport_retries.to_i, 0].max
+          end
+          raise if transport_left.zero?
+
+          backoff = github_transport_backoff
+          sleep backoff if backoff.positive?
+          return get_json(url, data: data, method: method, scopes: scopes,
+                          raise_errors: raise_errors, retries: retries,
+                          max_backoff: max_backoff,
+                          transport_retries: transport_left - 1)
         end
       end
       return nil if output.empty?
@@ -12419,6 +12789,12 @@ module Utils
     end
 
     def sponsorships(user)
+      begin
+        graphql_result = graphql_sponsorships(user)
+        return graphql_result unless graphql_result.nil?
+      rescue ScriptError, StandardError
+        nil
+      end
       data = get_json(url_to("users", user, "sponsors"))
       data.is_a?(Hash) ? Array(data["items"] || data["sponsors"]) : Array(data)
     end
@@ -12501,29 +12877,55 @@ module Utils
       false
     end
 
-    def graphql(query, variables = {})
-      payload = JSON.generate(
-        "query" => query.to_s,
-        "variables" => variables.nil? ? {} : variables
-      )
-      command = [curl_executable, "-sS", "-L", "-X", "POST",
-                 "-H", "Accept: application/json",
-                 "-H", "Content-Type: application/json"]
-      token_value = token
-      command += ["-H", "Authorization: bearer #{token_value}"] unless token_value.to_s.empty?
-      command += ["--data", payload, graphql_url]
-      output = Utils.popen_read(*command, safe: true).to_s
+    GITHUB_TRANSPORT_RETRIES_ENV = "PYBREW_GITHUB_TRANSPORT_RETRIES"
+    GITHUB_TRANSPORT_BACKOFF_ENV = "PYBREW_GITHUB_TRANSPORT_BACKOFF"
+
+    def github_transport_retries
+      raw = ENV[GITHUB_TRANSPORT_RETRIES_ENV].to_s.strip
+      return 0 if raw.empty?
+
+      value = raw.to_i
+      value.negative? ? 0 : [value, 5].min
+    end
+
+    def github_transport_backoff
+      raw = ENV[GITHUB_TRANSPORT_BACKOFF_ENV].to_s.strip
+      return 0 if raw.empty?
+
+      value = raw.to_i
+      value.negative? ? 0 : [value, 30].min
+    end
+
+    # GraphQL POST with bounded transport retries (in addition to the
+    # rate-limit retry handled by ``graphql_paginated_nodes``).
+    def graphql(query, variables = {}, retries: nil, retry_backoff: nil)
+      attempts_left = retries.nil? ? github_transport_retries : [retries.to_i, 0].max
+      backoff = retry_backoff.nil? ? github_transport_backoff : [retry_backoff.to_i, 0].max
       begin
-        JSON.parse(output)
-      rescue ScriptError, StandardError => error
-        raise PybrewGitHubGraphqlError,
-              "malformed GraphQL JSON from #{graphql_url}: #{error.class}: #{error.message}"
+        payload = JSON.generate(
+          "query" => query.to_s,
+          "variables" => variables.nil? ? {} : variables
+        )
+        command = [curl_executable, "-sS", "-L", "-X", "POST",
+                   "-H", "Accept: application/json",
+                   "-H", "Content-Type: application/json"]
+        token_value = token
+        command += ["-H", "Authorization: bearer #{token_value}"] unless token_value.to_s.empty?
+        command += ["--data", payload, graphql_url]
+        output = Utils.popen_read(*command, safe: true).to_s
+        begin
+          JSON.parse(output)
+        rescue ScriptError, StandardError => error
+          raise PybrewGitHubGraphqlError,
+                "malformed GraphQL JSON from #{graphql_url}: #{error.class}: #{error.message}"
+        end
+      rescue PybrewGitHubGraphqlError, ScriptError, StandardError => error
+        raise if attempts_left.zero?
+
+        attempts_left -= 1
+        sleep backoff if backoff.positive?
+        retry
       end
-    rescue PybrewGitHubGraphqlError
-      raise
-    rescue ScriptError, StandardError => error
-      raise PybrewGitHubGraphqlError,
-            "GitHub GraphQL transport failed: #{error.class}: #{error.message}"
     end
 
     def record_graphql_rate_limit(data)
@@ -12818,6 +13220,31 @@ module Utils
       GRAPHQL
         ["organization", "team", "members"])
       Array(nodes).map { |member| { "login" => member["login"] } }
+    end
+
+    def graphql_sponsorships(user)
+      nodes = graphql_paginated_nodes(<<~GRAPHQL, { "login" => user.to_s },
+        query($login: String!, $after: String) {
+          rateLimit { remaining resetAt cost }
+          user(login: $login) {
+            sponsorshipsAsSponsored(first: 100, after: $after) {
+              pageInfo { hasNextPage endCursor }
+              nodes {
+                sponsorEntity {
+                  __typename
+                  ... on User { login }
+                  ... on Organization { login }
+                }
+              }
+            }
+          }
+        }
+      GRAPHQL
+        ["user", "sponsorshipsAsSponsored"])
+      Array(nodes).map do |node|
+        entity = node.is_a?(Hash) && node["sponsorEntity"].is_a?(Hash) ? node["sponsorEntity"] : {}
+        { "login" => entity["login"] }
+      end
     end
 
     def graphql_sponsorship_tiers(user)

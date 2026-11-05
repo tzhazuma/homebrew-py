@@ -10,6 +10,12 @@ from typing import Any, Iterable, Optional
 from .cellar import Cellar, read_receipt
 from .errors import FormulaNotFound
 from .paths import LINK_DIRS, Config
+from .services import (
+    ServiceManager,
+    formula_service_labels,
+    service_formula_name_from_label,
+    service_label_from_path,
+)
 
 
 def _broken_symlinks(root: Path) -> Iterable[Path]:
@@ -96,12 +102,31 @@ def diagnose_issues(config: Config, loader: Optional[Any] = None) -> list[dict[s
 
     service_dir = config.service_dir
     if service_dir.is_dir():
+        known_labels: dict[str, str] = {}
+        if loader is not None:
+            manager = ServiceManager(config)
+            for name in sorted(installed):
+                try:
+                    formula = loader.load(name)
+                except Exception:
+                    continue
+                try:
+                    spec = manager.spec_for(formula)
+                except Exception:
+                    spec = None
+                for label in formula_service_labels(formula, spec):
+                    known_labels.setdefault(label, name)
         for path in sorted(service_dir.iterdir()):
-            name = path.name
-            if name.startswith("homebrew.mxcl.") and name.endswith((".plist", ".service")):
-                formula_name = name[len("homebrew.mxcl.") :].rsplit(".", 1)[0]
-                if not config.opt_path(formula_name).is_dir():
-                    issue("services", f"orphan service file for uninstalled formula: {path}")
+            label = service_label_from_path(path.name)
+            if label is None:
+                continue
+            owner = known_labels.get(label)
+            if owner is not None and config.opt_path(owner).is_dir():
+                continue
+            formula_name = service_formula_name_from_label(label)
+            if formula_name is not None and config.opt_path(formula_name).is_dir():
+                continue
+            issue("services", f"orphan service file for uninstalled formula: {path}")
 
     return issues
 

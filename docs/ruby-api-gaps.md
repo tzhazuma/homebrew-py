@@ -6,7 +6,7 @@ claiming full parity with every file under `Library/Homebrew`.
 
 ## Current baseline
 
-- Full test suite: 1272 passed, 6 skipped (2026-11-05 parity batch after Homebrew `de8798899c`)
+- Full test suite: 1311 passed, 6 skipped (2026-11-05 parity batch after Homebrew `de8798899c`)
 - CI: Ubuntu 3.9 / 3.12 + macOS 3.12
 - Optional Ruby bridge remains opt-in; default parser behavior is unchanged.
 
@@ -41,7 +41,7 @@ claiming full parity with every file under `Library/Homebrew`.
 | MacOS SDK/Xcode/CLT detection | Partial | env overrides (developer dir/SDK/Xcode/CLT versions) and Xcode detection bug fix; broad host detection remains best-effort |
 | Utils modules | Partial | `Utils::Path`/Git/Curl/Gzip/Tar/Zip/Cp/Popen/Bottles/Svn/Analytics/SPDX exist; GitHub has GraphQL transport, GraphQL-first repository/PR/commits/labels/files/reviews/team/sponsorship with cursor pagination (10 pages) and rate-limit fields, secondary-rate-limit/Retry-After handling, REST fallback and Enterprise base URL; Sandbox rules/profile generation is bounded |
 | SystemConfig host details | Partial | sections include Xcode/CLT/compiler/hardware detail; host-specific detection remains bounded |
-| Service Ruby helpers | Partial | Both parsers follow opt/keg/global paths, std_service_path_env, manual_command quoting, working/root/input/log/error paths, user env overrides, declared vs effective env; manager and explicit standalone context re-read at render, no-context calls use snapshots; launchd/systemd share the effective-env PATH policy. Default log paths and `homebrew.mxcl.*` labels remain pybrew-specific |
+| Service Ruby helpers | Completed | Both parsers follow opt/keg/global paths, std_service_path_env, manual_command quoting, working/root/input/log/error paths, user env overrides, declared vs effective env; manager and explicit standalone context re-read at render, no-context calls use snapshots; launchd/systemd share the effective-env PATH policy. Canonical `sh.brew.*` labels are the default with legacy aliases, doctor/cleanup recognize all label forms, negative-nice validation matches Homebrew, and ServiceSpec hash persistence is covered. Residual: custom-label doctor/cleanup needs a loader and legacy files are not auto-renamed |
 | Patch/resource edge cases | Partial | static-name and repeated `resource(...).stage` supported with deterministic safe paths/caching; brace `patch { ... }` blocks now parse; dynamic resource names, `stage { }` block form and exotic patch forms remain limited |
 
 ## P3 — Engineering
@@ -68,5 +68,5 @@ suite before committing.
 
 ## Detailed inventory
 
-See [parity-backlog.md](parity-backlog.md) for the 18 remaining partial areas and
+See [parity-backlog.md](parity-backlog.md) for the 17 remaining partial areas and
 their concrete missing behaviors.

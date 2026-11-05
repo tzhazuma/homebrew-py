@@ -53,6 +53,8 @@ def _config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Config:
     monkeypatch.setenv("PYBREW_SERVICE_BACKEND", "launchd")
     monkeypatch.delenv("HOMEBREW_USER_CONFIG_HOME", raising=False)
     monkeypatch.delenv(SERVICE_PATH_MODE_ENV, raising=False)
+    monkeypatch.delenv(SERVICE_NAME_STYLE_ENV, raising=False)
+    monkeypatch.delenv(SERVICE_DEFAULT_LOGS_ENV, raising=False)
     config = Config.default(prefix=tmp_path / "prefix", taps=[], cache=tmp_path / "cache")
     config.ensure()
     return config
@@ -772,12 +774,12 @@ def test_plist_generation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     spec = manager.spec_for(formula)
     path = manager.write_plist(formula, spec)
     payload = plistlib.loads(path.read_bytes())
-    assert payload["Label"] == "homebrew.mxcl.svc"
+    assert payload["Label"] == "sh.brew.svc"
     assert payload["ProgramArguments"][0].endswith("/opt/svc/bin/svc")
     assert payload["KeepAlive"] is True
     assert payload["RunAtLoad"] is True
     assert payload["EnvironmentVariables"]["FOO"] == "bar"
-    assert path.name == "homebrew.mxcl.svc.plist"
+    assert path.name == "sh.brew.svc.plist"
 
 
 def test_start_stop_with_fake_launchctl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -840,7 +842,7 @@ def test_cli_services_start_list_stop(run_cli, sample, tmp_path, monkeypatch) ->
     }
     started = run_cli("services", "start", "svc", extra_env=env)
     assert started.returncode == 0, started.stderr
-    assert (sample.root / "agents" / "homebrew.mxcl.svc.plist").is_file()
+    assert (sample.root / "agents" / "sh.brew.svc.plist").is_file()
     assert "bootstrap" in log.read_text()
 
     listed = run_cli("services", "list", extra_env=env)
@@ -948,18 +950,18 @@ def test_systemd_unit_and_lifecycle(tmp_path: Path, monkeypatch: pytest.MonkeyPa
     manager = ServiceManager(config)
 
     path = manager.start(formula)
-    assert path.name == "homebrew.mxcl.svc.service"
+    assert path.name == "sh.brew.svc.service"
     unit = path.read_text()
     assert "[Unit]" in unit and "[Service]" in unit
     assert "ExecStart=" in unit
     assert "WorkingDirectory=" in unit
     assert 'Environment="FOO=bar"' in unit
     assert "daemon-reload" in log.read_text()
-    assert "start homebrew.mxcl.svc.service" in log.read_text()
+    assert "start sh.brew.svc.service" in log.read_text()
     assert manager.status(formula) == "started"
 
     manager.stop(formula)
-    assert "stop homebrew.mxcl.svc.service" in log.read_text()
+    assert "stop sh.brew.svc.service" in log.read_text()
 
 
 def test_cleanup_removes_orphan_service_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -968,7 +970,7 @@ def test_cleanup_removes_orphan_service_files(tmp_path: Path, monkeypatch: pytes
     _install_fake_keg(config, formula)
     manager = ServiceManager(config)
     manager.directory.mkdir(parents=True, exist_ok=True)
-    installed_file = manager.directory / "homebrew.mxcl.svc.plist"
+    installed_file = manager.directory / "sh.brew.svc.plist"
     installed_file.write_text("keep")
     orphan = manager.directory / "homebrew.mxcl.ghost.plist"
     orphan.write_text("orphan")
@@ -1077,7 +1079,7 @@ def test_plist_renders_extended_fields(tmp_path: Path, monkeypatch: pytest.Monke
     spec = manager.spec_for(formula)
     payload = manager.plist_payload(formula, spec)
 
-    assert payload["Label"] == "homebrew.mxcl.svc"
+    assert payload["Label"] == "sh.brew.svc"
     assert payload["RunAtLoad"] is False
     assert payload["KeepAlive"] == {
         "NetworkState": True,
@@ -1259,15 +1261,15 @@ def test_systemd_start_stop_with_fake_runner_extended_fields(
 
     path = manager.start(formula)
     unit = path.read_text()
-    assert path.name == "homebrew.mxcl.svc.service"
+    assert path.name == "sh.brew.svc.service"
     assert "Type=oneshot" in unit
     assert "Restart=on-failure" in unit
     assert "daemon-reload" in log.read_text()
-    assert "start homebrew.mxcl.svc.service" in log.read_text()
+    assert "start sh.brew.svc.service" in log.read_text()
     assert manager.status(formula) == "started"
 
     manager.stop(formula)
-    assert "stop homebrew.mxcl.svc.service" in log.read_text()
+    assert "stop sh.brew.svc.service" in log.read_text()
 
 
 @pytest.mark.parametrize(
@@ -1427,9 +1429,9 @@ def test_service_spec_helper_methods(tmp_path: Path) -> None:
     assert spec.keep_alive_p() is True
     assert spec.timed_p() is True
     assert spec.requires_root_p() is True
-    assert spec.nice_requires_root_p() is True
-    assert spec.default_service_name("svc") == "homebrew.mxcl.svc"
-    assert spec.default_plist_name("svc") == "homebrew.mxcl.svc.plist"
+    assert spec.nice_requires_root_p() is False
+    assert spec.default_service_name("svc") == "sh.brew.svc"
+    assert spec.default_plist_name("svc") == "sh.brew.svc.plist"
     assert spec.path_dir(prefix) == prefix / "bin"
     assert spec.path_dirs(prefix) == [prefix / "bin", prefix / "sbin"]
     assert spec.path_parent_dir(prefix) == tmp_path
@@ -1507,7 +1509,7 @@ def test_service_manager_render_wrappers(
     formula = _formula()
     spec = manager.spec_for(formula)
     payload = manager.to_plist(formula)
-    assert payload["Label"] == "homebrew.mxcl.svc"
+    assert payload["Label"] == "sh.brew.svc"
     assert payload["ProgramArguments"] == spec.run
     unit = manager.to_systemd_unit(formula)
     assert "[Service]" in unit
@@ -1843,11 +1845,11 @@ def test_systemd_interval_timer_and_start(
     assert "OnUnitActiveSec=300" in timer
     assert "OnCalendar=" not in timer
     assert "Persistent=true" not in timer
-    assert "Unit=homebrew.mxcl.svc.service" in timer
+    assert "Unit=sh.brew.svc.service" in timer
 
     manager.start(formula)
     assert manager.timer_path(formula).is_file()
-    assert "start homebrew.mxcl.svc.timer" in log.read_text()
+    assert "start sh.brew.svc.timer" in log.read_text()
 
 
 # ---------------------------------------------------------------------------
@@ -1876,7 +1878,7 @@ class _RecordingRunner:
         self.calls.append(("daemon-reload",))
 
 
-def test_default_name_style_keeps_pybrew_legacy_label(
+def test_default_name_style_is_canonical_sh_brew(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = _config(tmp_path, monkeypatch)
@@ -1885,13 +1887,28 @@ def test_default_name_style_keeps_pybrew_legacy_label(
     formula = _formula()
     spec = manager.spec_for(formula)
 
-    assert manager.label(formula, spec) == "homebrew.mxcl.svc"
-    assert manager.plist_path(formula, spec).name == "homebrew.mxcl.svc.plist"
+    assert manager.label(formula, spec) == "sh.brew.svc"
+    assert manager.plist_path(formula, spec).name == "sh.brew.svc.plist"
     assert manager.labels(formula, spec) == [
-        "homebrew.mxcl.svc",
         "sh.brew.svc",
+        "homebrew.mxcl.svc",
         "homebrew.svc",
     ]
+
+
+def test_legacy_name_style_is_opt_in(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    monkeypatch.setenv(SERVICE_NAME_STYLE_ENV, "pybrew")
+    manager = ServiceManager(config)
+    formula = _formula()
+    spec = manager.spec_for(formula)
+
+    assert manager.label(formula, spec) == "homebrew.mxcl.svc"
+    assert manager.plist_path(formula, spec).name == "homebrew.mxcl.svc.plist"
+    assert manager.labels(formula, spec)[0] == "homebrew.mxcl.svc"
+    assert "sh.brew.svc" in manager.labels(formula, spec)
 
 
 @pytest.mark.parametrize("style_env", ["canonical", "brew", "homebrew", "sh.brew"])
@@ -2040,17 +2057,17 @@ def test_systemd_canonical_label_and_legacy_alias(
 ) -> None:
     config = _config(tmp_path, monkeypatch)
     monkeypatch.setenv("PYBREW_SERVICE_BACKEND", "systemd")
-    runner = _RecordingRunner(started=("homebrew.mxcl.svc.service",))
+    runner = _RecordingRunner(started=("sh.brew.svc.service",))
     manager = ServiceManager(config, runner=runner, name_style="canonical")
     formula = _formula()
     spec = manager.spec_for(formula)
     manager.directory.mkdir(parents=True, exist_ok=True)
-    (manager.directory / "homebrew.mxcl.svc.service").write_text("legacy unit")
+    (manager.directory / "sh.brew.svc.service").write_text("legacy unit")
 
     assert manager.label(formula, spec) == "sh.brew.svc"
     assert manager.unit_path(formula, spec).name == "sh.brew.svc.service"
     assert manager.status(formula) == "started"
-    assert ("status", "homebrew.mxcl.svc.service") in runner.calls
+    assert ("status", "sh.brew.svc.service") in runner.calls
 
 
 # ---------------------------------------------------------------------------
@@ -2272,3 +2289,210 @@ def test_user_env_warnings_are_json_safe(
         "warnings": spec.warnings
     }
     assert all(isinstance(warning, str) for warning in spec.warnings)
+
+
+# ---------------------------------------------------------------------------
+# Negative nice / require_root validation parity
+# ---------------------------------------------------------------------------
+
+
+def test_negative_nice_requires_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    with pytest.raises(ServiceError, match="require_root"):
+        parse_service_block(
+            _formula_with_service('run [opt_bin/"svc"]\nnice -5'), config
+        )
+
+    # Directive order does not matter: the final spec is validated.
+    spec = parse_service_block(
+        _formula_with_service(
+            'run [opt_bin/"svc"]\nnice -5\nrequire_root true'
+        ),
+        config,
+    )
+    assert spec.nice == -5
+    assert spec.nice_requires_root_p() is False
+    assert spec.requires_root_p() is True
+
+
+def test_nice_range_is_validated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    for value in (-21, 20):
+        with pytest.raises(ServiceError, match="between -20 and 19"):
+            parse_service_block(
+                _formula_with_service(
+                    f'run [opt_bin/"svc"]\nnice {value}\nrequire_root true'
+                ),
+                config,
+            )
+
+    spec = parse_service_block(
+        _formula_with_service('run [opt_bin/"svc"]\nnice 19'), config
+    )
+    assert spec.nice == 19
+    assert spec.nice_requires_root_p() is False
+
+
+def test_from_hash_validates_nice_constraints() -> None:
+    with pytest.raises(ServiceError, match="require_root"):
+        ServiceSpec.from_hash({"nice": -1})
+    with pytest.raises(ServiceError, match="between -20 and 19"):
+        ServiceSpec.from_hash({"nice": 30, "require_root": True})
+
+    spec = ServiceSpec.from_hash({"nice": -1, "require_root": True})
+    assert spec.nice == -1
+    assert spec.nice_requires_root_p() is False
+
+
+# ---------------------------------------------------------------------------
+# Doctor and cleanup label coverage (canonical/legacy/custom)
+# ---------------------------------------------------------------------------
+
+
+class _FakeLoader:
+    def __init__(self, formulae: dict[str, Formula]) -> None:
+        self._formulae = formulae
+
+    def load(self, name: str) -> Formula:
+        return self._formulae[name]
+
+
+def test_doctor_recognises_all_service_label_forms_and_custom_labels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pybrew.doctor import diagnose_issues
+
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula_with_service(
+        'run [opt_bin/"svc"]\nname macos: "com.example.svc", linux: "custom-svc"'
+    )
+    _install_fake_keg(config, formula)
+    manager = ServiceManager(config)
+    manager.directory.mkdir(parents=True, exist_ok=True)
+    for name in (
+        "sh.brew.svc.plist",
+        "homebrew.mxcl.svc.plist",
+        "homebrew.svc.service",
+        "com.example.svc.plist",
+        "custom-svc.service",
+        "custom-svc.timer",
+    ):
+        (manager.directory / name).write_text("service")
+
+    issues = diagnose_issues(
+        config, loader=_FakeLoader({formula.name: formula})
+    )
+    assert [i for i in issues if i["category"] == "services"] == []
+
+    orphan = manager.directory / "sh.brew.ghost.plist"
+    orphan.write_text("service")
+    issues = diagnose_issues(
+        config, loader=_FakeLoader({formula.name: formula})
+    )
+    messages = [i["message"] for i in issues if i["category"] == "services"]
+    assert any(str(orphan) in message for message in messages)
+
+
+def test_cleanup_handles_custom_labels_with_installed_formulae(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    formula = _formula_with_service(
+        'run [opt_bin/"svc"]\nname macos: "com.example.svc", linux: "custom-svc"'
+    )
+    _install_fake_keg(config, formula)
+    manager = ServiceManager(config)
+    manager.directory.mkdir(parents=True, exist_ok=True)
+    kept = manager.directory / "com.example.svc.plist"
+    kept.write_text("service")
+    stale = [
+        manager.directory / "com.example.ghost.plist",
+        manager.directory / "homebrew.ghost.service",
+        manager.directory / "homebrew.mxcl.ghost.plist",
+    ]
+    for path in stale:
+        path.write_text("service")
+
+    removed = manager.cleanup([formula])
+
+    assert set(removed) == set(stale)
+    assert kept.exists()
+
+
+# ---------------------------------------------------------------------------
+# Persistence edge cases
+# ---------------------------------------------------------------------------
+
+
+def test_to_hash_round_trip_preserves_inferred_and_explicit_run_type() -> None:
+    inferred = ServiceSpec(
+        run=["/opt/svc/bin/svc"],
+        interval=30,
+        cron={
+            "Minute": 0,
+            "Hour": 0,
+            "Day": "*",
+            "Month": "*",
+            "Weekday": "*",
+        },
+    )
+    restored = ServiceSpec.from_hash(inferred.to_hash())
+    assert restored.effective_run_type() == "cron"
+    assert restored.run_type_explicit is False
+
+    explicit_immediate = ServiceSpec(
+        run=["/opt/svc/bin/svc"],
+        run_type="immediate",
+        run_type_explicit=True,
+        cron={"Minute": 0, "Hour": 0},
+        interval=30,
+    )
+    restored = ServiceSpec.from_hash(explicit_immediate.to_hash())
+    assert restored.effective_run_type() == "immediate"
+    assert restored.run_type_explicit is True
+
+
+def test_to_hash_round_trip_preserves_false_run_at_load_and_empty_spec() -> None:
+    spec = ServiceSpec(run=["/opt/svc/bin/svc"], run_at_load=False)
+    restored = ServiceSpec.from_hash(spec.to_hash())
+    assert restored.run_at_load is False
+
+    empty = ServiceSpec.from_hash(ServiceSpec().to_hash())
+    assert empty.run == []
+    assert empty.run_type == "immediate"
+    assert empty.run_type_explicit is False
+    assert empty.run_at_load is True
+    assert empty.cron == {}
+    assert empty.sockets == {}
+
+
+def test_from_hash_edge_shapes_and_unknown_fields() -> None:
+    spec = ServiceSpec.from_hash(
+        {
+            "run": "single-command",
+            "sockets": {"http": "tcp://127.0.0.1:8080"},
+            "environment_variables": {"A": 1, "B": None},
+            "unknown": {"ignored": True},
+            "interval": "60",
+        }
+    )
+    assert spec.run == ["single-command"]
+    assert spec.sockets == {
+        "http": {"host": "127.0.0.1", "port": "8080", "type": "tcp"}
+    }
+    assert spec.environment_variables == {"A": "1", "B": ""}
+    assert spec.interval == 60
+    assert not hasattr(spec, "unknown")
+
+
+def test_direct_service_spec_construction_validates_nice() -> None:
+    with pytest.raises(ServiceError, match="require_root"):
+        ServiceSpec(nice=-1)
+    with pytest.raises(ServiceError, match="between -20 and 19"):
+        ServiceSpec(nice=20)
+    spec = ServiceSpec(nice=-1, require_root=True)
+    assert spec.nice_requires_root_p() is False

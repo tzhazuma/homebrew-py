@@ -14,8 +14,8 @@ Last inventory: 2026-11-05 (upstream `de8798899c`).
 | --- | ---: |
 | Ruby core / Formulary / installer | 4 |
 | Cask + test DSL | 8 |
-| Keg, platform, Utils, services, patches | 6 |
-| **Total** | **18** |
+| Keg, platform, Utils, patches | 5 |
+| **Total** | **17** |
 
 ## P0 — Ruby core
 
@@ -77,18 +77,20 @@ Remaining: full option propagation across every strategy and redirect path.
 
 ### 7. Cask script shim
 
-Remaining: kext/script/launchctl/early_script zap actions; exact
-`system_command`/`sudo` semantics; exotic unbalanced Ruby capture.
+Remaining: privileged upstream `sudo` execution is intentionally rejected;
+exotic unbalanced Ruby capture remains best-effort. Zap
+early_script/launchctl/kext/script actions are implemented.
 
 ### 8. Test DSL arbitrary formula lookup
 
-Remaining: aliases beyond the 10000-name / 2000-source / 8 KiB eager bounds;
-fully lazy tap indexes at very large scale.
+Remaining: aliases beyond the 20000-name catalog / 8 KiB source-prefix bounds;
+taps above the catalog cap still need an eager index.
 
 ### 9. Test DSL dependency test isolation
 
-Remaining: same-process fallback on hosts without `fork` (timeout process-group
-cleanup is now implemented where `fork`/`setpgid` exist).
+Remaining: non-fork hosts intentionally use an explicit same-process mode
+(full isolation requires `fork`); process-group timeout cleanup is implemented
+where supported.
 
 ### 10. Test DSL version object / revision
 
@@ -118,19 +120,23 @@ Remaining: broad host detection without env overrides.
 
 ### 15. Utils modules
 
-Remaining: full GraphQL connection coverage beyond the bounded cursor pages
-(reviews/team/sponsorship edge pages) and exact backoff across every transport.
+Remaining: full coverage of every GitHub GraphQL connection edge and exact
+backoff across non-rate-limit transports. Reviews/team/sponsorships/tiers and
+transport retries are implemented.
 
 ### 16. SystemConfig host details
 
 Remaining: host-specific output (kernel, hardware, compiler, Ruby, taps) at
 Homebrew detail level.
 
-### 17. Service Ruby helpers
+## Completed during this effort
 
-Remaining: canonical `sh.brew.*` is opt-in (legacy default retained for
-`test_bundle.py`); doctor/cleanup custom-label coverage; hash persistence omits
-local env context. PATH policy is unified and env warnings are surfaced.
+### Service Ruby helpers
+
+Completed in round 4: canonical `sh.brew.*` default with legacy aliases,
+doctor/cleanup label coverage, negative-nice validation, unified PATH, env
+warnings, and ServiceSpec hash persistence. Residual: custom-label doctor/cleanup
+requires a loader, and existing legacy files are not auto-renamed.
 
 ### 18. Patch/resource edge cases
 

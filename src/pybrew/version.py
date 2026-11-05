@@ -246,6 +246,14 @@ class Token:
             return hash(0)
         if type(self) is NumericToken:
             return hash(self.value)
+        # Short pre-release aliases (``a4``/``alpha4``) compare equal, so
+        # hash the canonical word + revision.  Other pre-release and
+        # patch/post tokens compare textually (``p`` == LetterToken("p")).
+        if isinstance(self, (AlphaToken, BetaToken)) and self.revision:
+            word = "alpha" if isinstance(self, AlphaToken) else "beta"
+            return hash(f"{word}{self.revision}")
+        if isinstance(self, PreReleaseToken) or isinstance(self, (PToken, PostToken)):
+            return hash(self.to_s())
         return hash(self.to_s())
 
 
@@ -429,6 +437,9 @@ Token.rev = property(lambda self: self.revision)
 
 _TOKEN_PATTERN = re.compile(
     r"(?P<numeric>\d+)"
+    # Single-letter aliases are only pre-release tokens when followed by a
+    # revision: ``a4`` is alpha4, but a bare ``a`` is a post-release letter.
+    r"|(?P<shortpre>[ab])(?P<shortrev>\d+)"
     r"|(?P<pre>preview|alpha|beta|post|pre|rc|p)(?P<revision>\d*)"
     r"|(?P<letter>[A-Za-z]+)",
     re.IGNORECASE,
@@ -449,6 +460,10 @@ def _version_tokens(version: str) -> list[Token]:
     for match in _TOKEN_PATTERN.finditer(version):
         if match.group("numeric") is not None:
             tokens.append(NumericToken(int(match.group("numeric"))))
+        elif match.group("shortpre") is not None:
+            word = match.group("shortpre").lower()
+            token_class = AlphaToken if word == "a" else BetaToken
+            tokens.append(token_class(word, int(match.group("shortrev") or 0)))
         elif match.group("pre") is not None:
             word = match.group("pre").lower()
             if word == "preview":
@@ -549,6 +564,15 @@ def compare_versions(
     ``PYBREW_VERSION_HOMEBREW=0``/``Version.homebrew = False``), otherwise
     Homebrew.
     """
+
+    # Homebrew treats HEAD (with or without a commit suffix) as newer than
+    # every numeric version, but all HEAD spellings compare equal.
+    left_head = left == "HEAD" or left.startswith("HEAD-")
+    right_head = right == "HEAD" or right.startswith("HEAD-")
+    if left_head or right_head:
+        if left_head and right_head:
+            return 0
+        return 1 if left_head else -1
 
     if missing_numeric_zero is None:
         missing_numeric_zero = _homebrew_mode_enabled()

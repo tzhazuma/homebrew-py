@@ -4979,7 +4979,10 @@ def test_formula_installer_loaded_writes_install_receipt(
     keg = _build(tmp_path, formula)
     assert (keg / "receipt.txt").read_text().splitlines() == [
         "true",
-        "installed_on_request,poured_from_bottle,runtime_dependencies,version",
+        "arch,built_as_bottle,changed_files,compiler,homebrew_version,"
+        "installed_as_dependency,installed_on_request,poured_from_bottle,"
+        "runtime_dependencies,sbom,source,source_modified_time,stdlib,tap,"
+        "time,version",
         "2.0",
         "true",
         "dep",
@@ -9152,3 +9155,386 @@ def test_macos_broad_local_detection_with_fake_xcrun_clt_and_system_config(
     assert lines[5] == "true"
     assert lines[6] == "15.3.0.1"
     assert lines[7] == "true"
+
+
+# ---------------------------------------------------------------------------
+# Residual wave: local MacOS/Xcode/CLT/SDK choice, GraphQL connection
+# pagination/transport retry, Formulary loader ambiguity matrix and
+# FormulaInstaller Tab/SBOM parity.
+# ---------------------------------------------------------------------------
+
+
+def test_macos_local_choice_without_version_overrides_and_rich_system_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    app = tmp_path / "Xcode.app"
+    developer = app / "Contents" / "Developer"
+    sdk = developer / "Platforms/MacOSX.platform/Developer/SDKs/MacOSX14.5.sdk"
+    sdk.mkdir(parents=True)
+    (sdk / "SDKSettings.json").write_text(json.dumps({"Version": "14.5"}))
+    (app / "Contents" / "version.plist").write_text(
+        "<?xml version=\"1.0\"?><plist><dict>"
+        "<key>CFBundleShortVersionString</key><string>15.4</string>"
+        "</dict></plist>"
+    )
+    fake_select = tmp_path / "xcode-select"
+    fake_select.write_text("#!/bin/sh\nprintf '%s\\n' \"" + str(developer) + "\"\n")
+    fake_select.chmod(0o755)
+    fake_pkgutil = tmp_path / "pkgutil"
+    fake_pkgutil.write_text(
+        "#!/bin/sh\nprintf 'package-id: com.apple.pkg.CLTools_Executables\\n"
+        "version: 15.3.0.1\\n'\n"
+    )
+    fake_pkgutil.chmod(0o755)
+    fake_xcrun = tmp_path / "xcrun"
+    fake_xcrun.write_text("#!/bin/sh\nexit 1\n")
+    fake_xcrun.chmod(0o755)
+    monkeypatch.setenv("PYBREW_XCODE_SELECT", str(fake_select))
+    monkeypatch.setenv("PYBREW_PKGUTIL", str(fake_pkgutil))
+    monkeypatch.setenv("PYBREW_XCRUN", str(fake_xcrun))
+    monkeypatch.setenv("HOMEBREW_MACOS_VERSION", "14.5")
+    for name in (
+        "HOMEBREW_XCODE_VERSION",
+        "HOMEBREW_CLT_VERSION",
+        "HOMEBREW_SDKROOT",
+        "HOMEBREW_SDK_PATH",
+        "HOMEBREW_SDK_VERSION",
+        "PYBREW_XCODE_APP",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    body = (
+        '  sdk = MacOS.sdk\n'
+        '  sdks = MacOS::SDK.all_sdks.map { |entry| entry.version.to_s }.join(",")\n'
+        '  (prefix/"local-macos.txt").write [\n'
+        '    MacOS::Xcode.installed?.to_s,\n'
+        '    MacOS::Xcode.version.to_s,\n'
+        '    MacOS::Xcode.bundle_path.to_s,\n'
+        '    sdks,\n'
+        '    sdk.nil? ? "nil" : sdk.path.to_s,\n'
+        '    MacOS::CLT.version.to_s,\n'
+        '    MacOS::CLT.installed?.to_s,\n'
+        '    SystemConfig.describe_xcode.include?("15.4").to_s,\n'
+        '    SystemConfig.describe_clt.to_s,\n'
+        '    SystemConfig.describe_sdk.include?("14.5").to_s,\n'
+        '    SystemConfig.describe_kernel.empty?.to_s,\n'
+        '    SystemConfig.describe_compiler.empty?.to_s,\n'
+        '    SystemConfig.describe_ruby.include?(RUBY_VERSION).to_s,\n'
+        '    SystemConfig.describe_arch.include?(Hardware::CPU.arch.to_s).to_s,\n'
+        '    SystemConfig.config_sections.include?(:kernel_config).to_s,\n'
+        '    SystemConfig.config_sections.include?(:compiler_config).to_s,\n'
+        '    SystemConfig.config_sections.include?(:taps_config).to_s,\n'
+        '    SystemConfig.config_sections.include?(:macos_config).to_s,\n'
+        '    SystemConfig.dump(StringIO.new).string.include?("Taps:").to_s,\n'
+        '    SystemConfig.dump(StringIO.new).string.include?("Kernel:").to_s\n'
+        '  ].join("\\n")\n'
+    )
+    keg = _run_raw_body(tmp_path, body, name="ruby-local-macos-choice")
+    lines = (keg / "local-macos.txt").read_text().splitlines()
+    assert lines[0] == "true"
+    assert lines[1] == "15.4"
+    assert lines[2] == str(app)
+    assert "14.5" in lines[3]
+    assert lines[4] == str(sdk)
+    assert lines[5] == "15.3.0.1"
+    assert lines[6] == "true"
+    assert lines[7] == "true"
+    assert lines[8] == "15.3.0.1"
+    assert lines[9] == "true"
+    assert lines[10:] == ["false", "false", "true", "true", "true", "true", "true", "true", "true", "true"]
+
+
+def test_github_graphql_connections_and_transport_retries(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    graphql_script = tmp_path / "graphql-connections"
+    graphql_script.write_text(
+        "#!" + _RUBY + "\n"
+        'require "json"\n'
+        'args = ARGV\n'
+        'idx = args.index("--data")\n'
+        'payload = idx ? JSON.parse(args[idx + 1]) : {}\n'
+        'query = payload["query"].to_s\n'
+        'after = (payload["variables"] || {})["after"].to_s\n'
+        'def connection(nodes, has_next, cursor)\n'
+        '  { "pageInfo" => { "hasNextPage" => has_next,\n'
+        '                    "endCursor" => has_next ? cursor : nil }, "nodes" => nodes }\n'
+        'end\n'
+        'data = { "rateLimit" => { "remaining" => 100 } }\n'
+        'if query.include?("reviews")\n'
+        '  nodes = if after.empty?\n'
+        '    [ { "state" => "APPROVED", "authorAssociation" => "MEMBER",\n'
+        '        "author" => { "login" => "revA" }, "commit" => { "oid" => "c1" } },\n'
+        '      { "state" => "APPROVED", "authorAssociation" => "OWNER",\n'
+        '        "author" => { "login" => "revB" }, "commit" => { "oid" => "c1" } } ]\n'
+        '  else\n'
+        '    [ { "state" => "APPROVED", "authorAssociation" => "MEMBER",\n'
+        '        "author" => { "login" => "revC" }, "commit" => { "oid" => "c1" } } ]\n'
+        '  end\n'
+        '  data["repository"] = { "pullRequest" => { "reviews" =>\n'
+        '    connection(nodes, after.empty?, "r1") } }\n'
+        'elsif query.include?("members")\n'
+        '  nodes = after.empty? ? [ { "login" => "m1" }, { "login" => "m2" } ] : [ { "login" => "m3" } ]\n'
+        '  data["organization"] = { "team" => { "members" => connection(nodes, after.empty?, "m1") } }\n'
+        'elsif query.include?("sponsorshipsAsSponsored")\n'
+        '  nodes = if after.empty?\n'
+        '    [ { "sponsorEntity" => { "login" => "s1" } },\n'
+        '      { "sponsorEntity" => { "login" => "s2" } } ]\n'
+        '  else\n'
+        '    [ { "sponsorEntity" => { "login" => "s3" } } ]\n'
+        '  end\n'
+        '  data["user"] = { "sponsorshipsAsSponsored" => connection(nodes, after.empty?, "s1") }\n'
+        'elsif query.include?("tiers")\n'
+        '  nodes = after.empty? ? [ { "name" => "t1", "monthlyPriceInCents" => 100 } ] :\n'
+        '                          [ { "name" => "t2", "monthlyPriceInCents" => 200 } ]\n'
+        '  data["user"] = { "sponsorsListing" => { "tiers" => connection(nodes, after.empty?, "t1") } }\n'
+        'end\n'
+        'puts JSON.generate({ "data" => data })\n'
+    )
+    graphql_script.chmod(0o755)
+    monkeypatch.setenv("PYBREW_GITHUB_CURL", str(graphql_script))
+    transport_count = tmp_path / "transport-count.txt"
+    transport_script = tmp_path / "graphql-transport-retry"
+    transport_script.write_text(
+        "#!/bin/sh\n"
+        'count_file="' + str(transport_count) + '"\n'
+        'count=$(cat "$count_file" 2>/dev/null || echo 0)\n'
+        'printf \'%s\' "$((count + 1))" > "$count_file"\n'
+        'if [ "$count" = "0" ]; then exit 1; fi\n'
+        "printf '%s' '{\"data\":{\"rateLimit\":{\"remaining\":5},\"viewer\":{\"login\":\"octo\"}}}'\n"
+    )
+    transport_script.chmod(0o755)
+    rest_count = tmp_path / "rest-transport-count.txt"
+    rest_script = tmp_path / "rest-transport-retry"
+    rest_script.write_text(
+        "#!/bin/sh\n"
+        'headers=""\n'
+        'prev=""\n'
+        'for arg in "$@"; do\n'
+        '  if [ "$prev" = "-D" ]; then headers="$arg"; fi\n'
+        '  prev="$arg"\n'
+        'done\n'
+        'count_file="' + str(rest_count) + '"\n'
+        'count=$(cat "$count_file" 2>/dev/null || echo 0)\n'
+        'printf \'%s\' "$((count + 1))" > "$count_file"\n'
+        'if [ "$count" = "0" ]; then\n'
+        "  printf 'HTTP/1.1 500 Internal Server Error\\r\\n\\r\\n' > \"$headers\"\n"
+        "  printf '%s' '{\"message\":\"server error\"}'\n"
+        'else\n'
+        "  printf 'HTTP/1.1 200 OK\\r\\n\\r\\n' > \"$headers\"\n"
+        "  printf '%s' '{\"ok\":true}'\n"
+        'fi\n'
+    )
+    rest_script.chmod(0o755)
+    body = (
+        '  ENV["PYBREW_GITHUB_CURL"] = "' + str(graphql_script) + '"\n'
+        '  reviews = Utils::GitHub.repository_approved_reviews("homebrew", "foo", 7, commit: "c1")\n'
+        '  members = Utils::GitHub.members_by_team("homebrew", "core")\n'
+        '  sponsors = Utils::GitHub.sponsorships("alice")\n'
+        '  tiers = Utils::GitHub.sponsorship_tiers("alice")\n'
+        '  ENV["PYBREW_GITHUB_CURL"] = "' + str(transport_script) + '"\n'
+        '  ENV["PYBREW_GITHUB_TRANSPORT_RETRIES"] = "1"\n'
+        '  ENV["PYBREW_GITHUB_TRANSPORT_BACKOFF"] = "0"\n'
+        '  retried = Utils::GitHub.graphql_data("query { viewer { login } }")\n'
+        '  transport_calls = Pathname.new("' + str(transport_count) + '").read.to_i\n'
+        '  ENV["PYBREW_GITHUB_CURL"] = "' + str(rest_script) + '"\n'
+        '  rest = Utils::GitHub.get_json("https://api.github.com/rest", transport_retries: 1)\n'
+        '  rest_calls = Pathname.new("' + str(rest_count) + '").read.to_i\n'
+        '  (prefix/"graphql-connections.txt").write [\n'
+        '    reviews.map { |review| review["login"] }.join(","),\n'
+        '    members.map { |member| member["login"] }.join(","),\n'
+        '    sponsors.map { |sponsor| sponsor["login"] }.join(","),\n'
+        '    tiers.map { |tier| tier["name"] }.join(","),\n'
+        '    retried["viewer"]["login"], transport_calls.to_s,\n'
+        '    rest["ok"].to_s, rest_calls.to_s,\n'
+        '    Utils::GitHub.github_transport_retries.to_s\n'
+        '  ].join("\\n")\n'
+    )
+    keg = _run_raw_body(tmp_path, body, name="ruby-github-connections")
+    assert (keg / "graphql-connections.txt").read_text().splitlines() == [
+        "revA,revB,revC",
+        "m1,m2,m3",
+        "s1,s2,s3",
+        "t1,t2",
+        "octo",
+        "2",
+        "true",
+        "2",
+        "1",
+    ]
+
+
+def test_formulary_tap_ambiguity_loader_matrix_and_channel_edges(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    taps = tmp_path / "taps"
+    alpha = taps / "user1" / "alpha"
+    beta = taps / "user2" / "beta"
+    for root, desc in ((alpha, "alpha desc"), (beta, "beta desc")):
+        (root / "Formula").mkdir(parents=True)
+        (root / "Formula" / "ambig.rb").write_text(
+            "class Ambig < Formula\n"
+            "  desc \"" + desc + "\"\n"
+            '  version "1.0"\n'
+            "  def install; end\n"
+            "end\n"
+        )
+    (alpha / "Formula" / "solo.rb").write_text(
+        'class Solo < Formula\n  desc "solo desc"\n  version "1.0"\n  def install; end\nend\n'
+    )
+    monkeypatch.setenv("PYBREW_TAPS", f"{alpha}{os.pathsep}{beta}")
+    local_path = tmp_path / "local-only.rb"
+    local_path.write_text(
+        'class LocalOnly < Formula\n  desc "local desc"\n  version "1.0"\n  def install; end\nend\n'
+    )
+    channel_file = tmp_path / "channel-edge.json"
+    channel_file.write_text(
+        json.dumps(
+            {
+                "stable": {
+                    "formulae": [
+                        {
+                            "name": "chan-edge",
+                            "desc": "stable channel",
+                            "version": "1.0",
+                            "homepage": "https://example.test/stable",
+                        }
+                    ]
+                },
+                "beta": {"formulae": []},
+            }
+        )
+    )
+    monkeypatch.setenv("PYBREW_FORMULA_API_JSON", str(channel_file))
+    monkeypatch.setenv("PYBREW_FORMULA_API_CHANNELS", "stable,beta")
+    body = (
+        '  matrix = Formulary.loader_matrix("ambig")\n'
+        '  ambiguity = begin\n'
+        '    Formulary.factory("ambig")\n'
+        '    "none"\n'
+        '  rescue => error\n'
+        '    [error.class.name, error.message.include?("multiple taps").to_s,\n'
+        '     error.message.include?("user1/alpha/ambig").to_s,\n'
+        '     error.message.include?("user2/beta/ambig").to_s].join("|")\n'
+        '  end\n'
+        '  qualified = Formulary.factory("user2/beta/ambig")\n'
+        '  solo = Formulary.factory("solo")\n'
+        '  local = Formulary.factory("' + str(local_path) + '")\n'
+        '  choice_ambig = Formulary.loader_choice("ambig").to_s\n'
+        '  choice_solo = Formulary.loader_choice("solo").to_s\n'
+        '  choice_local = Formulary.loader_choice("' + str(local_path) + '").to_s\n'
+        '  channels = Formulary.load_formula_from_api_channels!\n'
+        '  channel_list = Formulary.api_channel_for_formula("chan-edge").join(",")\n'
+        '  namespace_a = Formulary.api_channel_namespace("stable")\n'
+        '  namespace_b = Formulary.api_channel_namespace("beta")\n'
+        '  (prefix/"formulary-matrix.txt").write [\n'
+        '    matrix[:tap_ambiguous].to_s,\n'
+        '    Array(matrix[:ambiguity]).sort.join(","),\n'
+        '    ambiguity,\n'
+        '    qualified.loaded_desc, solo.loaded_desc, local.loaded_desc,\n'
+        '    choice_ambig, choice_solo, choice_local,\n'
+        '    channels.loaded_desc, channels.loaded_channels.join(","),\n'
+        '    channel_list, (namespace_a != namespace_b).to_s\n'
+        '  ].join("\\n")\n'
+    )
+    keg = _run_raw_body(tmp_path, body, name="ruby-formulary-matrix")
+    assert (keg / "formulary-matrix.txt").read_text().splitlines() == [
+        "true",
+        "user1/alpha/ambig,user2/beta/ambig",
+        "PybrewFormulaAmbiguityError|true|true|true",
+        "beta desc",
+        "solo desc",
+        "local desc",
+        "name",
+        "tap",
+        "path",
+        "stable channel",
+        "stable",
+        "stable",
+        "true",
+    ]
+
+    empty = tmp_path / "empty-channels.json"
+    empty.write_text(json.dumps({"stable": {"formulae": []}, "beta": {"formulae": []}}))
+    monkeypatch.setenv("PYBREW_FORMULA_API_JSON", str(empty))
+    empty_body = (
+        '  Formulary.clear_cache\n'
+        '  result = begin\n'
+        '    Formulary.load_formula_from_api_channels!\n'
+        '    "none"\n'
+        '  rescue => error\n'
+        '    error.class.name + "|" + error.message.include?("no formula structs found").to_s\n'
+        '  end\n'
+        '  (prefix/"empty-channels.txt").write result\n'
+    )
+    empty_keg = _run_raw_body(tmp_path, empty_body, name="ruby-empty-channels")
+    assert (empty_keg / "empty-channels.txt").read_text().strip() == "PybrewFormulaUnavailableError|true"
+
+
+def test_formula_installer_tab_sbom_and_metadata_fields(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-tab-sbom",
+        "1.0",
+        (
+            '  path = prefix/"tab-sbom.rb"\n'
+            '  path.write <<~RUBY\n'
+            '    class TabSbom < Formula\n'
+            '      version "2.5"\n'
+            '      install do\n'
+            '        bin.mkpath\n'
+            '        (bin/"tool").write("#!/bin/sh\\necho tool\\n")\n'
+            '        lib.mkpath\n'
+            '        (lib/"libtool.dylib").write("library")\n'
+            '      end\n'
+            '    end\n'
+            '  RUBY\n'
+            '  klass = Formulary.load_formula_from_path("tab-sbom", path)\n'
+            '  FormulaInstaller.new(klass.new).install\n'
+            '  receipt_path = HOMEBREW_PREFIX/"Cellar"/"tab-sbom"/"2.5"/"INSTALL_RECEIPT.json"\n'
+            '  receipt = JSON.parse(receipt_path.read)\n'
+            '  tab = Tab.for_keg(receipt_path.dirname)\n'
+            '  files = receipt.dig("sbom", "files") || {}\n'
+            '  tool = files["bin/tool"] || {}\n'
+            '  (prefix/"tab-sbom.txt").write [\n'
+            '    receipt["built_as_bottle"].to_s,\n'
+            '    receipt["poured_from_bottle"].to_s,\n'
+            '    receipt["homebrew_version"].to_s,\n'
+            '    receipt["compiler"].to_s,\n'
+            '    (receipt["arch"].to_s.empty? ? "empty" : "arch"),\n'
+            '    receipt["stdlib"].to_s,\n'
+            '    (receipt["time"].is_a?(Integer) && receipt["time"] > 0).to_s,\n'
+            '    receipt["installed_as_dependency"].to_s,\n'
+            '    receipt.dig("source", "path").to_s.end_with?("tab-sbom.rb").to_s,\n'
+            '    (receipt["source_modified_time"].is_a?(Float)).to_s,\n'
+            '    files.key?("bin/tool").to_s, files.key?("lib/libtool.dylib").to_s,\n'
+            '    tool["sha256"].to_s.match?(/\\A[0-9a-f]{64}\\z/).to_s,\n'
+            '    (tool["size"].to_i > 0).to_s,\n'
+            '    tab.sbom_files.length.to_s,\n'
+            '    tab.installed_as_dependency?.to_s,\n'
+            '    tab.source["path"].to_s.end_with?("tab-sbom.rb").to_s,\n'
+            '    tab.source_modified_time.is_a?(Float).to_s\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    lines = (keg / "tab-sbom.txt").read_text().splitlines()
+    assert lines[0:7] == ["false", "false", "0.0.0", "clang", "arch",
+                          "libc++" if is_macos() else "libstdc++", "true"]
+    assert lines[7:] == [
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "true",
+        "2",
+        "true",
+        "true",
+        "true",
+    ]

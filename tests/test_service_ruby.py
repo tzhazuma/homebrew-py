@@ -1792,3 +1792,29 @@ def test_service_object_from_hash_platform_run_and_name(
         "6",
         "6",
     ]
+
+
+@requires_ruby
+def test_negative_nice_validation_in_ruby_evaluator(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allow_ruby: None
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+
+    with pytest.raises(ServiceError, match="require_root"):
+        evaluate_service_source('nice -5\nrun [opt_bin/"svc"]', _formula(), config)
+
+    spec = evaluate_service_source(
+        'require_root true\nnice -5\nrun [nice.to_s, nice_requires_root?.to_s]',
+        _formula(),
+        config,
+    )
+    assert spec.run == ["-5", "false"]
+    assert spec.nice == -5
+    assert spec.require_root is True
+
+    with pytest.raises(ServiceError, match="between -20 and 19"):
+        evaluate_service_source(
+            'require_root true\nnice 25\nrun [opt_bin/"svc"]',
+            _formula(),
+            config,
+        )
