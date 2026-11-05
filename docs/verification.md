@@ -41,6 +41,7 @@ Closed the documented partial areas across all owners; full suite grew from
   sandbox-exec/bwrap plan (build/keg/temp writable roots), plus existing bwrap
   BPF seccomp and capability/namespace reporting.
 - Full suite: **1380 passed, 6 skipped**; real install verified.
+- Commit `d09ffce`; CI `42004199333` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Residual parity batch 2026-11-05 (round 8)
 
