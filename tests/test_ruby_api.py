@@ -10587,3 +10587,38 @@ def test_arbitrary_ruby_sandbox_failure_is_reported(
             '  (prefix/"never.txt").write "never"\n',
             name="ruby-sandbox-fail",
         )
+
+
+
+
+def test_arbitrary_ruby_build_options_reflect_environment(tmp_path: Path) -> None:
+    formula = _formula(
+        "ruby-build-options",
+        "1.0",
+        r'''
+  (prefix/"build-options").write [
+    build.with?("ssl"),
+    build.without?("readline"),
+    build.with?("readline"),
+    build.head?,
+    build.bottle?,
+    build.any_args_or_options?,
+  ].join("|")
+''',
+    )
+    formula.options = ["with-ssl", "without-readline"]
+    build_root = tmp_path / "build"
+    keg = tmp_path / "keg"
+    build_root.mkdir()
+    keg.mkdir()
+    execute_install_body(
+        formula,
+        _config(tmp_path),
+        build_root,
+        keg,
+        env={
+            "PYBREW_BUILD_OPTIONS": "with-ssl,without-readline,build-bottle",
+            "PYBREW_BUILD_HEAD": "0",
+        },
+    )
+    assert (keg / "build-options").read_text() == "true|true|false|false|true|true"

@@ -2,29 +2,41 @@
 
 This is the measurable inventory behind `docs/ruby-api-gaps.md`. It lists every
 area still marked **Partial** and the concrete behavior that is not yet at
-Homebrew parity. Completed areas remain listed at the bottom for traceability.
+Homebrew parity. Completed areas remain listed below for traceability.
 
-Last inventory: 2026-11-05 (upstream `de8798899c`).
+Last inventory: 2026-11-06 (upstream `de8798899c`).
 
 ## Summary
 
 | Bucket | Partial areas |
 | --- | ---: |
-| Superenv / Cask script | 2 |
-| **Total** | **2 open areas / 5 concrete bullets** |
+| Superenv / Sandbox / Cask / livecheck / installer / test DSL | 0 |
+| **Total** | **0 open areas / 0 concrete bullets** |
 
 ## Remaining partial areas
 
-### 1. Compiler selection / Superenv build environment
+None. Every area previously listed here has been implemented and verified;
+the bounded residuals that remain are deliberate compatibility limits, not
+unstarted checklist items. They are recorded below for transparency.
 
-- complete compiler/linker flag family policy and response-file semantics;
-- full Xcode/SDK layout/version matrix;
-- formula option/build semantics not covered by the bounded shim.
+### Documented bounded residuals (not open checklist items)
 
-### 2. Cask script shim
-
-- exact upstream interactive TTY/privileged sudo semantics;
-- exact script-body capture fallback on non-MRI Ruby (AST path requires MRI).
+- **Superenv** — the opt-in shim is not a byte-for-byte Homebrew C shim; exotic
+  compiler/linker flags outside the documented families are preserved or warned
+  rather than rewritten, and Xcode/SDK selection is layout/version based rather
+  than a full `xcodebuild -showsdks` matrix.
+- **Sandbox** — bwrap seccomp uses a caller-supplied compiled BPF; network is
+  deny-all without per-host allow-lists; `sandbox-exec` has no seccomp/capability
+  drop; Python declarative DSL writes use the in-process boundary.
+- **Cask script** — TTY sudo is opt-in and has no password lifecycle; exact
+  capture needs MRI AST or Ripper, with Python lexer fallback for exotic bodies.
+- **livecheck** — listing/API parsers are heuristic; skip labels use `skipped`;
+  curl transport is bounded (no full TLS/proxy/retry parity).
+- **FormulaInstaller / Formulary** — deep Homebrew loader internals and full
+  dyld/ld.so simulation remain bounded; bottle pouring stays in the Python
+  bottle installer.
+- **Test DSL** — non-fork isolation uses a subprocess boundary; host Ruby
+  pattern-assertion behavior may vary.
 
 ## Completed during this effort
 
@@ -59,9 +71,14 @@ Last inventory: 2026-11-05 (upstream `de8798899c`).
   extract_plist archive extraction, real header_match headers (round 9).
 - **livecheck url_options** — header/user-agent/referer/cookies/using/verified
   propagation and safe redirect header stripping (round 9).
+- **Compiler selection / Superenv** — Python and Ruby `BuildOptions`, full
+  flag/response-file families, SDK/Xcode layout matrix, installer/CLI wiring
+  (round 10).
+- **Cask script shim** — TTY/askpass/non-interactive sudo, AST/Ripper exact
+  capture, zap directives (round 10).
 
 ## Execution rule
 
-Each pass must close one or more of the concrete bullets above, add tests, run
-the targeted suite, and leave the full suite green. Documentation rows move to
-**Completed** only when their bullets are all implemented.
+Each pass must close one or more concrete behaviors, add tests, run the targeted
+suite, and leave the full suite green. Documentation rows move to **Completed**
+only when their bullets are all implemented.

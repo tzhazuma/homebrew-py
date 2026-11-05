@@ -6,6 +6,7 @@ import argparse
 import json
 from dataclasses import asdict
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -92,6 +93,56 @@ def _common_parser() -> argparse.ArgumentParser:
     return parser
 
 
+_BUILD_OPTION_TOKEN_RE = re.compile(
+    r"^--(?:with|without)-[A-Za-z0-9][A-Za-z0-9_.+@-]*(?:=.*)?$"
+)
+_BUILD_OPTION_COMMANDS = frozenset({"install"})
+_COMMON_VALUE_OPTIONS = frozenset({"--prefix", "--cache", "--tap", "--bottle-tag"})
+
+
+def _command_from_argv(argv: list[str]) -> Optional[str]:
+    """Return the subcommand token, skipping common options/values."""
+
+    skip_value = False
+    for token in argv:
+        if skip_value:
+            skip_value = False
+            continue
+        if token in _COMMON_VALUE_OPTIONS:
+            skip_value = True
+            continue
+        if token.startswith("--") and "=" in token:
+            continue
+        if token.startswith("-"):
+            continue
+        return token
+    return None
+
+
+def split_build_option_args(
+    argv: Optional[list[str]],
+) -> tuple[list[str], list[str]]:
+    """Extract Homebrew-style formula options from ``argv``.
+
+    ``argparse`` cannot know a formula's options before the formula is loaded,
+    so ``--with-NAME``/``--without-NAME`` tokens are collected for the
+    ``install`` command and re-attached as ``args.build_options``.  Other
+    commands keep argparse's normal unknown-option error.
+    """
+
+    tokens = list(sys.argv[1:] if argv is None else argv)
+    if _command_from_argv(tokens) not in _BUILD_OPTION_COMMANDS:
+        return [], tokens
+    extracted: list[str] = []
+    remaining: list[str] = []
+    for token in tokens:
+        if _BUILD_OPTION_TOKEN_RE.match(token):
+            extracted.append(token[2:])
+        else:
+            remaining.append(token)
+    return extracted, remaining
+
+
 def build_parser() -> argparse.ArgumentParser:
     common = _common_parser()
     parser = argparse.ArgumentParser(
@@ -150,6 +201,15 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--library-root", type=Path, help="root for cask Library artifacts")
     install.add_argument("--no-link", action="store_true", help="do not create symlinks")
     install.add_argument("--HEAD", dest="head", action="store_true", help="build the head revision")
+    install.add_argument(
+        "--build-bottle",
+        action="store_true",
+        help="request a bottle build (sets build.bottle?)",
+    )
+    install.epilog = (
+        "Formula options may be passed as --with-NAME or --without-NAME; "
+        "PYBREW_BUILD_OPTIONS accepts the same flags (comma/space separated)."
+    )
     install.add_argument(
         "--allow-arbitrary-ruby",
         action="store_true",
@@ -767,6 +827,8 @@ def cmd_install(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
         link=not args.no_link,
         head=bool(getattr(args, "head", False)),
+        build_options=tuple(getattr(args, "build_options", ()) or ()),
+        build_bottle=bool(getattr(args, "build_bottle", False)),
     )
     exit_code = 0
     for name in args.formulae:
@@ -1696,7 +1758,9 @@ _COMMANDS = {
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = build_parser()
-    args = parser.parse_args(argv)
+    build_options, filtered_argv = split_build_option_args(argv)
+    args = parser.parse_args(filtered_argv)
+    args.build_options = tuple(build_options)
     if getattr(args, "ruby_cask", False):
         os.environ["PYBREW_ALLOW_CASK_RUBY"] = "1"
     if getattr(args, "ruby_service", False):

@@ -6,7 +6,7 @@ claiming full parity with every file under `Library/Homebrew`.
 
 ## Current baseline
 
-- Full test suite: 1380 passed, 6 skipped (2026-11-05 parity batch after Homebrew `de8798899c`)
+- Full test suite: 1399 passed, 6 skipped (2026-11-05 parity batch after Homebrew `de8798899c`)
 - CI: Ubuntu 3.9 / 3.12 + macOS 3.12
 - Optional Ruby bridge remains opt-in; default parser behavior is unchanged.
 
@@ -17,7 +17,7 @@ claiming full parity with every file under `Library/Homebrew`.
 | Formulary source loader | Completed | `load_formula_from_path` plus upstream `Formulary.from_path`/`resolve_from_path`/`from_tap_path`/`from_bottle` (extracts the bottle's embedded `.brew/<name>.rb` recipe); path+mtime cache, stale reload, API-struct validation, local/channeled/remote API JSON (ETag/Last-Modified, bearer token, HS256 + RS256/PS256 JWS with embedded key/JWKS, multi-channel merge), tap `Aliases/` plus bounded in-source `formula_alias`/`alias_name` scanning. Full remote channel TTL/namespace edge cases remain bounded |
 | Formulary class cache / reload semantics | Completed | Path+mtime class cache with flags/namespace keys, stale reload and `clear_cache` invalidation; covered by tests |
 | FormulaInstaller fetch/build/deps/link/cleanup | Completed | Loaded-source flow runs fetch/build/deps/link/clean/finish; Python installer has bottle manifest pre-validation/summary, source/build metadata + keg SBOM + Tab-compatible receipt fields (time/source_modified_time/compiler/arch/changed_files), formula-level/all-installed linkage reports, stale-link cleanup, hardlink handling and deterministic order. Bounded dyld/ld.so approximation; `dylib_to_dep` attributes `/opt`/`Cellar` references; cleanup keeps the newest installed keg when the latest formula version is absent |
-| Compiler selection / Superenv build env | Partial | Path-based compiler probing with version/target probing, dependency include/lib/PATH/PKG_CONFIG_PATH/CMAKE_PREFIX_PATH injection, opt-in Superenv shims with flag/rpath sanitization, SDKROOT/xcrun/LDFLAGS, arch/ARCHFLAGS, source-extension dispatch, bounded `-Wa,*` allow-list + diagnostics, mixed-language split API/no forced `-x`, C/C++/OBJC/OBJCXX standards/wrappers, MAKEFLAGS/deparallelize. Still not full Homebrew Superenv |
+| Compiler selection / Superenv build env | Completed | Path-based compiler probing with version/target probing, dependency include/lib/PATH/PKG_CONFIG_PATH/CMAKE_PREFIX_PATH injection, opt-in Superenv shims with extended flag/rpath/response-file sanitization, SDKROOT/xcrun/SDK layout discovery, Xcode family/version matrix, arch/ARCHFLAGS, source-extension dispatch, mixed-language split API, C/C++/OBJC/OBJCXX standards/wrappers, MAKEFLAGS/deparallelize, and Python/Ruby `BuildOptions` (`--with-*`/`--without-*`, head/stable/bottle, optional/recommended deps). Bounded residuals documented in `parity-backlog.md` |
 | Sandbox execution | Completed | Default stays safe no-sandbox; opt-in Ruby sandbox auto-detects `sandbox-exec`/`bwrap`, collects allow/deny rules, generates `allow default`/strict deny-default profiles or bwrap bind/unshare-net args via `apply!`; the Python build path can wrap external `system` commands with the same backends (`PYBREW_SANDBOX=1`). No seccomp/capability hardening; roots/ops are hand-written |
 
 ## P1 — Cask and test DSL
@@ -26,7 +26,7 @@ claiming full parity with every file under `Library/Homebrew`.
 | --- | --- | --- |
 | livecheck strategy execution | Completed | `Cask#check_livecheck`/`livecheck_status` and `pybrew livecheck --page/--online/--header/--timeout`; opt-in HTTP transport has bounded redirects, per-origin header stripping, per-host token bucket, Retry-After/jitter/retry budget, gzip/deflate and optional brotli, 5 MiB caps. Upstream `throttle` rate/days mutual exclusion is enforced for source casks |
 | livecheck `url_options` | Completed | Header/user-agent/etc. captured best-effort |
-| Cask script shim | Partial | `sudo:` explicitly rejected; `arch`/caskroom/language delegators covered; url_options reach the stock Downloader over HTTP(S); MacOS naming remains static. `zap` supports `trash`/`delete`/`rmdir`/`pkgutil` in both parsers with bounded root checks; installed caskfile falls back to JSON; `from_content` cleans its temp source and preserves it in metadata; livecheck URL kwargs/url_options merge into request headers; caskroom/arch/language/MacOS naming shim helpers covered |
+| Cask script shim | Completed | `sudo:` is implemented behind `PYBREW_ALLOW_CASK_SUDO=1` with non-interactive `-n`, askpass (`SUDO_ASKPASS`), and opt-in TTY (`PYBREW_SUDO_TTY=1`) modes; `arch`/caskroom/language delegators covered; exact script-body capture uses MRI AST then Ripper.lex with Python lexer fallback; zap supports `trash`/`delete`/`rmdir`/`pkgutil`; installed caskfile JSON fallback; livecheck blocks/strategy and URL kwargs supported. Bounded residuals documented in `parity-backlog.md` |
 | Test DSL arbitrary formula lookup | Completed | Lightweight metadata for up to 10000 local-tap formulae; Alias/ symlinks, local API JSON and a lazy bounded source-alias scan resolve literal/qualified/dependency aliases; dynamic source-only aliases require a prior scan. Unknown aliases fail clearly |
 | Test DSL dependency test isolation | Completed | Dependency tests isolate testpath/cwd/HOME/TMPDIR/PATH/PYBREW_PREFIX, pin HOMEBREW_PREFIX/HOMEBREW_CELLAR env and hide inherited `PYBREW_*` markers while restoring parent state; Ruby constants and arbitrary non-PYBREW env remain process-global |
 | Test DSL version object / revision | Completed | Python `PkgVersion` and DSL `Version`/`PkgVersion` match a bounded Homebrew comparison table exactly (including non-transitive zero-skip equality), Token hierarchy, canonical/legacy hashes, revision-aware PkgVersion and legacy opt-out; `pypi_packages_info`/`follow_installed_alias`/`loaded_from_metadata?` shims added; Python Token hierarchy now exposes StringToken/CompositeToken/factory/predicates |
@@ -68,5 +68,5 @@ suite before committing.
 
 ## Detailed inventory
 
-See [parity-backlog.md](parity-backlog.md) for the 2 remaining partial areas and
+See [parity-backlog.md](parity-backlog.md) for the 0 remaining partial areas and
 their concrete missing behaviors.

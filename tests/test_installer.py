@@ -112,6 +112,7 @@ def _install(
     tap: Path,
     name: str,
     environment: dict[str, str] | None = None,
+    options: InstallOptions | None = None,
 ):
     config = Config.default(
         prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
@@ -120,7 +121,9 @@ def _install(
     loader = FormulaLoader(discover_taps([tap]))
     formula = loader.load(name)
     installer = Installer(config, loader, environment=environment)
-    results = installer.install(formula, InstallOptions(build_from_source=True))
+    results = installer.install(
+        formula, options or InstallOptions(build_from_source=True)
+    )
     return config, results[-1]
 
 
@@ -1723,3 +1726,104 @@ def test_dylib_to_dep_attributes_opt_and_cellar_paths(tmp_path: Path) -> None:
     )
     assert dylib_to_dep("/usr/lib/libSystem.B.dylib", prefix) is None
     assert dylib_to_dep(str(prefix / "opt" / "../escape" / "lib" / "x.dylib"), prefix) is None
+
+
+def _write_dependency_fixtures(tmp_path: Path) -> tuple[Path, Path]:
+    """A target formula with recommended/optional/tagged dependencies."""
+
+    target_project = _project(tmp_path, "opt-target")
+    (target_project / "target.txt").write_text("target\n", encoding="utf-8")
+    rec_project = _project(tmp_path, "rec")
+    (rec_project / "rec.txt").write_text("rec\n", encoding="utf-8")
+    opt_project = _project(tmp_path, "opt")
+    (opt_project / "opt.txt").write_text("opt\n", encoding="utf-8")
+    tag_project = _project(tmp_path, "tagdep")
+    (tag_project / "extra.txt").write_text("extra\n", encoding="utf-8")
+    (tag_project / "plain.txt").write_text("plain\n", encoding="utf-8")
+
+    _make_tap(
+        tmp_path, "rec", "2.0", rec_project, 'bin.install "rec.txt"'
+    )
+    _make_tap(
+        tmp_path, "opt", "2.0", opt_project, 'bin.install "opt.txt"'
+    )
+    tap = _make_tap(
+        tmp_path,
+        "tagdep",
+        "2.0",
+        tag_project,
+        "\n".join(
+            [
+                '    if build.with?("extra")',
+                '      bin.install "extra.txt"',
+                "    end",
+                '    bin.install "plain.txt"',
+            ]
+        ),
+    )
+    tap = _make_tap(
+        tmp_path, "opt-target", "1.0", target_project, 'bin.install "target.txt"'
+    )
+    tag_path = tap / "Formula" / "tagdep.rb"
+    tag_text = tag_path.read_text(encoding="utf-8")
+    tag_text = tag_text.replace(
+        "  def install",
+        '  option "with-extra", "tagged dependency option"\n\n  def install',
+    )
+    tag_path.write_text(tag_text, encoding="utf-8")
+
+    target_path = tap / "Formula" / "opt-target.rb"
+    target_text = target_path.read_text(encoding="utf-8")
+    target_text = target_text.replace(
+        "  def install",
+        '  depends_on "rec" => :recommended\n'
+        '  depends_on "opt" => :optional\n'
+        '  depends_on "tagdep" => "with-extra"\n'
+        "\n  def install",
+    )
+    target_path.write_text(target_text, encoding="utf-8")
+    return tap, target_path
+
+
+def test_optional_and_recommended_dependency_selection(
+    tmp_path: Path,
+) -> None:
+    tap, _ = _write_dependency_fixtures(tmp_path)
+    config, result = _install(tmp_path / "default", tap, "opt-target")
+    assert config.keg_path("rec", "2.0").is_dir()
+    assert not config.keg_path("opt", "2.0").exists()
+    assert (config.keg_path("tagdep", "2.0") / "bin" / "extra.txt").is_file()
+    assert result.dependencies == ["rec", "tagdep"]
+
+    without_config, _ = _install(
+        tmp_path / "without-rec",
+        tap,
+        "opt-target",
+        options=InstallOptions(
+            build_from_source=True, build_options=("--without-rec",)
+        ),
+    )
+    assert not without_config.keg_path("rec", "2.0").exists()
+    assert not without_config.keg_path("opt", "2.0").exists()
+
+    with_config, with_result = _install(
+        tmp_path / "with-opt",
+        tap,
+        "opt-target",
+        options=InstallOptions(
+            build_from_source=True, build_options=("--with-opt",)
+        ),
+    )
+    assert with_config.keg_path("opt", "2.0").is_dir()
+    assert with_config.keg_path("rec", "2.0").is_dir()
+    receipt = read_receipt(with_result.keg)
+    assert receipt["build"]["used_options"] == ["--with-opt"]
+    assert receipt["runtime_dependencies"] == ["rec", "opt", "tagdep"]
+
+    env_config, _ = _install(
+        tmp_path / "env-without-rec",
+        tap,
+        "opt-target",
+        environment={"PYBREW_BUILD_OPTIONS": "--without-rec"},
+    )
+    assert not env_config.keg_path("rec", "2.0").exists()

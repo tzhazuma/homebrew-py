@@ -3,7 +3,7 @@
 ## Full parity batch 2026-11-05
 
 Closed the documented partial areas across all owners; full suite grew from
-1156 to **1380 passed, 6 skipped**.
+1156 to **1399 passed, 6 skipped**.
 
 - **Cask**: evaluator `zap` now captures trash/delete/rmdir/pkgutil; livecheck
   URL kwargs merge into request headers; installed caskfile falls back to JSON;
@@ -29,8 +29,21 @@ Closed the documented partial areas across all owners; full suite grew from
   index (file:// fixtures work).
 - Real install verification: `REAL INSTALL VERIFIED`.
 - Commits `57d927e` + `54fa7c5`; CI `41973914882` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
-- Inventory of the remaining 2 partial areas: `docs/parity-backlog.md`.
+- Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
+
+## Residual parity batch 2026-11-06 (round 10)
+
+- Superenv: Python `BuildOptions` parity (with/without/head/stable/bottle,
+  optional/recommended/head deps, deprecated-option remap), installer/CLI
+  wiring (`--with-*`/`--without-*`, `--build-bottle`), Ruby-bridge
+  `PybrewBuild` reading the same options, extended response-file/flag families,
+  developer-dir/CLT/Xcode-bundle/SDK layout discovery and matrix.
+- Cask script: opt-in interactive TTY sudo (`PYBREW_SUDO_TTY=1`, pty-tested),
+  non-MRI Ripper.lex exact capture with Python lexer fallback.
+- Full suite: **1399 passed, 6 skipped**; real install verified.
+- Open backlog: **0 areas / 0 bullets**. Bounded residuals are documented in
+  `docs/parity-backlog.md` and are deliberate compatibility limits.
 
 ## Residual parity batch 2026-11-05 (round 9)
 

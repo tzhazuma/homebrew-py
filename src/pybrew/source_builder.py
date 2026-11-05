@@ -13,8 +13,11 @@ declarative/build statements used by source formulae:
   ``bin.install_symlink``;
 * ``cd ... do ... end``, ``mkdir``, ``mv``, ``cp``, ``rm_rf``, ``chmod``;
 * ``on_macos`` / ``on_linux`` / ``on_arm`` / ``on_intel`` blocks and simple
-  ``if`` conditions over ``OS``, ``Hardware::CPU``, ``build`` and literal
-  ``args.include?``-style predicates;
+  ``if`` conditions over ``OS``, ``Hardware::CPU``, ``build``
+  (``head?``/``stable?``/``bottle?``/``with?``/``without?``/``include?``),
+  and literal ``args.include?``-style predicates;
+* formula options from ``--with-*``/``--without-*`` CLI flags,
+  ``PYBREW_BUILD_OPTIONS`` and dependency option tags;
 * ``ENV["NAME"]`` reads in expression arguments and conditions.
 
 Anything else raises :class:`UnsupportedInstall` with a line number instead of
@@ -256,6 +259,376 @@ _INTEL_MACHINES = frozenset({"x86_64", "amd64", "i386", "i686"})
 _UNKNOWN = object()
 
 
+# ---------------------------------------------------------------------------
+# formula options / BuildOptions
+# ---------------------------------------------------------------------------
+
+# Homebrew's dependency tags that are not install options.  String tags (for
+# example ``depends_on "zeromq" => "with-pgm"``) are options for the dependency.
+_RESERVED_DEPENDENCY_TAGS = frozenset(
+    {
+        "build",
+        "implicit",
+        "linked",
+        "no_linkage",
+        "optional",
+        "recommended",
+        "run",
+        "test",
+    }
+)
+
+_BUILD_OPTION_ENV = "PYBREW_BUILD_OPTIONS"
+
+
+def parse_build_option_string(value: Optional[str]) -> list[str]:
+    """Split a ``PYBREW_BUILD_OPTIONS`` value into individual options.
+
+    Both Homebrew-style flags (``--with-ssl``) and the historical pybrew
+    shorthand (``with-ssl``, comma or whitespace separated) are accepted.
+    """
+
+    if not value:
+        return []
+    return [item for item in re.split(r"[,\s]+", str(value).strip()) if item]
+
+
+def _option_flag(value: Any) -> str:
+    """Normalise one option name/flag to Homebrew's ``--name`` spelling."""
+
+    text = str(value).strip()
+    if not text:
+        return ""
+    if text.startswith("--"):
+        flag = text
+    elif text.startswith("-"):
+        flag = "-" + text
+    else:
+        flag = "--" + text
+    if flag.lower() == "--head":
+        return "--HEAD"
+    return flag
+
+
+def _option_name(flag: str) -> str:
+    return flag[2:] if flag.startswith("--") else flag.lstrip("-")
+
+
+def _dependency_base_name(value: Any) -> str:
+    """Mirror ``Utils.name_from_full_name`` for dependency option names."""
+
+    text = str(value).strip().rstrip("/")
+    return text.rsplit("/", 1)[-1]
+
+
+def _normalise_option_flags(
+    values: Iterable[Any],
+    deprecated: Optional[Mapping[str, Any]] = None,
+) -> tuple[list[str], list[str]]:
+    """Render option tokens as deduplicated ``--flags`` and deprecation notes."""
+
+    if isinstance(values, str):
+        values = parse_build_option_string(values)
+    replacements: dict[str, str] = {}
+    for key, value in (deprecated or {}).items():
+        old = _option_name(_option_flag(key))
+        new = _option_flag(value)
+        if old and new:
+            replacements[old] = new
+    flags: list[str] = []
+    warnings: list[str] = []
+    seen: set[str] = set()
+    for raw in values or ():
+        flag = _option_flag(raw)
+        if not flag:
+            continue
+        name = _option_name(flag)
+        base, separator, suffix = name.partition("=")
+        replacement = replacements.get(name) or replacements.get(base)
+        if replacement:
+            original = flag
+            # Preserve ``--with-x=/path`` values when remapping the name.
+            flag = replacement if not separator else replacement + "=" + suffix
+            warnings.append(f"deprecated option {original} replaced by {flag}")
+            name = _option_name(flag)
+            base = name.partition("=")[0]
+        if flag in seen:
+            continue
+        seen.add(flag)
+        flags.append(flag)
+    return flags, warnings
+
+
+def declared_formula_options(formula: Formula) -> tuple[str, ...]:
+    """Return the declared options plus auto optional/recommended options.
+
+    Homebrew generates ``--with-<dep>`` for ``:optional`` dependencies and
+    ``--without-<dep>`` for ``:recommended`` ones unless the formula declares
+    the option explicitly (``software_spec.rb#add_dep_option``).
+    """
+
+    flags: list[str] = []
+    names: set[str] = set()
+
+    def add(value: Any) -> None:
+        flag = _option_flag(value)
+        if not flag:
+            return
+        name = _option_name(flag)
+        if name in names:
+            return
+        names.add(name)
+        flags.append(flag)
+
+    for option in formula.options:
+        add(option)
+
+    for dependency in formula.dependencies:
+        name = _dependency_base_name(dependency.name)
+        if not name:
+            continue
+        if dependency.optional:
+            add(f"with-{name}")
+        elif dependency.recommended:
+            add(f"without-{name}")
+    # API-loaded formulae keep these categories in dedicated lists without the
+    # ``:optional``/``:recommended`` tags attached.
+    for dependency in formula.optional_dependencies:
+        name = _dependency_base_name(dependency.name)
+        if name:
+            add(f"with-{name}")
+    for dependency in formula.recommended_dependencies:
+        name = _dependency_base_name(dependency.name)
+        if name:
+            add(f"without-{name}")
+    return tuple(flags)
+
+
+def dependency_option_flags(dependency: Any) -> tuple[str, ...]:
+    """Return the option flags requested for one dependency (bounded)."""
+
+    tags = getattr(dependency, "tags", ()) or ()
+    flags: list[str] = []
+    for tag in sorted(str(item).lstrip(":") for item in tags):
+        if not tag or tag in _RESERVED_DEPENDENCY_TAGS:
+            continue
+        flags.append(_option_flag(tag))
+    return tuple(flags)
+
+
+class BuildOptions:
+    """Bounded parity for Homebrew's ``BuildOptions`` (``build_options.rb``).
+
+    ``build.with?``/``without?``/``include?``/``head?``/``stable?``/
+    ``bottle?`` follow Homebrew's declared-option rules:
+
+    * ``with?("foo")`` is true when ``--with-foo`` is selected (or when the
+      formula declares ``without-foo`` and it was not selected);
+    * ``bottle?``/``head?`` come from the ``--build-bottle``/``--HEAD`` args;
+    * used/unused options are the intersection/difference of declared options
+      and selected args.
+
+    Arguments may come from the CLI, ``PYBREW_BUILD_OPTIONS`` or dependency
+    strings such as ``depends_on "zeromq" => "with-pgm"``.  Nothing here
+    executes a build or requires a Ruby interpreter.
+    """
+
+    def __init__(
+        self,
+        arguments: Iterable[Any] = (),
+        declared: Iterable[Any] = (),
+        *,
+        deprecated: Optional[Mapping[str, Any]] = None,
+    ):
+        self.arguments, arg_warnings = _normalise_option_flags(
+            arguments, deprecated
+        )
+        self.declared, declared_warnings = _normalise_option_flags(declared)
+        self.warnings = tuple(arg_warnings + declared_warnings)
+        self._argument_names = frozenset(
+            _option_name(flag).partition("=")[0] for flag in self.arguments
+        )
+        self._declared_names = frozenset(
+            _option_name(flag).partition("=")[0] for flag in self.declared
+        )
+
+    @classmethod
+    def for_formula(
+        cls,
+        formula: Formula,
+        arguments: Iterable[Any] = (),
+        *,
+        deprecated: Optional[Mapping[str, Any]] = None,
+    ) -> "BuildOptions":
+        return cls(
+            arguments,
+            declared_formula_options(formula),
+            deprecated=(
+                formula.deprecated_options if deprecated is None else deprecated
+            ),
+        )
+
+    @classmethod
+    def from_environment(
+        cls,
+        formula: Formula,
+        environment: Optional[Mapping[str, str]] = None,
+        arguments: Iterable[Any] = (),
+    ) -> "BuildOptions":
+        env = os.environ if environment is None else environment
+        env_arguments = parse_build_option_string(env.get(_BUILD_OPTION_ENV))
+        return cls.for_formula(formula, [*env_arguments, *arguments])
+
+    # -- predicates ------------------------------------------------------
+    def include(self, name: Any) -> bool:
+        """True when ``--<name>`` (or ``--<name>=...``) was selected."""
+
+        flag = _option_flag(name)
+        if not flag:
+            return False
+        return _option_name(flag).partition("=")[0] in self._argument_names
+
+    @staticmethod
+    def _option_names(value: Any) -> list[str]:
+        names = getattr(value, "option_names", None)
+        if names is not None:
+            resolved = names() if callable(names) else names
+            if isinstance(resolved, str):
+                resolved = [resolved]
+            return [
+                _dependency_base_name(item)
+                for item in resolved
+                if str(item).strip()
+            ]
+        if hasattr(value, "name") and not isinstance(value, str):
+            return [_dependency_base_name(getattr(value, "name"))]
+        return [_dependency_base_name(value)]
+
+    def _declares(self, name: str) -> bool:
+        return _option_name(_option_flag(name)) in self._declared_names
+
+    def with_(self, value: Any) -> bool:
+        """Homebrew ``build.with?`` for a string or dependable object."""
+
+        for name in self._option_names(value):
+            if self._declares(f"with-{name}"):
+                return self.include(f"with-{name}")
+            if self._declares(f"without-{name}"):
+                return not self.include(f"without-{name}")
+        return False
+
+    def without_(self, value: Any) -> bool:
+        return not self.with_(value)
+
+    @property
+    def head(self) -> bool:
+        return self.include("HEAD")
+
+    @property
+    def stable(self) -> bool:
+        return not self.head
+
+    @property
+    def bottle(self) -> bool:
+        return self.include("build-bottle")
+
+    @property
+    def any_args_or_options(self) -> bool:
+        return bool(self.arguments or self.declared)
+
+    @property
+    def used_options(self) -> list[str]:
+        return [
+            flag
+            for flag in self.declared
+            if _option_name(flag).partition("=")[0] in self._argument_names
+        ]
+
+    @property
+    def unused_options(self) -> list[str]:
+        used = set(self.used_options)
+        return [flag for flag in self.declared if flag not in used]
+
+    @property
+    def spec(self) -> str:
+        return "head" if self.head else "stable"
+
+    # -- dependency selection -------------------------------------------
+    def selected_dependencies(self, formula: Formula) -> list[Any]:
+        """Return runtime dependencies selected by these build options.
+
+        Required dependencies are always kept; ``:recommended`` dependencies
+        are kept unless ``--without-<dep>`` was passed and ``:optional`` ones
+        are kept only with ``--with-<dep>``.  Build/test dependencies are
+        excluded (the installer handles build dependencies separately).
+        """
+
+        candidates: list[tuple[Any, Optional[str]]] = [
+            (dependency, None) for dependency in formula.dependencies
+        ]
+        if self.head:
+            candidates += [
+                (dependency, None)
+                for dependency in formula.head_dependencies
+            ]
+        candidates += [
+            (dependency, "optional")
+            for dependency in formula.optional_dependencies
+        ]
+        candidates += [
+            (dependency, "recommended")
+            for dependency in formula.recommended_dependencies
+        ]
+        # On Linux, uses_from_macos entries are ordinary dependencies.
+        if is_linux():
+            candidates += [
+                (dependency, None)
+                for dependency in formula.uses_from_macos
+            ]
+
+        selected: list[Any] = []
+        seen: set[str] = set()
+        for dependency, category in candidates:
+            name = str(getattr(dependency, "name", ""))
+            if not name or name in seen:
+                continue
+            if getattr(dependency, "build", False) or getattr(
+                dependency, "test", False
+            ):
+                continue
+            base = _dependency_base_name(name)
+            if category is None:
+                if getattr(dependency, "optional", False):
+                    category = "optional"
+                elif getattr(dependency, "recommended", False):
+                    category = "recommended"
+            if category == "optional":
+                if not (
+                    self._declares(f"with-{base}")
+                    or self._declares(f"without-{base}")
+                ):
+                    continue
+                if not self.with_(dependency):
+                    continue
+            elif category == "recommended":
+                if self._declares(f"without-{base}") or self._declares(
+                    f"with-{base}"
+                ):
+                    if not self.with_(dependency):
+                        continue
+                # Without an auto/explicit option a recommended dependency is
+                # still installed by default.
+            seen.add(name)
+            selected.append(dependency)
+        return selected
+
+
+def _dependency_option_name(dependency: Any) -> str:
+    """Backwards-compatible helper used by tests/installers."""
+
+    return _dependency_base_name(getattr(dependency, "name", dependency))
+
+
 def _host_machine() -> str:
     return platform.machine().lower()
 
@@ -488,8 +861,17 @@ class _ExprParser:
 class InstallParser:
     """Parse the token stream of a formula's ``def install`` into actions."""
 
-    def __init__(self, formula: Formula):
+    def __init__(
+        self,
+        formula: Formula,
+        build_options: Optional["BuildOptions"] = None,
+    ):
         self.formula = formula
+        self.build = (
+            BuildOptions.for_formula(formula)
+            if build_options is None
+            else build_options
+        )
         self.tokens = _extract_body_tokens(formula)
         self.pos = 0
         self.variables: set[str] = set()
@@ -831,16 +1213,35 @@ class InstallParser:
                 return _host_is_arm()
             if receiver == "Hardware::CPU" and method in ("intel?", "x86?"):
                 return _host_is_intel()
-            if receiver == "build" and method == "head?":
-                return False
-            if receiver == "build" and method == "stable?":
-                return True
-            # This port has no formula options, so optional features are off:
-            # build.with? is false and build.without? is true.
-            if receiver == "build" and method == "with?":
-                return False
-            if receiver == "build" and method == "without?":
-                return True
+            if receiver == "build":
+                if method == "head?":
+                    return self.build.head
+                if method == "stable?":
+                    return self.build.stable
+                if method == "bottle?":
+                    return self.build.bottle
+                if method in ("any_args_or_options?", "any_args_or_options"):
+                    return self.build.any_args_or_options
+                if method in ("with?", "without?", "include?"):
+                    values = [
+                        self._static_expr_value(argument)
+                        for argument in expression.args
+                    ]
+                    if not values or any(
+                        value is _UNKNOWN for value in values
+                    ):
+                        raise UnsupportedInstall(
+                            f"{self.formula.name}: build.{method} condition "
+                            "needs a statically known option name"
+                        )
+                    if method == "include?":
+                        return any(
+                            self.build.include(value) for value in values
+                        )
+                    found = any(
+                        self.build.with_(value) for value in values
+                    )
+                    return found if method == "with?" else not found
             if receiver in self.static_variables and method in ("include?", "exclude?"):
                 found = self._static_list_contains(receiver, expression)
                 return found if method == "include?" else not found
@@ -1027,6 +1428,7 @@ class BuildContext:
     env: dict[str, str] = field(default_factory=dict)
     cwd: Path = field(default_factory=Path)
     variables: dict[str, Any] = field(default_factory=dict)
+    build_options: "BuildOptions" = field(default_factory=BuildOptions)
 
     def path_for(self, name: str) -> Path:
         mapping = {
@@ -1168,13 +1570,33 @@ def _flag_value(
     for prefix in ("-B", "-resource-dir=", "--gcc-toolchain=", "-gcc-toolchain="):
         if token.startswith(prefix) and len(token) > len(prefix):
             return "toolchain", token[len(prefix) :], 1
-    if (
-        token == "-Xclang"
-        and index + 2 < len(arguments)
-        and arguments[index + 1] in ("-I", "-isystem", "-F")
-    ):
-        kind = "framework" if arguments[index + 1] == "-F" else "include"
-        return kind, arguments[index + 2], 3
+    if token == "-Xclang" and index + 2 < len(arguments):
+        option = arguments[index + 1]
+        kind = {
+            "-I": "include",
+            "-isystem": "include",
+            "-iquote": "include",
+            "-idirafter": "include",
+            "-F": "framework",
+            "-iframework": "framework",
+            "-isysroot": "sysroot",
+            "--sysroot": "sysroot",
+            "-resource-dir": "toolchain",
+            "-B": "toolchain",
+        }.get(option)
+        if kind is not None:
+            return kind, arguments[index + 2], 3
+        for prefix, joined_kind in (
+            ("-I", "include"),
+            ("-isystem", "include"),
+            ("-F", "framework"),
+            ("-isysroot=", "sysroot"),
+            ("--sysroot=", "sysroot"),
+            ("-resource-dir=", "toolchain"),
+        ):
+            if option.startswith(prefix) and len(option) > len(prefix):
+                # ``-Xclang -I/path``: the joined option is a single argument.
+                return joined_kind, option[len(prefix) :], 2
     if token in ("-F", "-iframework"):
         if index + 1 < len(arguments):
             return "framework", arguments[index + 1], 2
@@ -1212,17 +1634,34 @@ def _flag_value(
     for prefix in ("-Wl,-syslibroot,", "-Wl,-syslibroot="):
         if token.startswith(prefix) and len(token) > len(prefix):
             return "sysroot", token[len(prefix) :], 1
+    for prefix in (
+        "-Wl,--library-path=",
+        "-Wl,--library-path,",
+        "-Wl,-L=",
+        "-Wl,-L,",
+    ):
+        if token.startswith(prefix) and len(token) > len(prefix):
+            return "library", token[len(prefix) :], 1
+    if token in (
+        "-Wl,--library-path",
+        "-Wl,-L",
+        "-Wl,-L,",
+    ) and index + 1 < len(arguments):
+        following = arguments[index + 1]
+        if following.startswith("-Wl,"):
+            following = following[len("-Wl,") :]
+        return "library", following, 2
+    for prefix in ("-fuse-ld=", "--ld-path="):
+        if token.startswith(prefix) and len(token) > len(prefix):
+            return "toolchain", token[len(prefix) :], 1
+    if token == "-fuse-ld" and index + 1 < len(arguments):
+        return "toolchain", arguments[index + 1], 2
     if token == "-L":
         if index + 1 < len(arguments):
             return "library", arguments[index + 1], 2
         return None
     if token.startswith("-L") and len(token) > 2:
         return "library", token[2:], 1
-    if token in ("-Wl,-L", "-Wl,-L,") and index + 1 < len(arguments):
-        following = arguments[index + 1]
-        if following.startswith("-Wl,"):
-            following = following[len("-Wl,") :]
-        return "library", following, 2
     if token == "-Wl,-F" and index + 1 < len(arguments):
         following = arguments[index + 1]
         if following.startswith("-Wl,"):
@@ -1246,6 +1685,7 @@ def _flag_value(
         option = arguments[index + 1]
         kind = {
             "-L": "library",
+            "--library-path": "library",
             "-F": "framework",
             "-rpath": "rpath",
             "-R": "rpath",
@@ -1253,6 +1693,8 @@ def _flag_value(
             "-I": "include",
             "-isystem": "include",
             "--sysroot": "sysroot",
+            "-isysroot": "sysroot",
+            "-syslibroot": "sysroot",
         }.get(option)
         if kind is not None and arguments[index + 2] == "-Xlinker":
             return kind, arguments[index + 3], 4
@@ -1431,6 +1873,18 @@ def _sanitize_assembler_options(
 
 _MAX_RESPONSE_FILE_BYTES = 1 << 20
 _MAX_RESPONSE_EXPANSIONS = 32
+_RESPONSE_WRAPPER_FLAGS = ("-Xlinker", "-Xpreprocessor", "-Xassembler", "-Xclang")
+
+
+def _response_file_key(raw_path: str) -> Optional[str]:
+    """Return a stable identity for repeated/cyclic response-file detection."""
+
+    if not raw_path:
+        return None
+    try:
+        return str(Path(raw_path).expanduser().resolve())
+    except OSError:
+        return None
 
 
 def _read_response_file(raw_path: str) -> Optional[list[str]]:
@@ -1454,6 +1908,8 @@ def sanitize_flag_list(
     *,
     drop_prefix_flags: bool = False,
     diagnostics: Optional[list[str]] = None,
+    _seen_response_files: Optional[set[str]] = None,
+    _response_depth: int = 0,
 ) -> list[str]:
     """Return bounded-safe compiler flags.
 
@@ -1470,13 +1926,74 @@ def sanitize_flag_list(
     result: list[str] = []
     seen_prefix: set[tuple[str, str]] = set()
     seen_sysroot: set[str] = set()
+    seen_response_files = (
+        set() if _seen_response_files is None else _seen_response_files
+    )
     response_expansions = 0
     index = 0
     while index < len(args):
         token = args[index]
-        if token.startswith("-Wl,@") and len(token) > len("-Wl,@"):
-            expanded = _read_response_file(token[len("-Wl,@") :])
+        if (
+            token in _RESPONSE_WRAPPER_FLAGS
+            and index + 1 < len(args)
+            and args[index + 1].startswith("@")
+            and len(args[index + 1]) > 1
+        ):
+            raw_path = args[index + 1][1:]
+            expanded = _read_response_file(raw_path)
             if expanded is not None:
+                key = _response_file_key(raw_path)
+                if key is not None and key in seen_response_files:
+                    if diagnostics is not None:
+                        diagnostics.append(
+                            f"response file already expanded: {raw_path}"
+                        )
+                    del args[index:index + 2]
+                    continue
+                if response_expansions >= _MAX_RESPONSE_EXPANSIONS:
+                    if diagnostics is not None:
+                        diagnostics.append(
+                            f"response file expansion limit reached for "
+                            f"{args[index + 1]}"
+                        )
+                    index += 2
+                    continue
+                if _response_depth >= 8:
+                    if diagnostics is not None:
+                        diagnostics.append(
+                            f"response file nesting limit reached for "
+                            f"{args[index + 1]}"
+                        )
+                    index += 2
+                    continue
+                if key is not None:
+                    seen_response_files.add(key)
+                response_expansions += 1
+                # Sanitize the embedded argument list as if it were passed
+                # inline, then re-wrap every surviving token for the driver.
+                sanitized = sanitize_flag_list(
+                    expanded,
+                    prefix,
+                    diagnostics=diagnostics,
+                    _seen_response_files=seen_response_files,
+                    _response_depth=_response_depth + 1,
+                )
+                args[index:index + 2] = [
+                    part for item in sanitized for part in (token, item)
+                ]
+                continue
+        if token.startswith("-Wl,@") and len(token) > len("-Wl,@"):
+            raw_path = token[len("-Wl,@") :]
+            expanded = _read_response_file(raw_path)
+            if expanded is not None:
+                key = _response_file_key(raw_path)
+                if key is not None and key in seen_response_files:
+                    if diagnostics is not None:
+                        diagnostics.append(
+                            f"response file already expanded: {raw_path}"
+                        )
+                    del args[index:index + 1]
+                    continue
                 if response_expansions >= _MAX_RESPONSE_EXPANSIONS:
                     if diagnostics is not None:
                         diagnostics.append(
@@ -1484,14 +2001,25 @@ def sanitize_flag_list(
                         )
                     index += 1
                     continue
+                if key is not None:
+                    seen_response_files.add(key)
                 args[index:index + 1] = [
                     f"-Wl,{part}" for part in expanded
                 ]
                 response_expansions += 1
                 continue
         if token.startswith("@") and len(token) > 1:
-            expanded = _read_response_file(token[1:])
+            raw_path = token[1:]
+            expanded = _read_response_file(raw_path)
             if expanded is not None:
+                key = _response_file_key(raw_path)
+                if key is not None and key in seen_response_files:
+                    if diagnostics is not None:
+                        diagnostics.append(
+                            f"response file already expanded: {raw_path}"
+                        )
+                    del args[index:index + 1]
+                    continue
                 if response_expansions >= _MAX_RESPONSE_EXPANSIONS:
                     if diagnostics is not None:
                         diagnostics.append(
@@ -1499,6 +2027,8 @@ def sanitize_flag_list(
                         )
                     index += 1
                     continue
+                if key is not None:
+                    seen_response_files.add(key)
                 args[index:index + 1] = expanded
                 response_expansions += 1
                 continue
@@ -1657,13 +2187,32 @@ def flag_value(args, index):
     for flag_prefix in ("-B", "-resource-dir=", "--gcc-toolchain=", "-gcc-toolchain="):
         if token.startswith(flag_prefix) and len(token) > len(flag_prefix):
             return "toolchain", token[len(flag_prefix):], 1
-    if (
-        token == "-Xclang"
-        and index + 2 < len(args)
-        and args[index + 1] in ("-I", "-isystem", "-F")
-    ):
-        kind = "framework" if args[index + 1] == "-F" else "include"
-        return kind, args[index + 2], 3
+    if token == "-Xclang" and index + 2 < len(args):
+        option = args[index + 1]
+        kind = {
+            "-I": "include",
+            "-isystem": "include",
+            "-iquote": "include",
+            "-idirafter": "include",
+            "-F": "framework",
+            "-iframework": "framework",
+            "-isysroot": "sysroot",
+            "--sysroot": "sysroot",
+            "-resource-dir": "toolchain",
+            "-B": "toolchain",
+        }.get(option)
+        if kind is not None:
+            return kind, args[index + 2], 3
+        for flag_prefix, joined_kind in (
+            ("-I", "include"),
+            ("-isystem", "include"),
+            ("-F", "framework"),
+            ("-isysroot=", "sysroot"),
+            ("--sysroot=", "sysroot"),
+            ("-resource-dir=", "toolchain"),
+        ):
+            if option.startswith(flag_prefix) and len(option) > len(flag_prefix):
+                return joined_kind, option[len(flag_prefix):], 2
     if token in ("-F", "-iframework"):
         if index + 1 < len(args):
             return "framework", args[index + 1], 2
@@ -1701,17 +2250,34 @@ def flag_value(args, index):
     for flag_prefix in ("-Wl,-syslibroot,", "-Wl,-syslibroot="):
         if token.startswith(flag_prefix) and len(token) > len(flag_prefix):
             return "sysroot", token[len(flag_prefix):], 1
+    for flag_prefix in (
+        "-Wl,--library-path=",
+        "-Wl,--library-path,",
+        "-Wl,-L=",
+        "-Wl,-L,",
+    ):
+        if token.startswith(flag_prefix) and len(token) > len(flag_prefix):
+            return "library", token[len(flag_prefix):], 1
+    if token in (
+        "-Wl,--library-path",
+        "-Wl,-L",
+        "-Wl,-L,",
+    ) and index + 1 < len(args):
+        following = args[index + 1]
+        if following.startswith("-Wl,"):
+            following = following[len("-Wl,"):]
+        return "library", following, 2
+    for flag_prefix in ("-fuse-ld=", "--ld-path="):
+        if token.startswith(flag_prefix) and len(token) > len(flag_prefix):
+            return "toolchain", token[len(flag_prefix):], 1
+    if token == "-fuse-ld" and index + 1 < len(args):
+        return "toolchain", args[index + 1], 2
     if token == "-L":
         if index + 1 < len(args):
             return "library", args[index + 1], 2
         return None
     if token.startswith("-L") and len(token) > 2:
         return "library", token[2:], 1
-    if token in ("-Wl,-L", "-Wl,-L,") and index + 1 < len(args):
-        following = args[index + 1]
-        if following.startswith("-Wl,"):
-            following = following[len("-Wl,"):]
-        return "library", following, 2
     if token == "-Wl,-F" and index + 1 < len(args):
         following = args[index + 1]
         if following.startswith("-Wl,"):
@@ -1735,6 +2301,7 @@ def flag_value(args, index):
         option = args[index + 1]
         kind = {
             "-L": "library",
+            "--library-path": "library",
             "-F": "framework",
             "-rpath": "rpath",
             "-R": "rpath",
@@ -1742,6 +2309,8 @@ def flag_value(args, index):
             "-I": "include",
             "-isystem": "include",
             "--sysroot": "sysroot",
+            "-isysroot": "sysroot",
+            "-syslibroot": "sysroot",
         }.get(option)
         if kind is not None and args[index + 2] == "-Xlinker":
             return kind, args[index + 3], 4
@@ -2034,6 +2603,7 @@ driver_spec = {
 
 MAX_RESPONSE_FILE_BYTES = 1 << 20
 MAX_RESPONSE_EXPANSIONS = 32
+RESPONSE_WRAPPER_FLAGS = ("-Xlinker", "-Xpreprocessor", "-Xassembler", "-Xclang")
 
 
 def read_response_file(raw_path):
@@ -2051,83 +2621,160 @@ def read_response_file(raw_path):
         return None
 
 
-diagnostics = []
-filtered = []
-seen_sysroot = set()
-response_expansions = 0
-index = 0
-while index < len(arguments):
-    token = arguments[index]
-    if token.startswith("-Wl,@") and len(token) > len("-Wl,@"):
-        expanded = read_response_file(token[len("-Wl,@"):])
-        if expanded is not None:
-            if response_expansions >= MAX_RESPONSE_EXPANSIONS:
-                diagnostics.append(
-                    "response file expansion limit reached for %s" % token
+def response_file_key(raw_path):
+    if not raw_path:
+        return None
+    try:
+        return os.path.realpath(os.path.expanduser(raw_path))
+    except OSError:
+        return None
+
+
+def sanitize_arguments(arguments, seen_response_files=None, response_depth=0):
+    diagnostics = []
+    filtered = []
+    seen_sysroot = set()
+    if seen_response_files is None:
+        seen_response_files = set()
+    response_expansions = 0
+    index = 0
+    while index < len(arguments):
+        token = arguments[index]
+        if (
+            token in RESPONSE_WRAPPER_FLAGS
+            and index + 1 < len(arguments)
+            and arguments[index + 1].startswith("@")
+            and len(arguments[index + 1]) > 1
+        ):
+            raw_path = arguments[index + 1][1:]
+            expanded = read_response_file(raw_path)
+            if expanded is not None:
+                key = response_file_key(raw_path)
+                if key is not None and key in seen_response_files:
+                    diagnostics.append(
+                        "response file already expanded: %s" % raw_path
+                    )
+                    del arguments[index:index + 2]
+                    continue
+                if response_expansions >= MAX_RESPONSE_EXPANSIONS:
+                    diagnostics.append(
+                        "response file expansion limit reached for %s"
+                        % arguments[index + 1]
+                    )
+                    index += 2
+                    continue
+                if response_depth >= 8:
+                    diagnostics.append(
+                        "response file nesting limit reached for %s"
+                        % arguments[index + 1]
+                    )
+                    index += 2
+                    continue
+                if key is not None:
+                    seen_response_files.add(key)
+                response_expansions += 1
+                embedded, embedded_diagnostics = sanitize_arguments(
+                    expanded, seen_response_files, response_depth + 1
                 )
-                index += 1
+                diagnostics.extend(embedded_diagnostics)
+                arguments[index:index + 2] = [
+                    part for item in embedded for part in (token, item)
+                ]
                 continue
-            arguments[index:index + 1] = [
-                "-Wl," + part for part in expanded
-            ]
-            response_expansions += 1
-            continue
-    if token.startswith("@") and len(token) > 1:
-        expanded = read_response_file(token[1:])
-        if expanded is not None:
-            if response_expansions >= MAX_RESPONSE_EXPANSIONS:
-                diagnostics.append(
-                    "response file expansion limit reached for %s" % token
-                )
-                index += 1
+        if token.startswith("-Wl,@") and len(token) > len("-Wl,@"):
+            raw_path = token[len("-Wl,@"):]
+            expanded = read_response_file(raw_path)
+            if expanded is not None:
+                key = response_file_key(raw_path)
+                if key is not None and key in seen_response_files:
+                    diagnostics.append(
+                        "response file already expanded: %s" % raw_path
+                    )
+                    del arguments[index:index + 1]
+                    continue
+                if response_expansions >= MAX_RESPONSE_EXPANSIONS:
+                    diagnostics.append(
+                        "response file expansion limit reached for %s" % token
+                    )
+                    index += 1
+                    continue
+                if key is not None:
+                    seen_response_files.add(key)
+                arguments[index:index + 1] = [
+                    "-Wl," + part for part in expanded
+                ]
+                response_expansions += 1
                 continue
-            arguments[index:index + 1] = expanded
-            response_expansions += 1
+        if token.startswith("@") and len(token) > 1:
+            raw_path = token[1:]
+            expanded = read_response_file(raw_path)
+            if expanded is not None:
+                key = response_file_key(raw_path)
+                if key is not None and key in seen_response_files:
+                    diagnostics.append(
+                        "response file already expanded: %s" % raw_path
+                    )
+                    del arguments[index:index + 1]
+                    continue
+                if response_expansions >= MAX_RESPONSE_EXPANSIONS:
+                    diagnostics.append(
+                        "response file expansion limit reached for %s" % token
+                    )
+                    index += 1
+                    continue
+                if key is not None:
+                    seen_response_files.add(key)
+                arguments[index:index + 1] = expanded
+                response_expansions += 1
+                continue
+        parsed = flag_value(arguments, index)
+        if parsed is None:
+            filtered.append(arguments[index])
+            index += 1
             continue
-    parsed = flag_value(arguments, index)
-    if parsed is None:
-        filtered.append(arguments[index])
-        index += 1
-        continue
-    kind, path, consumed = parsed
-    if kind == "assembler":
-        cleaned = sanitize_assembler_options(path, diagnostics)
-        if cleaned:
-            filtered.append("-Wa," + cleaned)
-        index += consumed
-        continue
-    normalised = os.path.normpath(path)
-    if kind == "include":
-        unsafe = path_under(normalised, SYSTEM_INCLUDE_ROOTS)
-        duplicate_prefix = normalised == PREFIX_INCLUDE
-    elif kind == "framework":
-        unsafe = path_under(normalised, SYSTEM_FRAMEWORK_ROOTS)
-        duplicate_prefix = False
-    elif kind == "toolchain":
-        unsafe = path_under(normalised, SYSTEM_TOOLCHAIN_ROOTS)
-        duplicate_prefix = False
-    elif kind == "library":
-        unsafe = path_under(normalised, SYSTEM_LIBRARY_ROOTS)
-        duplicate_prefix = normalised == PREFIX_LIBRARY
-    elif kind == "sysroot":
-        unsafe = False
-        duplicate_prefix = False
-    else:
-        unsafe = path_under(normalised, SYSTEM_LIBRARY_ROOTS) or (
-            normalised.startswith("/")
-            and not path_under(normalised, (PREFIX_ROOT,))
-        )
-        duplicate_prefix = False
-    if unsafe or duplicate_prefix:
-        index += consumed
-        continue
-    if kind == "sysroot":
-        if normalised in seen_sysroot:
+        kind, path, consumed = parsed
+        if kind == "assembler":
+            cleaned = sanitize_assembler_options(path, diagnostics)
+            if cleaned:
+                filtered.append("-Wa," + cleaned)
             index += consumed
             continue
-        seen_sysroot.add(normalised)
-    filtered.extend(arguments[index:index + consumed])
-    index += consumed
+        normalised = os.path.normpath(path)
+        if kind == "include":
+            unsafe = path_under(normalised, SYSTEM_INCLUDE_ROOTS)
+            duplicate_prefix = normalised == PREFIX_INCLUDE
+        elif kind == "framework":
+            unsafe = path_under(normalised, SYSTEM_FRAMEWORK_ROOTS)
+            duplicate_prefix = False
+        elif kind == "toolchain":
+            unsafe = path_under(normalised, SYSTEM_TOOLCHAIN_ROOTS)
+            duplicate_prefix = False
+        elif kind == "library":
+            unsafe = path_under(normalised, SYSTEM_LIBRARY_ROOTS)
+            duplicate_prefix = normalised == PREFIX_LIBRARY
+        elif kind == "sysroot":
+            unsafe = False
+            duplicate_prefix = False
+        else:
+            unsafe = path_under(normalised, SYSTEM_LIBRARY_ROOTS) or (
+                normalised.startswith("/")
+                and not path_under(normalised, (PREFIX_ROOT,))
+            )
+            duplicate_prefix = False
+        if unsafe or duplicate_prefix:
+            index += consumed
+            continue
+        if kind == "sysroot":
+            if normalised in seen_sysroot:
+                index += consumed
+                continue
+            seen_sysroot.add(normalised)
+        filtered.extend(arguments[index:index + consumed])
+        index += consumed
+    return filtered, diagnostics
+
+
+filtered, diagnostics = sanitize_arguments(arguments)
 
 for message in diagnostics:
     print("pybrew superenv: %s" % message, file=sys.stderr)
@@ -3004,19 +3651,322 @@ def xcode_version(
     return None
 
 
+# Bounded Xcode major -> newest bundled macOS SDK family.  Xcode releases in
+# the same major ship a range of SDK point releases; this table only records
+# the baseline family used for compatibility warnings.
+_XCODE_SDK_FAMILY = {
+    10: "10.14",
+    11: "10.15",
+    12: "11.0",
+    13: "12.0",
+    14: "13.0",
+    15: "14.0",
+    16: "15.0",
+    26: "26.0",
+}
+
+_SDK_DIRECTORY_RE = re.compile(r"^MacOSX(\d+(?:\.\d+){0,2})\.sdk$")
+
+
+def xcode_sdk_family(version: Optional[str]) -> Optional[str]:
+    """Return the bounded bundled-SDK family for an Xcode version."""
+
+    if not version:
+        return None
+    match = re.match(r"^(\d+)", str(version).strip())
+    if not match:
+        return None
+    return _XCODE_SDK_FAMILY.get(int(match.group(1)))
+
+
+def detect_developer_dir(
+    environment: Optional[Mapping[str, str]] = None,
+    *,
+    system: Optional[str] = None,
+) -> Optional[Path]:
+    """Return the active developer directory (explicit env or xcode-select).
+
+    ``PYBREW_DEVELOPER_DIR``/``DEVELOPER_DIR``/``HOMEBREW_DEVELOPER_DIR`` win
+    without running a command.  Otherwise ``xcode-select -p`` (injectable via
+    ``PYBREW_XCODE_SELECT``) is probed on Darwin.  Missing/invalid explicit
+    paths return ``None`` rather than silently selecting another toolchain.
+    """
+
+    env = os.environ if environment is None else environment
+    explicit = _first_environment_value(
+        env,
+        (
+            "PYBREW_DEVELOPER_DIR",
+            "DEVELOPER_DIR",
+            "HOMEBREW_DEVELOPER_DIR",
+        ),
+    )
+    if explicit:
+        path = Path(explicit).expanduser()
+        return path if path.is_dir() else None
+    host = platform.system() if system is None else system
+    override = env.get("PYBREW_XCODE_SELECT")
+    if host != "Darwin" and not override:
+        return None
+    if override:
+        try:
+            command = shlex.split(override)
+        except ValueError:
+            command = [override]
+    else:
+        found = shutil.which(
+            "xcode-select", path=env.get("PATH") or os.defpath
+        )
+        if not found:
+            return None
+        command = [found]
+    if not command:
+        return None
+    try:
+        result = subprocess.run(
+            [*command, "-p"],
+            env=dict(env),
+            cwd=tempfile.gettempdir(),
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    lines = [
+        line.strip()
+        for line in (result.stdout or "").splitlines()
+        if line.strip()
+    ]
+    if not lines:
+        return None
+    path = Path(lines[-1]).expanduser()
+    return path if path.is_dir() else None
+
+
+def command_line_tools_path(
+    environment: Optional[Mapping[str, str]] = None,
+    *,
+    developer_dir: Optional[Path] = None,
+) -> Optional[Path]:
+    """Return the bounded Command Line Tools root, when detectable."""
+
+    env = os.environ if environment is None else environment
+    explicit = _first_environment_value(
+        env, ("PYBREW_CLT_PATH", "PYBREW_COMMAND_LINE_TOOLS")
+    )
+    if explicit:
+        path = Path(explicit).expanduser()
+        return path if path.is_dir() else None
+    if developer_dir is not None and developer_dir.name == "CommandLineTools":
+        return developer_dir if developer_dir.is_dir() else None
+    path = Path("/Library/Developer/CommandLineTools")
+    return path if path.is_dir() else None
+
+
+def macos_sdk_dirs(
+    environment: Optional[Mapping[str, str]] = None,
+    *,
+    system: Optional[str] = None,
+    developer_dir: Optional[Path] = None,
+) -> list[Path]:
+    """Return candidate ``MacOSX*.sdk`` parent directories.
+
+    ``PYBREW_SDK_DIRS``/``PYBREW_SDK_ROOTS`` (``os.pathsep`` separated) are
+    always honoured.  The bounded default layout is probed only on Darwin (or
+    when an explicit Xcode bundle/developer dir is supplied), keeping Linux
+    builds free of host-specific probing.
+    """
+
+    env = os.environ if environment is None else environment
+    roots: list[Path] = []
+
+    def add(path: Path) -> None:
+        if path.is_dir() and path not in roots:
+            roots.append(path)
+
+    for name in ("PYBREW_SDK_DIRS", "PYBREW_SDK_ROOTS"):
+        raw = env.get(name) or ""
+        for item in raw.split(os.pathsep):
+            if item.strip():
+                add(Path(item.strip()).expanduser())
+    if developer_dir is not None:
+        add(
+            developer_dir
+            / "Platforms"
+            / "MacOSX.platform"
+            / "Developer"
+            / "SDKs"
+        )
+        add(developer_dir / "SDKs")
+    clt_override = _first_environment_value(
+        env, ("PYBREW_CLT_PATH", "PYBREW_COMMAND_LINE_TOOLS")
+    )
+    if clt_override:
+        add(Path(clt_override).expanduser() / "SDKs")
+    host = platform.system() if system is None else system
+    explicit_layout = bool(
+        developer_dir is not None
+        or env.get("PYBREW_XCODE_BUNDLE")
+        or env.get("PYBREW_DEVELOPER_DIR")
+        or env.get("DEVELOPER_DIR")
+        or env.get("PYBREW_SDK_DIRS")
+        or env.get("PYBREW_SDK_ROOTS")
+    )
+    if host != "Darwin" and not explicit_layout:
+        return roots
+    bundle_override = env.get("PYBREW_XCODE_BUNDLE")
+    if bundle_override:
+        add(
+            Path(bundle_override).expanduser()
+            / "Contents"
+            / "Developer"
+            / "Platforms"
+            / "MacOSX.platform"
+            / "Developer"
+            / "SDKs"
+        )
+    if host == "Darwin":
+        add(
+            Path("/Applications/Xcode.app")
+            / "Contents"
+            / "Developer"
+            / "Platforms"
+            / "MacOSX.platform"
+            / "Developer"
+            / "SDKs"
+        )
+        try:
+            for candidate in sorted(
+                Path("/Applications").glob("Xcode*.app")
+            ):
+                add(
+                    candidate
+                    / "Contents"
+                    / "Developer"
+                    / "Platforms"
+                    / "MacOSX.platform"
+                    / "Developer"
+                    / "SDKs"
+                )
+        except OSError:
+            pass
+        add(Path("/Library/Developer/CommandLineTools/SDKs"))
+    return roots
+
+
+def available_macos_sdks(
+    environment: Optional[Mapping[str, str]] = None,
+    *,
+    system: Optional[str] = None,
+    developer_dir: Optional[Path] = None,
+    sdk_dirs: Optional[Iterable[Path]] = None,
+) -> list[str]:
+    """Return installed macOS SDK version strings in sorted order."""
+
+    env = os.environ if environment is None else environment
+    directories = (
+        list(sdk_dirs)
+        if sdk_dirs is not None
+        else macos_sdk_dirs(env, system=system, developer_dir=developer_dir)
+    )
+    versions: list[str] = []
+    for directory in directories:
+        try:
+            children = sorted(Path(directory).iterdir())
+        except OSError:
+            continue
+        for child in children:
+            match = _SDK_DIRECTORY_RE.match(child.name)
+            if match and child.is_dir() and match.group(1) not in versions:
+                versions.append(match.group(1))
+    return sorted(versions, key=_version_tuple)
+
+
+def macos_sdk_path(
+    version: str,
+    environment: Optional[Mapping[str, str]] = None,
+    *,
+    system: Optional[str] = None,
+    developer_dir: Optional[Path] = None,
+    sdk_dirs: Optional[Iterable[Path]] = None,
+) -> Optional[Path]:
+    """Locate one installed ``MacOSX<version>.sdk`` directory."""
+
+    env = os.environ if environment is None else environment
+    directories = (
+        list(sdk_dirs)
+        if sdk_dirs is not None
+        else macos_sdk_dirs(env, system=system, developer_dir=developer_dir)
+    )
+    target = f"MacOSX{version}.sdk"
+    for directory in directories:
+        candidate = Path(directory) / target
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
 def sdk_version_matrix(
     environment: Optional[Mapping[str, str]] = None,
     *,
     system: Optional[str] = None,
     machine: Optional[str] = None,
-) -> dict[str, Optional[str]]:
-    """Return the bounded SDK/deployment-target selection matrix."""
+) -> dict[str, Any]:
+    """Return the bounded SDK/Xcode/deployment-target selection matrix.
+
+    Only local directory listings and injectable probes are used; no network
+    access or full Xcode emulation is attempted.
+    """
 
     env = os.environ if environment is None else environment
     requested = _first_environment_value(
         env, ("PYBREW_SDK_VERSION", "SDK_VERSION")
     )
     valid = requested if requested and _SDK_VERSION_RE.fullmatch(requested) else None
+    developer_dir = detect_developer_dir(env, system=system)
+    clt = command_line_tools_path(env, developer_dir=developer_dir)
+    xcode = xcode_version(env, system=system)
+    sdks = available_macos_sdks(
+        env, system=system, developer_dir=developer_dir
+    )
+    warnings: list[str] = []
+    if requested and valid is None:
+        warnings.append(
+            f"invalid SDK version {requested!r}; using the default macOS SDK"
+        )
+    selected: Optional[str] = None
+    if sdks:
+        if valid is not None and valid in sdks:
+            selected = valid
+        else:
+            selected = sdks[-1]
+            if valid is not None:
+                warnings.append(
+                    f"requested SDK {valid} is not installed; using {selected}"
+                )
+    family = xcode_sdk_family(xcode)
+    if (
+        family is not None
+        and valid is not None
+        and _version_tuple(family) < _version_tuple(valid)
+    ):
+        warnings.append(
+            f"Xcode {xcode} bundles macOS SDK {family}, older than the "
+            f"requested {valid}"
+        )
+    sdk_path = (
+        macos_sdk_path(
+            selected,
+            env,
+            system=system,
+            developer_dir=developer_dir,
+        )
+        if selected is not None
+        else None
+    )
     return {
         "requested": requested,
         "sdk_name": sdk_name_for_version(valid),
@@ -3024,7 +3974,21 @@ def sdk_version_matrix(
         "deployment_target": _first_environment_value(
             env, ("PYBREW_MIN_OS", "MACOSX_DEPLOYMENT_TARGET")
         ),
-        "xcode_version": xcode_version(env, system=system),
+        "xcode_version": xcode,
+        "xcode_sdk_family": family,
+        "developer_dir": str(developer_dir) if developer_dir else None,
+        "command_line_tools": str(clt) if clt else None,
+        "xcode_bundle": (
+            str(developer_dir.parents[1])
+            if developer_dir is not None
+            and developer_dir.name == "Developer"
+            and len(developer_dir.parents) >= 2
+            else None
+        ),
+        "available_sdks": sdks,
+        "selected_sdk": selected,
+        "sdk_path": str(sdk_path) if sdk_path else None,
+        "warnings": warnings,
     }
 
 
@@ -3061,6 +4025,41 @@ def detect_sdkroot(
     if "SDKROOT" in env:
         value = env.get("SDKROOT", "").strip()
         return Path(value).expanduser() if value else None
+
+    explicit_layout = any(
+        env.get(name)
+        for name in (
+            "PYBREW_DEVELOPER_DIR",
+            "DEVELOPER_DIR",
+            "HOMEBREW_DEVELOPER_DIR",
+            "PYBREW_SDK_DIRS",
+            "PYBREW_SDK_ROOTS",
+            "PYBREW_XCODE_BUNDLE",
+        )
+    )
+    if explicit_layout:
+        developer_dir = detect_developer_dir(env, system=system)
+        requested = _first_environment_value(
+            env, ("PYBREW_SDK_VERSION", "SDK_VERSION")
+        )
+        valid = (
+            requested
+            if requested and _SDK_VERSION_RE.fullmatch(requested)
+            else None
+        )
+        sdks = available_macos_sdks(
+            env, system=system, developer_dir=developer_dir
+        )
+        if sdks:
+            selected = valid if valid in sdks else sdks[-1]
+            layout_path = macos_sdk_path(
+                selected,
+                env,
+                system=system,
+                developer_dir=developer_dir,
+            )
+            if layout_path is not None:
+                return layout_path
 
     host = platform.system() if system is None else system
     xcrun_override = env.get("PYBREW_XCRUN")
@@ -3672,12 +4671,17 @@ def build_environment(
     ``PYBREW_SUPERENV=1``.  None of these require full Homebrew Superenv and
     explicit user flags always win.
 
-    Residual Superenv gaps kept intentionally bounded: no full SDK version
-    matrix/Xcode layout emulation, no Homebrew formula-option dependency
-    resolution, no automatic rpath injection for dependencies, no shell quoting
-    for dependency paths containing spaces, pkg-config is limited to discovered
-    ``.pc`` modules (<=32, 5s, no network), and signature/entitlements
-    verification remains outside this module.
+    Bounded SDK/Xcode support: explicit ``PYBREW_DEVELOPER_DIR``/
+    ``DEVELOPER_DIR``/``PYBREW_XCODE_SELECT`` layout discovery feeds
+    ``sdk_version_matrix``/``detect_sdkroot`` (local directory listings only).
+    Formula option semantics live in :class:`BuildOptions` and are passed to
+    this function by :class:`SourceBuilder`; this function itself only shapes
+    the flag environment.
+
+    Residual Superenv gaps kept intentionally bounded: no full Xcode/SDK
+    emulation, no automatic rpath injection for dependencies, pkg-config is
+    limited to discovered ``.pc`` modules (<=32, 5s, no network), and
+    signature/entitlements verification remains outside this module.
     """
 
     env = dict(os.environ if base_env is None else base_env)
@@ -3872,6 +4876,20 @@ def build_environment(
                 if name in env:
                     env[name] = _ensure_isysroot(env[name], sdkroot)
 
+    explicit_developer = any(
+        env.get(name)
+        for name in (
+            "PYBREW_DEVELOPER_DIR",
+            "DEVELOPER_DIR",
+            "HOMEBREW_DEVELOPER_DIR",
+            "PYBREW_XCODE_SELECT",
+        )
+    )
+    if explicit_developer:
+        developer_dir = detect_developer_dir(env)
+        if developer_dir is not None:
+            env.setdefault("DEVELOPER_DIR", str(developer_dir))
+
     compiler = select_compiler(env)
     if compiler.cc is not None:
         env["CC"] = compiler.cc
@@ -3898,27 +4916,45 @@ class SourceBuilder:
         verbose: bool = False,
         downloader: Optional[Any] = None,
         environment: Optional[Mapping[str, str]] = None,
+        build_options: Optional[BuildOptions] = None,
     ):
         self.formula = formula
         self.config = config
         self.verbose = verbose
         self.downloader = downloader
         self.environment = environment
+        self.build_options = build_options
         self._resource_stages: dict[str, Path] = {}
+
+    def _resolved_build_options(self) -> BuildOptions:
+        if self.build_options is not None:
+            return self.build_options
+        return BuildOptions.from_environment(
+            self.formula, self.environment
+        )
 
     def build(self, build_root: Path, keg: Path) -> None:
         # Homebrew applies a formula's patches to the unpacked source before
         # running its install block; both install backends share that step.
         self._apply_patches(build_root)
+        build_options = self._resolved_build_options()
+        for warning in build_options.warnings:
+            print(f"warning: {warning}", file=sys.stderr)
         if arbitrary_ruby_enabled():
             # Explicit opt-in (PYBREW_ALLOW_ARBITRARY_RUBY=1): hand the raw
             # `def install` body to Ruby instead of the declarative parser.
+            ruby_env = self._build_env(keg, build_options)
+            ruby_env["PYBREW_BUILD_OPTIONS"] = " ".join(build_options.arguments)
+            ruby_env["PYBREW_BUILD_HEAD"] = "1" if build_options.head else "0"
+            ruby_env["PYBREW_BUILD_BOTTLE"] = (
+                "1" if build_options.bottle else "0"
+            )
             execute_install_body(
                 self.formula,
                 self.config,
                 build_root,
                 keg,
-                env=self._build_env(keg),
+                env=ruby_env,
                 verbose=self.verbose,
                 downloader=self.downloader,
             )
@@ -3927,7 +4963,7 @@ class SourceBuilder:
                     f"{self.formula.name}: build completed but installed keg is empty"
                 )
             return
-        parser = InstallParser(self.formula)
+        parser = InstallParser(self.formula, build_options=build_options)
         actions = parser.parse()
         if not actions:
             raise UnsupportedInstall(f"{self.formula.name}: install block is empty")
@@ -3937,8 +4973,9 @@ class SourceBuilder:
             keg=keg,
             build_root=build_root,
             verbose=self.verbose,
-            env=self._build_env(keg),
+            env=self._build_env(keg, build_options),
             cwd=build_root,
+            build_options=build_options,
         )
         if context.env.get("PYBREW_SANDBOX") == "1":
             # Validate the backend before any in-process write or system command;
@@ -4118,15 +5155,17 @@ class SourceBuilder:
                     targets.append(target)
         return targets
 
-    def _dependency_paths(self) -> list[Path]:
+    def _dependency_paths(
+        self, build_options: Optional[BuildOptions] = None
+    ) -> list[Path]:
         formula = self.formula
-        dependencies = (
-            list(formula.dependencies)
-            + list(formula.build_dependencies)
-            + list(formula.head_dependencies)
-            + list(formula.uses_from_macos)
-            + list(formula.recommended_dependencies)
-            + list(formula.optional_dependencies)
+        options = (
+            build_options
+            if build_options is not None
+            else BuildOptions.for_formula(formula)
+        )
+        dependencies = options.selected_dependencies(formula) + list(
+            formula.build_dependencies
         )
         paths: list[Path] = []
         for dependency in dependencies:
@@ -4174,11 +5213,13 @@ class SourceBuilder:
             f"{self.formula.name}: in-process sandbox write boundary rejects {resolved}"
         )
 
-    def _build_env(self, keg: Path) -> dict[str, str]:
+    def _build_env(
+        self, keg: Path, build_options: Optional[BuildOptions] = None
+    ) -> dict[str, str]:
         prepared = build_environment(
             self.config,
             self.environment,
-            dependency_paths=self._dependency_paths(),
+            dependency_paths=self._dependency_paths(build_options),
         )
         if prepared.compiler.warning:
             print(f"warning: {prepared.compiler.warning}", file=sys.stderr)
@@ -4675,6 +5716,7 @@ def build_source(
     verbose: bool = False,
     downloader: Optional[Any] = None,
     environment: Optional[Mapping[str, str]] = None,
+    build_options: Optional[BuildOptions] = None,
 ) -> None:
     SourceBuilder(
         formula,
@@ -4682,4 +5724,5 @@ def build_source(
         verbose=verbose,
         downloader=downloader,
         environment=environment,
+        build_options=build_options,
     ).build(build_root, keg)

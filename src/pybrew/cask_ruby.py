@@ -47,9 +47,11 @@ Semantics worth knowing:
   at the end of the cask block.
 * Cask *scripts* (``preflight``, ``postflight``, ``uninstall_preflight``,
   ``uninstall_postflight``) are never executed by the evaluator.  Their raw
-  block source is recovered best-effort from Ruby's ``source_location`` and
-  stored on the cask, exactly like the default parser's inert script bodies;
-  only ``CaskInstaller(run_scripts=True)`` runs them.  When recovery fails the
+  block source is recovered best-effort from Ruby's AST block range on MRI and
+  from a ``Ripper.lex`` token scan on non-MRI interpreters (falling back to
+  Python's lexer when neither is available), then stored on the cask exactly
+  like the default parser's inert script bodies; only
+  ``CaskInstaller(run_scripts=True)`` runs them.  When recovery fails the
   cask keeps a warning in ``cask.extra["ruby_warnings"]`` instead of breaking
   evaluation.  A ``caveats do ... end`` block is evaluated for its output, and
   stanzas the pybrew cask model does not model (``container``, ``rename``,
@@ -58,6 +60,10 @@ Semantics worth knowing:
   ``PYBREW_TARGET_ARCH`` (the same overrides used elsewhere in pybrew);
   ``HOMEBREW_MACOS_VERSION`` overrides the macOS release for
   ``on_<release>`` blocks.
+* ``PYBREW_CASK_DISABLE_MRI_AST=1`` and ``PYBREW_CASK_DISABLE_RIPPER=1`` are
+  diagnostics/test seams that force the non-MRI capture paths (they never
+  change which script bodies are executed: scripts stay inert unless
+  ``CaskInstaller(run_scripts=True)`` is used).
 
 Failures (missing Ruby, a Ruby exception, a syntax error, no ``cask``
 declaration, unreadable JSON) raise :class:`pybrew.cask.CaskError` with the
@@ -389,10 +395,10 @@ def _extract_stanza_source(
 ) -> Optional[str]:
     """Best-effort recovery of a ``stanza do ... end`` block body.
 
-    The Ruby shim reports the block's ``source_location``; the exact block
-    range from Ruby's AST is preferred when available (it handles exotic Ruby
-    bodies), otherwise this helper maps the reported line back onto the
-    original source with the Python lexer.
+    The Ruby shim reports the block's ``source_location`` and an exact block
+    range where it can: Ruby's AST on MRI, or a Ripper.lex token scan on
+    non-MRI interpreters.  When neither is available this helper maps the
+    reported line back onto the original source with the Python lexer.
     """
 
     if isinstance(location, dict):
@@ -1997,6 +2003,11 @@ _RUBY_SHIM = r'''
 require "base64"
 require "json"
 require "pathname"
+begin
+  require "ripper"
+rescue LoadError
+  # Non-MRI interpreter without Ripper: Python's lexer fallback still runs.
+end
 
 PYBREW_CASK_CONFIG = JSON.parse(Base64.strict_decode64("__PYBREW_CASK_CONFIG__"))
 PYBREW_CASK_SOURCE = Base64.strict_decode64("__PYBREW_CASK_SOURCE__")
@@ -2148,13 +2159,254 @@ module PybrewCaskJSON
     end
   end
 
-  # Exact AST block range when the host Ruby exposes it (MRI).  Returns nil
-  # on interpreters or eval contexts where the block has no source file.
-  def block_range(block)
-    return nil if block.nil? || !defined?(RubyVM::AbstractSyntaxTree)
+  # Token types that end a Ruby expression.  A statement-form ``if``/
+  # ``unless``/``while``/``until`` there is a modifier and takes no ``end``;
+  # anywhere else it opens a block that does.
+  EXPRESSION_END_TYPES = [
+    :on_ident, :on_const, :on_ivar, :on_gvar, :on_cvar, :on_backref,
+    :on_int, :on_float, :on_rational, :on_imaginary, :on_tstring_end,
+    :on_regexp_end, :on_heredoc_beg, :on_heredoc_end, :on_rparen,
+    :on_rbracket, :on_rbrace
+  ].freeze
+
+  EXPRESSION_END_KEYWORDS = %w[
+    end true false nil self __FILE__ __LINE__ __ENCODING__ return break next
+    redo retry yield super
+  ].freeze
+
+  STATEMENT_END_KEYWORDS = %w[def class module case begin for].freeze
+
+  MODIFIER_KEYWORDS = %w[if unless while until].freeze
+
+  CLOSING_TOKEN_TYPES = {
+    :on_rbrace => :rbrace,
+    :on_rparen => :rparen,
+    :on_rbracket => :rbracket
+  }.freeze
+
+  # Comments, whitespace and line continuations never change expression state.
+  def insignificant_token?(type)
+    [
+      :on_sp, :on_ignored_nl, :on_comment, :on_embdoc_beg, :on_embdoc,
+      :on_embdoc_end
+    ].include?(type)
+  end
+
+  def expression_end?(significant)
+    return false if significant.nil?
+
+    type, text = significant
+    return true if type == :expression_end
+    return true if EXPRESSION_END_TYPES.include?(type)
+
+    type == :on_kw && EXPRESSION_END_KEYWORDS.include?(text)
+  end
+
+  # Exact block range for the reported ``do``/``{`` opener.  MRI's
+  # RubyVM::AbstractSyntaxTree is preferred; non-MRI interpreters (and eval
+  # contexts without AST data) fall back to a Ripper.lex token scan so the raw
+  # script body can still be sliced exactly from the cask source.
+  #
+  # ``name`` identifies the stanza whose block this is (``preflight``,
+  # ``livecheck``, ``strategy``, ...); it is only needed by the lexer fallback.
+  def block_range(block, name = nil)
+    return nil if block.nil?
+
+    range = ast_block_range(block)
+    return range unless range.nil?
+
+    lexer_block_range(block, name)
+  rescue StandardError
+    nil
+  end
+
+  def ast_block_range(block)
+    return nil if ENV["PYBREW_CASK_DISABLE_MRI_AST"].to_s == "1"
+    return nil unless defined?(RubyVM::AbstractSyntaxTree)
+
     node = RubyVM::AbstractSyntaxTree.of(block)
+    return nil if node.nil?
+
     [node.first_lineno, node.first_column, node.last_lineno, node.last_column]
   rescue StandardError
+    nil
+  end
+
+  # Non-MRI fallback: Ripper ships with MRI, JRuby and TruffleRuby, so the
+  # block body can be recovered exactly without the MRI-only AST API.  Returns
+  # nil (and leaves Python's lexer fallback in charge) when Ripper is missing
+  # or the scan cannot be completed.
+  def lexer_block_range(block, name)
+    return nil if ENV["PYBREW_CASK_DISABLE_RIPPER"].to_s == "1"
+    return nil unless defined?(Ripper) && Ripper.respond_to?(:lex)
+    return nil if name.nil?
+
+    location = block.source_location
+    return nil if location.nil? || location[1].nil?
+
+    tokens = lexer_tokens
+    opener = lexer_block_opener(tokens, location[1].to_i, name.to_s)
+    return nil if opener.nil?
+
+    lexer_block_end(tokens, opener)
+  rescue StandardError
+    nil
+  end
+
+  def lexer_tokens
+    @lexer_tokens ||= Ripper.lex(PYBREW_CASK_SOURCE)
+  rescue StandardError
+    nil
+  end
+
+  # Locate the ``do``/``{`` token that opens the block reported at ``line``.
+  # The opening line comes from Proc#source_location; the stanza name tells us
+  # where the call starts, and argument arrays/hashes are skipped so a nested
+  # delimiter is never mistaken for the block opener.
+  def lexer_block_opener(tokens, line, name)
+    candidates = []
+    tokens.each_with_index do |entry, index|
+      position, type, text = entry
+      next if position[0] > line
+      next unless type == :on_ident && text == name
+
+      candidates << index
+    end
+    candidates.reverse_each do |start|
+      opener = lexer_opener_after(tokens, start, line, name)
+      return opener unless opener.nil?
+    end
+    nil
+  end
+
+  # Scan forward from one stanza-name token for the opener on the reported
+  # line.  Argument arrays/hashes are skipped; a brace is a block only when it
+  # follows the call or one of its argument expressions.
+  def lexer_opener_after(tokens, start, line, name)
+    previous = [:on_ident, name]
+    depth = []
+    index = start + 1
+    while index < tokens.length
+      position, type, text = tokens[index]
+      return nil if position[0] > line
+
+      if position[0] == line
+        case type
+        when :on_kw
+          return index if text == "do" && depth.empty?
+        when :on_lbrace
+          return index if depth.empty? && block_brace?(previous)
+
+          depth.push(:on_rbrace)
+        when :on_lparen
+          depth.push(:on_rparen)
+        when :on_lbracket
+          depth.push(:on_rbracket)
+        when :on_rparen, :on_rbracket, :on_rbrace
+          depth.pop unless depth.empty?
+        end
+        previous = [type, text] unless insignificant_token?(type)
+      end
+      index += 1
+    end
+    nil
+  end
+
+  # A brace literal is a block only when it follows the call or one of its
+  # argument expressions; after a keyword label/comma/paren it is a hash.
+  def block_brace?(previous)
+    return false if previous.nil?
+
+    type, _text = previous
+    [
+      :on_ident, :on_const, :on_int, :on_float, :on_tstring_end,
+      :on_regexp_end, :on_rparen, :on_rbracket
+    ].include?(type)
+  end
+
+  # Match the opener against its closing ``end``/``}`` using Ripper's token
+  # stream.  String, heredoc, percent-literal and symbol contents are already
+  # single tokens (or a symbol pair), so keywords inside them are never
+  # counted; only real statement blocks push a closer.
+  def lexer_block_end(tokens, opener_index)
+    opener_position, opener_type, _opener_text = tokens[opener_index]
+    initial = opener_type == :on_kw ? :end : :rbrace
+    stack = [[initial, nil, opener_index, false]]
+    last_significant = nil
+    last_newline = -1
+    symbol_name = false
+    index = opener_index + 1
+    while index < tokens.length
+      position, type, text = tokens[index]
+      if symbol_name
+        symbol_name = false
+        last_significant = [:expression_end, text]
+        index += 1
+        next
+      end
+      if type == :on_symbeg
+        symbol_name = true
+        index += 1
+        next
+      end
+      if type == :on_nl
+        last_newline = index
+        last_significant = nil
+        index += 1
+        next
+      end
+      if insignificant_token?(type)
+        index += 1
+        next
+      end
+
+      closing = CLOSING_TOKEN_TYPES[type]
+      if !closing.nil?
+        return nil unless stack.last[0] == closing
+
+        stack.pop
+        if stack.empty?
+          return [opener_position[0], opener_position[1], position[0],
+                  position[1] + text.bytesize]
+        end
+        last_significant = [type, text]
+      elsif type == :on_lbrace
+        stack.push([:rbrace, nil, index, false])
+      elsif type == :on_lparen
+        stack.push([:rparen, nil, index, false])
+      elsif type == :on_lbracket
+        stack.push([:rbracket, nil, index, false])
+      elsif type == :on_kw
+        if text == "end"
+          return nil unless stack.last[0] == :end
+
+          stack.pop
+          if stack.empty?
+            return [opener_position[0], opener_position[1], position[0],
+                    position[1] + text.bytesize]
+          end
+        elsif text == "do"
+          frame = stack.last
+          if !frame.nil? && frame[0] == :end &&
+             %w[while until for].include?(frame[1]) &&
+             frame[2] > last_newline && !frame[3]
+            # ``while cond do``/``for x in y do`` reuse one ``end``.
+            frame[3] = true
+          else
+            stack.push([:end, nil, index, false])
+          end
+        elsif STATEMENT_END_KEYWORDS.include?(text)
+          stack.push([:end, text, index, false])
+        elsif MODIFIER_KEYWORDS.include?(text) &&
+              !expression_end?(last_significant)
+          stack.push([:end, text, index, false])
+        end
+        last_significant = [type, text]
+      else
+        last_significant = [type, text]
+      end
+      index += 1
+    end
     nil
   end
 end
@@ -2334,7 +2586,7 @@ class PybrewCaskLivecheck
     unless block.nil?
       @strategy_location = {
         "location" => block.source_location,
-        "range" => PybrewCaskJSON.block_range(block),
+        "range" => PybrewCaskJSON.block_range(block, "strategy"),
       }
     end
     @data["strategy"]
@@ -3003,7 +3255,8 @@ class PybrewCaskDSL
 
     location = block.source_location
     @data["livecheck_location"] = unless location.nil?
-      { "location" => location, "range" => PybrewCaskJSON.block_range(block) }
+      { "location" => location,
+        "range" => PybrewCaskJSON.block_range(block, "livecheck") }
     end
     collector = PybrewCaskLivecheck.new
     begin
@@ -3036,7 +3289,7 @@ class PybrewCaskDSL
       @data["script_locations"][name] =
         block.nil? ? nil : {
           "location" => block.source_location,
-          "range" => PybrewCaskJSON.block_range(block),
+          "range" => PybrewCaskJSON.block_range(block, name),
         }
       nil
     end

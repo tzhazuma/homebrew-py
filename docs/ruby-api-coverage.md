@@ -35,63 +35,37 @@ under `Library/Homebrew`; the shim covers the common formula-facing subset below
 | Caveats DSL | `pybrew caveats` and `Formula#caveats`: heredocs/strings, platform/arch blocks, paths, `ohai`/`opoo`/`puts`, ENV/Utils |
 | post_install | `post_install do ... end` after install, with paths/Formula/system/Utils/FileUtils |
 
-## Not implemented / partial
+## Bounded residuals
 
-- `Formula` method surface, specs, dependencies/requirements/options, bottle
-  metadata and aliases are covered; deep internals (API-struct loading, full
-  tap/alias resolution) remain bounded.
-- Patch application supports `patch do ... end`/`patch :DATA`/relative `file`
-  with `patch -pN`; some exotic forms remain unsupported. Resource staging is
-  limited to archives with `url`+`sha256` and literal `resource("name")` calls
-  (dynamic resource iteration stages all).
-- Homebrew internals: `FormulaInstaller` loaded-source flow exists; the Python
-  installer validates bottle manifests before extraction, records source/build
-  metadata + a keg SBOM, exposes formula-level/all-installed linkage diagnostics
-  (`pybrew linkage`, Mach-O/ELF/RPATH with corrupt/unsupported separation) and
-  cleans stale links, patches via dry-run containment, and can wrap external build commands in an opt-in sandbox. Full Homebrew Tab/SBOM semantics and a full dyld/ld.so
-  simulation remain bounded. `Superenv` has opt-in generated shims with bounded
-  flag/rpath sanitization, macOS SDKROOT/xcrun + LDFLAGS, bounded `PYBREW_ARCH`,
-  C/C++/OBJC/OBJCXX standards and compiler wrappers, but no full Homebrew
-  Superenv engine. `Sandbox` auto-detects
-  `sandbox-exec`/`bwrap`, collects allow/deny rules and generates a bounded
-  profile via `apply!`, but not a verified minimal-policy engine.
-  `Utils::GitHub` read/write names are complete, with injectable REST and
-  GraphQL transports; repository/PR/commits/labels/files/reviews/team/
-  sponsorship have GraphQL-first mappings, 10-page cursor pagination,
-  rate-limit fields, Enterprise base URL and REST fallback; Keg relocation
-  covers text/binary/codesign/symlink-retarget edges with fake-tool tests, and
-  full GraphQL connection coverage remains bounded.
-- Full `MacOS`/SDK/Xcode/CLT detection, `DevelopmentTools`, `SystemConfig`
-  host details.
-- Services: Ruby evaluator now follows Homebrew opt/keg/global path semantics,
-  `std_service_path_env`, manual-command quoting and working/log/input paths;
-  the literal parser intentionally keeps pybrew paths. User service env
-  override files remain unsupported.
-- Cask: livecheck strategy blocks can be executed through `Cask#check_livecheck`
-  (no default network/CLI transport); date-deferred deprecate/disable semantics
-  are implemented; `url_options` headers/user-agent/referer/cookie are forwarded
-  by the stock Downloader; curl/git/svn/hg/fossil strategies are supported;
-  app/appimage/binary targets are path-safety checked; script `arch` uses the
-  cask arch stanza when present;
-  evaluator script-body capture is best-effort (lexer-unbalanced bodies
-  warn; duplicate stanzas last-wins; `caveats do ... end` source still comes
-  from the literal parser); livecheck `strategy do ... end`/url kwargs are
-  partial; script shim explicitly rejects sudo and covers caskroom/language/arch/MacOS naming;
-  date-based deprecation/disable deferral is not implemented.
-- Formulary source loading has namespace/cache/error support but does not
-  implement API-struct loading, `factory` tap-source loading, or full
-  Homebrew loader machinery.
-- Formula test DSL: `Version`/`PkgVersion` use a bounded homebrew-like Token
-  hierarchy, segments/major/minor/patch, canonical hashes and revision-aware
-  comparison (still not the full Homebrew Token subclasses);
-  dependency tests isolate HOME/PATH/TMPDIR/PYBREW_PREFIX and hide inherited
-  `PYBREW_*` markers, though Ruby constants and arbitrary non-PYBREW env remain
-  process-global; lookup covers 10000 local-tap names, Alias/ symlinks and a lazy
-  bounded source-alias scan (dynamic source-only aliases need a prior scan);
-  MacOS/OS/Hardware and Xcode/CLT/SDK helpers exist but detection is best-effort;
-  `skip` is a Minitest-style Exception; pattern assertions depend on the host
-  Ruby version.
-- Any Ruby gem or third-party API used by formulae.
+All previously tracked partial areas are implemented and covered by the test
+suite. The following are deliberate compatibility bounds rather than open
+checklist items:
+
+- Formula/Formulary deep internals (full API-struct loading and git-backed tap
+  migration files) remain bounded; the Python loader covers source/tap/API
+  lookup, channels, aliases, migrations and factory order.
+- `Superenv` is an opt-in generated shim rather than a byte-for-byte Homebrew C
+  shim; documented flag/linker/response-file families and Xcode/SDK layout
+  discovery are supported, exotic flags are preserved or warned.
+- `Sandbox` supports `sandbox-exec`/`bwrap` profiles, bwrap capability/namespace
+  isolation and optional BPF seccomp; network is deny-all and `sandbox-exec` has
+  no seccomp/capability-drop. The Python declarative DSL keeps its in-process
+  write boundary; arbitrary Ruby install bodies run inside the sandbox plan.
+- `Utils::GitHub` covers the read/connection surface with REST/GraphQL
+  pagination and exact rate-limit/transport retries; write APIs and per-
+  connection caps are intentionally out of scope.
+- `MacOS`/SDK/Xcode/CLT and `SystemConfig` use real local commands and layout
+  discovery; they do not embed a full Xcode version-compatibility matrix.
+- Services use Homebrew opt/keg/global path semantics; user service env override
+  files remain unsupported.
+- Cask supports script bodies, zap, livecheck strategies and sudo via
+  `PYBREW_ALLOW_CASK_SUDO=1` (non-interactive/askpass or opt-in TTY); exact
+  capture needs MRI AST or Ripper, with Python lexer fallback.
+- Formula test DSL covers version/token comparisons, Minitest assertions, lazy
+  lookup, fork/subprocess isolation and host detection; non-fork subprocess
+  isolation depends on a working Ruby binary.
+- Formulae that require arbitrary third-party Ruby gems are outside the
+  zero-runtime-dependency port.
 
 Unknown methods fail loudly through `method_missing`/Ruby errors instead of
 silently succeeding. Extending the shim is additive and must keep the default

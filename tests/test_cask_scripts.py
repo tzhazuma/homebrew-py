@@ -1147,3 +1147,177 @@ def test_generated_shim_sudo_askpass_contract(tmp_path: Path) -> None:
     assert f"args:-A -E -- /bin/echo ask" in lines
     assert f"askpass:{askpass}" in lines
     assert not any("args:-n " in line for line in lines)
+
+
+def test_generated_shim_sudo_tty_preserves_stdio(tmp_path: Path) -> None:
+    log = tmp_path / "sudo-tty.log"
+    fake = tmp_path / "fake-sudo"
+    fake.write_text(
+        "#!/bin/sh\n"
+        "printf 'tty-inherited\\n'\n"
+        "printf '%s\\n' \"$@\" >> " + str(log) + "\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+
+    proc = _run_shim_body(
+        tmp_path,
+        'system_command "/bin/echo", args: ["tty"], sudo: true',
+        env={
+            "PYBREW_ALLOW_CASK_SUDO": "1",
+            "PYBREW_SUDO": str(fake),
+            "PYBREW_SUDO_TTY": "1",
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert "tty-inherited" in proc.stdout
+    assert log.read_text().splitlines() == [
+        "-E",
+        "--",
+        "/bin/echo",
+        "tty",
+    ]
+    assert "-n" not in log.read_text().splitlines()
+
+
+def test_generated_shim_sudo_tty_rejects_input(tmp_path: Path) -> None:
+    fake = tmp_path / "fake-sudo"
+    fake.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    fake.chmod(0o755)
+
+    proc = _run_shim_body(
+        tmp_path,
+        'system_command "/bin/echo", args: ["x"], '
+        'sudo: true, input: "secret"',
+        env={
+            "PYBREW_ALLOW_CASK_SUDO": "1",
+            "PYBREW_SUDO": str(fake),
+            "PYBREW_SUDO_TTY": "1",
+        },
+    )
+
+    assert proc.returncode != 0
+    assert "input is not supported with PYBREW_SUDO_TTY" in proc.stderr
+
+
+def _run_shim_body_on_pty(
+    tmp_path: Path, body: str, *, env: dict[str, str]
+) -> tuple[int, str]:
+    """Run the generated shim with stdin/stdout/stderr attached to a real PTY."""
+
+    import os
+    import pty
+    import select
+    import time
+
+    from pybrew.cask_installer import _CASK_SCRIPT_SHIM
+
+    ruby = shutil.which("ruby")
+    if ruby is None:
+        pytest.skip("Ruby is not available for a shim runtime check")
+    shim = tmp_path / "cask_script_shim_tty.rb"
+    shim.write_text(_CASK_SCRIPT_SHIM, encoding="utf-8")
+    body_path = tmp_path / "body_tty.rb"
+    body_path.write_text(body + "\n", encoding="utf-8")
+    script_env = dict(os.environ)
+    script_env.update(env)
+    try:
+        master, slave = pty.openpty()
+    except (AttributeError, OSError):  # pragma: no cover - unusual CI image
+        pytest.skip("PTY allocation is not available")
+    try:
+        proc = subprocess.Popen(
+            [
+                ruby,
+                str(shim),
+                "preflight",
+                "runtime-token",
+                "1.0",
+                str(tmp_path / "appdir"),
+                str(tmp_path / "staged"),
+                str(tmp_path / "bin"),
+                str(tmp_path / "prefix"),
+                str(body_path),
+            ],
+            stdin=slave,
+            stdout=slave,
+            stderr=slave,
+            env=script_env,
+        )
+        os.close(slave)
+        slave = -1
+        os.write(master, b"tty-secret\n")
+        chunks: list[bytes] = []
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            ready, _, _ = select.select([master], [], [], 0.5)
+            if ready:
+                try:
+                    chunk = os.read(master, 4096)
+                except OSError:
+                    break
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            elif proc.poll() is not None:
+                break
+        try:
+            returncode = proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:  # pragma: no cover - last-resort guard
+            proc.kill()
+            returncode = proc.wait(timeout=10)
+    finally:
+        if slave >= 0:
+            os.close(slave)
+        os.close(master)
+    return returncode, b"".join(chunks).decode("utf-8", "replace")
+
+
+def test_generated_shim_sudo_tty_inherits_a_real_tty(tmp_path: Path) -> None:
+    log = tmp_path / "sudo-tty-pty.log"
+    fake = tmp_path / "fake-sudo-tty"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'if [ -t 0 ] && [ -t 1 ]; then echo "stdin_tty=yes"; '
+        'else echo "stdin_tty=no"; fi\n'
+        'printf "arg:%s\\n" "$@" >> ' + str(log) + "\n"
+        "if [ -t 0 ]; then\n"
+        "  IFS= read -r line\n"
+        '  echo "stdin_line=$line"\n'
+        "fi\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+
+    returncode, output = _run_shim_body_on_pty(
+        tmp_path,
+        'system_command "/bin/echo", args: ["tty"], sudo: true',
+        env={
+            "PYBREW_ALLOW_CASK_SUDO": "1",
+            "PYBREW_SUDO": str(fake),
+            "PYBREW_SUDO_TTY": "1",
+        },
+    )
+
+    assert returncode == 0, output
+    assert "stdin_tty=yes" in output
+    assert "stdin_line=tty-secret" in output
+    args = [line.split(":", 1)[1] for line in log.read_text().splitlines()]
+    assert args == ["-E", "--", "/bin/echo", "tty"]
+
+    # Without PYBREW_SUDO_TTY the default stays piped/non-interactive.
+    non_tty = _run_shim_body(
+        tmp_path,
+        'system_command "/bin/echo", args: ["tty"], sudo: true, '
+        "print_stdout: true",
+        env={
+            "PYBREW_ALLOW_CASK_SUDO": "1",
+            "PYBREW_SUDO": str(fake),
+        },
+    )
+
+    assert non_tty.returncode == 0, non_tty.stderr
+    assert "stdin_tty=no" in non_tty.stdout
+    args = [line.split(":", 1)[1] for line in log.read_text().splitlines()]
+    assert args[-5:] == ["-n", "-E", "--", "/bin/echo", "tty"]

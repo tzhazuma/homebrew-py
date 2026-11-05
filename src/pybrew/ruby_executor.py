@@ -609,32 +609,55 @@ class PybrewOptions < Array
 end
 
 class PybrewBuild
+  def initialize(options = nil)
+    if options.nil?
+      options = ENV["PYBREW_BUILD_OPTIONS"].to_s.split(/[,\s]+/)
+    end
+    @options = PybrewOptions.new(options.reject(&:empty?))
+  end
+
   def head?
-    false
+    ENV["PYBREW_BUILD_HEAD"].to_s == "1" ||
+      options.include?("--HEAD") || options.include?("HEAD")
   end
 
   def stable?
-    true
+    !head?
   end
 
   def bottle?
-    false
+    options.include?("--build-bottle") || options.include?("build-bottle")
   end
 
   def build_bottle?
-    false
+    bottle?
   end
 
   def universal?
-    false
+    options.include?("--universal") || options.include?("universal")
   end
 
-  def with?(*_args)
-    false
+  def with?(name)
+    key = name.to_s
+    return false if options.include?("--without-#{key}") ||
+                    options.include?("without-#{key}")
+    options.include?("--with-#{key}") || options.include?("with-#{key}")
   end
 
-  def without?(*_args)
-    true
+  def without?(name)
+    !with?(name)
+  end
+
+  def any_args_or_options?
+    !options.empty?
+  end
+
+  def used_options
+    options
+  end
+
+  def unused_options
+    []
   end
 
   def arch

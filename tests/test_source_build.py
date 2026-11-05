@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 import os
 import shlex
 import tarfile
@@ -483,6 +484,252 @@ def test_unknown_install_condition_is_explicit() -> None:
     )
     with pytest.raises(UnsupportedInstall, match="unsupported install condition"):
         InstallParser(formula).parse()
+
+
+def test_build_options_semantics_and_auto_dependency_options() -> None:
+    from pybrew.models import Dependency, Formula
+    from pybrew.source_builder import (
+        BuildOptions,
+        declared_formula_options,
+        dependency_option_flags,
+    )
+
+    formula = Formula(name="options-fixture", version="1.0")
+    formula.options = ["with-ssl", "without-readline", "enable-debug"]
+    formula.deprecated_options = {"enable-debug": "with-debug"}
+    formula.optional_dependencies = [Dependency("opt")]
+    formula.recommended_dependencies = [
+        Dependency("rec", frozenset({"recommended"}))
+    ]
+
+    declared = declared_formula_options(formula)
+    assert declared == (
+        "--with-ssl",
+        "--without-readline",
+        "--enable-debug",
+        "--with-opt",
+        "--without-rec",
+    )
+
+    default = BuildOptions.for_formula(formula)
+    assert default.head is False
+    assert default.stable is True
+    assert default.bottle is False
+    assert default.any_args_or_options is True
+    assert default.with_("ssl") is False
+    # A declared --without-readline option is on unless explicitly disabled.
+    assert default.with_("readline") is True
+    assert default.without_("readline") is False
+    # Optional dependencies are off; recommended dependencies are on.
+    assert default.with_(Dependency("opt")) is False
+    assert default.with_(Dependency("rec")) is True
+    assert default.with_("not-declared") is False
+    assert default.without_("not-declared") is True
+    assert [dep.name for dep in default.selected_dependencies(formula)] == ["rec"]
+
+    selected = BuildOptions.for_formula(
+        formula,
+        [
+            "--with-ssl",
+            "--with-opt",
+            "--without-rec",
+            "--without-readline",
+            "--build-bottle",
+            "--HEAD",
+        ],
+    )
+    assert selected.include("with-ssl") is True
+    assert selected.include("--without-readline") is True
+    assert selected.with_("ssl") is True
+    assert selected.with_("readline") is False
+    assert selected.with_("opt") is True
+    assert selected.with_("rec") is False
+    assert selected.head is True
+    assert selected.stable is False
+    assert selected.spec == "head"
+    assert selected.bottle is True
+    assert selected.used_options == [
+        "--with-ssl",
+        "--without-readline",
+        "--with-opt",
+        "--without-rec",
+    ]
+    assert selected.unused_options == ["--enable-debug"]
+    assert [
+        dep.name for dep in selected.selected_dependencies(formula)
+    ] == ["opt"]
+
+    deprecated = BuildOptions.for_formula(
+        formula, ["--enable-debug=1"]
+    )
+    assert deprecated.arguments == ["--with-debug=1"]
+    assert any("deprecated option" in item for item in deprecated.warnings)
+
+    assert dependency_option_flags(
+        Dependency("zeromq", frozenset({"with-pgm", "optional"}))
+    ) == ("--with-pgm",)
+
+
+def test_formula_option_conditions_and_python_build_options(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "opts-src"
+    project.mkdir()
+    for marker in (
+        "ssl",
+        "no-ssl",
+        "readline-off",
+        "readline-default",
+        "bottle",
+        "include-ssl",
+        "stable",
+        "any-args",
+    ):
+        (project / f"{marker}.txt").write_text(f"{marker}\n", encoding="utf-8")
+    install_block = "\n".join(
+        [
+            '    if build.with?("ssl")',
+            '      bin.install "ssl.txt"',
+            "    else",
+            '      bin.install "no-ssl.txt"',
+            "    end",
+            '    if build.with?("readline")',
+            '      bin.install "readline-default.txt"',
+            "    end",
+            '    if build.without?("readline")',
+            '      bin.install "readline-off.txt"',
+            "    end",
+            '    if build.bottle?',
+            '      bin.install "bottle.txt"',
+            "    end",
+            '    if build.include?("with-ssl")',
+            '      bin.install "include-ssl.txt"',
+            "    end",
+            '    if build.stable?',
+            '      bin.install "stable.txt"',
+            "    end",
+            '    if build.any_args_or_options?',
+            '      bin.install "any-args.txt"',
+            "    end",
+        ]
+    )
+    tap, _ = _make_tap(tmp_path, "opts-fixture", "1.0", project, install_block)
+    formula_path = tap / "Formula" / "opts-fixture.rb"
+    text = formula_path.read_text(encoding="utf-8")
+    text = text.replace(
+        "  def install",
+        '  option "with-ssl", "enable ssl"\n'
+        '  option "without-readline", "disable readline"\n'
+        "\n  def install",
+    )
+    formula_path.write_text(text, encoding="utf-8")
+
+    config = Config.default(
+        prefix=tmp_path / "prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    config.ensure()
+    loader = FormulaLoader(discover_taps([tap]))
+    formula = loader.load("opts-fixture")
+    installer = Installer(config, loader)
+    results = installer.install(
+        formula,
+        InstallOptions(
+            build_from_source=True,
+            build_options=("--with-ssl", "--without-readline"),
+            build_bottle=True,
+        ),
+    )
+    bin_dir = results[-1].keg / "bin"
+    assert (bin_dir / "ssl.txt").is_file()
+    assert not (bin_dir / "no-ssl.txt").exists()
+    assert (bin_dir / "readline-off.txt").is_file()
+    assert not (bin_dir / "readline-default.txt").exists()
+    assert (bin_dir / "bottle.txt").is_file()
+    assert (bin_dir / "include-ssl.txt").is_file()
+    assert (bin_dir / "stable.txt").is_file()
+    assert (bin_dir / "any-args.txt").is_file()
+    receipt = json.loads(
+        (results[-1].keg / "INSTALL_RECEIPT.json").read_text(encoding="utf-8")
+    )
+    assert receipt["build"]["used_options"] == [
+        "--with-ssl",
+        "--without-readline",
+    ]
+
+    # PYBREW_BUILD_OPTIONS drives the same conditions without CLI options.
+    env_config = Config.default(
+        prefix=tmp_path / "env-prefix", taps=[tap], cache=tmp_path / "cache"
+    )
+    env_config.ensure()
+    env_formula = loader.load("opts-fixture")
+    env_installer = Installer(
+        env_config,
+        loader,
+        environment={"PYBREW_BUILD_OPTIONS": "with-ssl,without-readline,build-bottle"},
+    )
+    env_results = env_installer.install(
+        env_formula, InstallOptions(build_from_source=True)
+    )
+    env_bin = env_results[-1].keg / "bin"
+    assert (env_bin / "ssl.txt").is_file()
+    assert (env_bin / "readline-off.txt").is_file()
+    assert (env_bin / "bottle.txt").is_file()
+
+
+def test_head_build_options_select_head_source(
+    tmp_path: Path,
+) -> None:
+    project = tmp_path / "head-opt-src"
+    project.mkdir()
+    (project / "head.txt").write_text("head\n", encoding="utf-8")
+    (project / "stable.txt").write_text("stable\n", encoding="utf-8")
+    install_block = "\n".join(
+        [
+            '    if build.head?',
+            '      bin.install "head.txt"',
+            "    end",
+            '    if build.stable?',
+            '      bin.install "stable.txt"',
+            "    end",
+        ]
+    )
+    tap, archive = _make_tap(
+        tmp_path, "head-opt-fixture", "1.0", project, install_block
+    )
+    formula_path = tap / "Formula" / "head-opt-fixture.rb"
+    text = formula_path.read_text(encoding="utf-8")
+    text = text.replace(
+        "  def install",
+        f'  head "{archive.as_uri()}"\n\n  def install',
+    )
+    formula_path.write_text(text, encoding="utf-8")
+
+    for index, (install_options, environment) in enumerate(
+        [
+            (InstallOptions(head=True), None),
+            (
+                InstallOptions(),
+                {"PYBREW_BUILD_OPTIONS": "HEAD"},
+            ),
+        ]
+    ):
+        config = Config.default(
+            prefix=tmp_path / f"head-prefix-{index}",
+            taps=[tap],
+            cache=tmp_path / "cache",
+        )
+        config.ensure()
+        loader = FormulaLoader(discover_taps([tap]))
+        formula = loader.load("head-opt-fixture")
+        installer = Installer(config, loader, environment=environment)
+        results = installer.install(formula, install_options)
+        bin_dir = results[-1].keg / "bin"
+        assert (bin_dir / "head.txt").is_file()
+        assert not (bin_dir / "stable.txt").exists()
+        receipt = json.loads(
+            (results[-1].keg / "INSTALL_RECEIPT.json").read_text(encoding="utf-8")
+        )
+        assert receipt["source"]["spec"] == "head"
 
 
 # ---------------------------------------------------------------------------
@@ -3255,3 +3502,292 @@ def test_bwrap_seccomp_bpf_fd_plan_and_fake_execution(tmp_path: Path) -> None:
         source_builder.plan_build_sandbox(
             ["true"], cwd=build_root, environment=exec_env, system="Darwin"
         )
+
+
+def test_x_wrapper_response_files_and_cycle_policy(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    prefix = tmp_path / "prefix"
+    linker_rsp = tmp_path / "linker.rsp"
+    linker_rsp.write_text(
+        "-rpath /usr/lib\n"
+        "-L /usr/lib\n"
+        "-L /opt/foreign/lib\n"
+        "-L/opt/foreign/lib64\n"
+        "-DFROM_LINKER=1\n"
+    )
+    tokens = source_builder.sanitize_flag_list(
+        ["-Xlinker", f"@{linker_rsp}"], prefix
+    )
+    text = " ".join(tokens)
+    assert "-L" in tokens and "/opt/foreign/lib" in tokens
+    assert "/usr/lib" not in text
+    assert "FROM_LINKER=1" in text
+
+    preprocessor_rsp = tmp_path / "preprocessor.rsp"
+    preprocessor_rsp.write_text(
+        "-I/usr/include\n-I/opt/foreign/include\n-DFROM_PREPROCESSOR=1\n"
+    )
+    tokens = source_builder.sanitize_flag_list(
+        ["-Xpreprocessor", f"@{preprocessor_rsp}"], prefix
+    )
+    text = " ".join(tokens)
+    assert "/usr/include" not in text
+    assert "/opt/foreign/include" in text
+    assert "FROM_PREPROCESSOR=1" in text
+    assert tokens.count("-Xpreprocessor") >= 2
+
+    assembler_rsp = tmp_path / "assembler.rsp"
+    assembler_rsp.write_text(
+        "-I /usr/local/include\n-I /opt/foreign/include\n--noexecstack\n"
+    )
+    tokens = source_builder.sanitize_flag_list(
+        ["-Xassembler", f"@{assembler_rsp}"], prefix
+    )
+    text = " ".join(tokens)
+    assert "/usr/local/include" not in text
+    assert "/opt/foreign/include" in text
+    assert "--noexecstack" in tokens
+
+    clang_rsp = tmp_path / "clang.rsp"
+    clang_rsp.write_text(
+        "-isysroot /SDK\n-I /usr/include\n-I /opt/foreign/include\n"
+    )
+    tokens = source_builder.sanitize_flag_list(
+        ["-Xclang", f"@{clang_rsp}"], prefix
+    )
+    text = " ".join(tokens)
+    assert "/SDK" in tokens
+    assert "/usr/include" not in text
+    assert "/opt/foreign/include" in text
+
+    joined = source_builder.sanitize_flag_list(
+        [
+            "-Xclang",
+            "-I/usr/include",
+            "-O2",
+            "-Xclang",
+            "-I/opt/foreign/include",
+            "-Xclang",
+            "-isysroot=/SDK",
+        ],
+        prefix,
+    )
+    joined_text = " ".join(joined)
+    assert "-O2" in joined
+    assert "/usr/include" not in joined_text
+    assert "/opt/foreign/include" in joined_text
+    assert any(token.endswith("/SDK") for token in joined)
+
+    # The same response file is expanded once; a repeat is dropped with a
+    # diagnostic rather than passed through unsanitized.
+    diagnostics: list[str] = []
+    repeated = source_builder.sanitize_flag_list(
+        [f"-Wl,@{linker_rsp}", f"-Wl,@{linker_rsp}"],
+        prefix,
+        diagnostics=diagnostics,
+    )
+    assert "FROM_LINKER=1" in " ".join(repeated)
+    assert any("already expanded" in item for item in diagnostics)
+
+    # Absolute nested references detect a cycle instead of recursing.
+    cycle_a = tmp_path / "cycle-a.rsp"
+    cycle_b = tmp_path / "cycle-b.rsp"
+    cycle_a.write_text(f"@{cycle_b} -L/usr/lib\n")
+    cycle_b.write_text(f"@{cycle_a} -L/opt/foreign/lib\n")
+    diagnostics = []
+    cycled = source_builder.sanitize_flag_list(
+        [f"@{cycle_a}"], prefix, diagnostics=diagnostics
+    )
+    assert cycled == ["-L/opt/foreign/lib"]
+    assert any("already expanded" in item for item in diagnostics)
+
+
+def test_linker_library_path_and_toolchain_families(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    prefix = tmp_path / "prefix"
+    tokens = source_builder.sanitize_flag_list(
+        [
+            "-Wl,--library-path=/usr/lib",
+            "-Wl,--library-path,/lib",
+            "-Wl,--library-path=/opt/foreign/lib",
+            "-fuse-ld=/usr/bin/ld",
+            "-fuse-ld=/opt/foreign/bin/ld",
+            "-Xlinker",
+            "-isysroot",
+            "-Xlinker",
+            "/SDK",
+            "-Xlinker",
+            "-syslibroot",
+            "-Xlinker",
+            "/SDK2",
+            "-Wl,-L,/usr/lib",
+            "-Wl,-L,/opt/foreign/lib",
+        ],
+        prefix,
+    )
+    text = " ".join(tokens)
+    assert "/usr/lib" not in text
+    assert "/lib" not in tokens
+    assert "/usr/bin/ld" not in text
+    assert "/opt/foreign/lib" in text
+    assert "/opt/foreign/bin/ld" in text
+    assert "/SDK" in tokens and "/SDK2" in tokens
+
+
+def test_superenv_shim_x_response_files_and_linker_families(
+    tmp_path: Path,
+) -> None:
+    import subprocess
+
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    fake_bin = tmp_path / "fake-bin"
+    cc = _fake_compiler(fake_bin, "clang", "cc-report.txt")
+    cxx = _fake_compiler(fake_bin, "clang++", "cxx-report.txt")
+    prepared = source_builder.build_environment(
+        config,
+        {
+            "PATH": str(fake_bin),
+            "PYBREW_SUPERENV": "1",
+            "PYBREW_CC": str(cc),
+            "PYBREW_CXX": str(cxx),
+        },
+    )
+    env = prepared.env
+    response = tmp_path / "linker.rsp"
+    response.write_text(
+        "-rpath /usr/lib\n-L /usr/lib\n-L /opt/foreign/lib\n-DFROM_RSP=1\n"
+    )
+    result = subprocess.run(
+        [
+            env["CC"],
+            "-c",
+            "hello.c",
+            "-Xlinker",
+            f"@{response}",
+            "-Wl,--library-path=/usr/lib",
+            "-Wl,--library-path,/opt/foreign/lib",
+            "-fuse-ld=/usr/bin/ld",
+            "-Xclang",
+            "-isysroot",
+            "/SDK",
+        ],
+        env=env,
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    report = _compiler_report(tmp_path / "cc-report.txt")
+    argv = report["argv"]
+    assert "/usr/lib" not in argv
+    assert "/usr/bin/ld" not in argv
+    assert "/opt/foreign/lib" in argv
+    assert "FROM_RSP=1" in argv
+    assert "/SDK" in argv
+
+
+def test_sdk_xcode_layout_matrix_with_fake_tools(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    bundle = tmp_path / "Xcode.app"
+    developer_dir = bundle / "Contents" / "Developer"
+    sdk_root = (
+        developer_dir
+        / "Platforms"
+        / "MacOSX.platform"
+        / "Developer"
+        / "SDKs"
+    )
+    for version in ("14.0", "15.2"):
+        (sdk_root / f"MacOSX{version}.sdk").mkdir(parents=True)
+    clt = tmp_path / "CommandLineTools"
+    (clt / "SDKs" / "MacOSX13.3.sdk").mkdir(parents=True)
+
+    fake_select = tmp_path / "xcode-select"
+    fake_select.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$PYBREW_FAKE_DEVELOPER_DIR"\n'
+    )
+    fake_select.chmod(0o755)
+    fake_xcodebuild = tmp_path / "xcodebuild"
+    fake_xcodebuild.write_text(
+        "#!/bin/sh\nprintf '%s\\n' 'Xcode 15.3'\nprintf '%s\\n' 'Build version 15E204a'\n"
+    )
+    fake_xcodebuild.chmod(0o755)
+    base_env = {
+        "PATH": "/usr/bin:/bin",
+        "PYBREW_XCODE_SELECT": str(fake_select),
+        "PYBREW_FAKE_DEVELOPER_DIR": str(developer_dir),
+        "PYBREW_XCODEBUILD": str(fake_xcodebuild),
+        "PYBREW_CLT_PATH": str(clt),
+    }
+
+    assert source_builder.detect_developer_dir(
+        base_env, system="Linux"
+    ) == developer_dir
+    assert source_builder.command_line_tools_path(
+        base_env, developer_dir=developer_dir
+    ) == clt
+    assert source_builder.available_macos_sdks(
+        base_env, system="Linux", developer_dir=developer_dir
+    ) == ["13.3", "14.0", "15.2"]
+    assert source_builder.xcode_sdk_family("15.3") == "14.0"
+    assert source_builder.xcode_sdk_family("bogus") is None
+
+    matrix = source_builder.sdk_version_matrix(
+        {**base_env, "PYBREW_SDK_VERSION": "14.0", "PYBREW_MIN_OS": "10.9"},
+        system="Linux",
+        machine="arm64",
+    )
+    assert matrix["developer_dir"] == str(developer_dir)
+    assert matrix["xcode_bundle"] == str(bundle)
+    assert matrix["command_line_tools"] == str(clt)
+    assert matrix["available_sdks"] == ["13.3", "14.0", "15.2"]
+    assert matrix["selected_sdk"] == "14.0"
+    assert matrix["sdk_path"] == str(sdk_root / "MacOSX14.0.sdk")
+    assert matrix["xcode_version"] == "15.3"
+    assert matrix["xcode_sdk_family"] == "14.0"
+    assert matrix["warnings"] == []
+
+    missing = source_builder.sdk_version_matrix(
+        {**base_env, "PYBREW_SDK_VERSION": "16.0"},
+        system="Linux",
+        machine="arm64",
+    )
+    assert missing["selected_sdk"] == "15.2"
+    assert any("not installed" in item for item in missing["warnings"])
+    assert any("older than the requested" in item for item in missing["warnings"])
+
+    invalid = source_builder.sdk_version_matrix(
+        {**base_env, "PYBREW_SDK_VERSION": "bogus"},
+        system="Linux",
+        machine="arm64",
+    )
+    assert invalid["selected_sdk"] == "15.2"
+    assert any("invalid SDK version" in item for item in invalid["warnings"])
+
+    assert source_builder.detect_sdkroot(
+        {
+            **base_env,
+            "PYBREW_DEVELOPER_DIR": str(developer_dir),
+            "PYBREW_SDK_VERSION": "15.2",
+        },
+        system="Linux",
+    ) == sdk_root / "MacOSX15.2.sdk"
+
+    config = _source_config(tmp_path)
+    prepared = source_builder.build_environment(
+        config,
+        {
+            "PATH": "/usr/bin:/bin",
+            "PYBREW_DEVELOPER_DIR": str(developer_dir),
+            "PYBREW_XCODEBUILD": str(fake_xcodebuild),
+            "PYBREW_CLT_PATH": str(clt),
+        },
+    )
+    assert prepared.env["DEVELOPER_DIR"] == str(developer_dir)
+    assert prepared.env["XCODE_VERSION"] == "15.3"

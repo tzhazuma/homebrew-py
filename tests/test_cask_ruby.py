@@ -2380,3 +2380,187 @@ def test_exact_script_capture_uses_ruby_ast_range(
     assert 'puts text if true' in cask.preflight
     assert "def helper(x)" in cask.preflight
     assert not cask.extra.get("ruby_warnings")
+
+
+# ---------------------------------------------------------------------------
+# non-MRI script-body capture fallback (Ripper.lex token scan)
+# ---------------------------------------------------------------------------
+
+_NO_MRI_ENV = "PYBREW_CASK_DISABLE_MRI_AST"
+_NO_RIPPER_ENV = "PYBREW_CASK_DISABLE_RIPPER"
+
+
+@requires_ruby
+def test_script_body_capture_without_mri_ast(
+    allow_ruby: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ripper.lex recovers bodies on interpreters without RubyVM AST."""
+
+    monkeypatch.setenv(_NO_MRI_ENV, "1")
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  preflight do\n'
+            '    text = <<~TXT\n'
+            '      do not stop at this end\n'
+            '    TXT\n'
+            '    words = %q{do}\n'
+            '    items = %i[end if do]\n'
+            '    stop = :end\n'
+            '    puts "x" if true\n'
+            '    value = 1 while false\n'
+            '    while true do\n'
+            '      break\n'
+            '    end\n'
+            '    def helper(x)\n'
+            '      x\n'
+            '    end\n'
+            '    [1].each { |v| puts v }\n'
+            '    begin\n'
+            '      puts helper(words)\n'
+            '    rescue StandardError\n'
+            '      puts "rescue"\n'
+            '    ensure\n'
+            '      puts "ensure"\n'
+            '    end\n'
+            '  end\n'
+            '  postflight { puts "bye" }\n'
+        )
+    )
+
+    body = cask.preflight
+    assert body is not None
+    for snippet in (
+        "text = <<~TXT",
+        "do not stop at this end",
+        "words = %q{do}",
+        "items = %i[end if do]",
+        "stop = :end",
+        'puts "x" if true',
+        "value = 1 while false",
+        "while true do",
+        "def helper(x)",
+        "rescue StandardError",
+        "ensure",
+    ):
+        assert snippet in body
+    assert cask.postflight == 'puts "bye"'
+    assert not cask.extra.get("ruby_warnings")
+
+
+@requires_ruby
+def test_lexer_capture_matches_mri_ast_range(
+    allow_ruby: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The non-MRI token scan slices the same bodies as the MRI AST range."""
+
+    source = _source(
+        '  version "1.0"\n'
+        '  preflight do\n'
+        '    text = <<~TXT\n'
+        '      do end\n'
+        '    TXT\n'
+        '    words = %q{do}\n'
+        '    def helper(x)\n'
+        '      x\n'
+        '    end\n'
+        '    puts text if true\n'
+        '  end\n'
+        '  uninstall_postflight { puts "bye" if true }\n'
+    )
+    ast_cask = evaluate_cask_source(source)
+    monkeypatch.setenv(_NO_MRI_ENV, "1")
+    lexer_cask = evaluate_cask_source(source)
+
+    assert lexer_cask.preflight == ast_cask.preflight
+    assert lexer_cask.uninstall_postflight == ast_cask.uninstall_postflight
+    assert not ast_cask.extra.get("ruby_warnings")
+    assert not lexer_cask.extra.get("ruby_warnings")
+
+
+@requires_ruby
+def test_livecheck_capture_without_mri_ast(
+    allow_ruby: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Livecheck/strategy block sources use the lexer fallback too."""
+
+    monkeypatch.setenv(_NO_MRI_ENV, "1")
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  livecheck do\n'
+            '    url "https://example.com/download", header: ["Accept: text/html"]\n'
+            '    strategy :page_match do |page|\n'
+            '      page.scan(/lc-(\\d+)/).flatten\n'
+            '    end\n'
+            '  end\n'
+        )
+    )
+
+    assert cask.livecheck_source is not None
+    assert "strategy :page_match" in cask.livecheck_source
+    strategy_source = cask.livecheck.get("strategy_source")
+    assert strategy_source is not None
+    assert "page.scan" in strategy_source
+    assert not cask.extra.get("ruby_warnings")
+
+    result = cask.check_livecheck(page="lc-2")
+    assert result["executed"] is True
+    assert result["result"] == ["2"]
+
+
+@requires_ruby
+def test_script_capture_degrades_to_python_lexer(
+    allow_ruby: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Without AST or Ripper the Python lexer still recovers common bodies."""
+
+    monkeypatch.setenv(_NO_MRI_ENV, "1")
+    monkeypatch.setenv(_NO_RIPPER_ENV, "1")
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  preflight do\n'
+            '    text = <<~TXT\n'
+            '      do end\n'
+            '    TXT\n'
+            '    def helper(x)\n'
+            '      x\n'
+            '    end\n'
+            '    puts text if true\n'
+            '  end\n'
+        )
+    )
+
+    body = cask.preflight
+    assert body is not None
+    assert "do end" in body
+    assert "def helper(x)" in body
+    assert 'puts text if true' in body
+    assert not cask.extra.get("ruby_warnings")
+
+
+@requires_ruby
+def test_script_capture_warns_when_exact_paths_are_unavailable(
+    allow_ruby: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A body the Python lexer cannot balance degrades to a warning."""
+
+    monkeypatch.setenv(_NO_MRI_ENV, "1")
+    monkeypatch.setenv(_NO_RIPPER_ENV, "1")
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  preflight do\n'
+            '    words = %q{do}\n'
+            '    puts words\n'
+            '  end\n'
+        )
+    )
+
+    assert cask.preflight is None
+    warnings = cask.extra.get("ruby_warnings") or []
+    assert any(
+        "preflight" in warning and "could not be recovered" in warning
+        for warning in warnings
+    )

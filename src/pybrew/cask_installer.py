@@ -782,21 +782,39 @@ class PybrewCaskScriptContext
     arguments = [command, *Array(args_option), *positional]
     environment, argv, spawn_options =
       PybrewCaskSystem.normalize(arguments, options, "system_command")
+    tty_sudo = use_sudo && ENV["PYBREW_SUDO_TTY"].to_s == "1"
     if use_sudo
       sudo_tool = ENV["PYBREW_SUDO"].to_s
       sudo_tool = "sudo" if sudo_tool.empty?
       user_flags = sudo_as_root ? ["-u", "root"] : []
-      # pybrew runs commands through pipes (non-interactive).  Use `-n`
-      # unless an askpass helper was explicitly provided: no TTY prompts.
       askpass = ENV["PYBREW_SUDO_ASKPASS"].to_s
       sudo_flags = []
-      if askpass.empty?
+      if tty_sudo
+        # Interactive mode: preserve the caller's TTY so sudo can prompt.
+        sudo_flags = []
+      elsif askpass.empty?
+        # pybrew normally runs commands through pipes (non-interactive).
         sudo_flags << "-n"
       else
         ENV["SUDO_ASKPASS"] = askpass
         sudo_flags << "-A"
       end
       argv = [sudo_tool, *user_flags, *sudo_flags, "-E", "--", *argv]
+    end
+    if tty_sudo
+      unless input.nil?
+        raise ArgumentError,
+          "input is not supported with PYBREW_SUDO_TTY=1 (interactive TTY)"
+      end
+      # ``Kernel.system`` inherits stdin/stdout/stderr, preserving the TTY.
+      Kernel.system(environment, *argv, **spawn_options)
+      tty_status = $?
+      exit_status = tty_status.respond_to?(:exitstatus) ? tty_status.exitstatus : 1
+      result = PybrewCaskScriptResult.new(
+        stdout: "", stderr: "", exit_status: exit_status || 1, command: argv
+      )
+      result.assert_success! if must_succeed
+      return result
     end
     if input.nil? && timeout.nil?
       stdout, stderr, status = Open3.capture3(environment, *argv, **spawn_options)

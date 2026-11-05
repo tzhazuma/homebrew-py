@@ -31,7 +31,12 @@ from .errors import (
 from .models import BottleFile, Formula
 from .paths import Config
 from .post_install import has_post_install, run_post_install
-from .source_builder import build_source
+from .source_builder import (
+    BuildOptions,
+    build_source,
+    dependency_option_flags,
+    parse_build_option_string,
+)
 from .taps import FormulaLoader
 
 PLACEHOLDERS = {
@@ -55,9 +60,23 @@ class InstallOptions:
     dry_run: bool = False
     link: bool = True
     head: bool = False
+    # Formula options (``--with-foo``/``--without-foo``) and ``--build-bottle``.
+    # ``PYBREW_BUILD_OPTIONS`` supplies the same flags from the environment.
+    build_options: tuple[str, ...] = ()
+    build_bottle: bool = False
     # Opt-in: scan keg binaries for dangling dylib/ELF references.  Kept off
     # by default so normal installs (and synthetic bottles) are unaffected.
     linkage_check: bool = False
+
+    def build_arguments(self) -> list[str]:
+        """Return the BuildOptions args implied by these install options."""
+
+        arguments = list(self.build_options)
+        if self.head:
+            arguments.append("HEAD")
+        if self.build_bottle:
+            arguments.append("build-bottle")
+        return arguments
 
 
 @dataclass
@@ -426,12 +445,17 @@ def build_keg_sbom(
     }
 
 
-def _source_metadata(formula: Formula, options: InstallOptions) -> dict[str, Any]:
+def _source_metadata(
+    formula: Formula,
+    options: InstallOptions,
+    build_options: Optional[BuildOptions] = None,
+) -> dict[str, Any]:
     """Source fields added to the existing receipt ``source`` object."""
 
-    spec = formula.head if options.head else formula.stable
+    head = options.head if build_options is None else build_options.head
+    spec = formula.head if head else formula.stable
     return {
-        "spec": "head" if options.head else "stable",
+        "spec": "head" if head else "stable",
         "url": spec.url,
         "sha256": spec.sha256,
         "tag": spec.tag,
@@ -449,6 +473,7 @@ def _build_metadata(
     from_bottle: bool,
     bottle_tag: Optional[str],
     environment: Optional[Mapping[str, str]],
+    build_options: Optional[BuildOptions] = None,
 ) -> dict[str, Any]:
     """Compact build information for the install receipt."""
 
@@ -463,16 +488,22 @@ def _build_metadata(
         "CXXFLAGS",
         "LDFLAGS",
     )
+    head = options.head if build_options is None else build_options.head
+    used_options = (
+        [] if build_options is None else list(build_options.used_options)
+    )
     return {
         "from_bottle": from_bottle,
         "build_from_source": not from_bottle,
-        "spec": "head" if options.head else "stable",
+        "spec": "head" if head else "stable",
         "bottle_tag": bottle_tag,
+        "used_options": used_options,
         "options": {
             "force": options.force,
             "ignore_dependencies": options.ignore_dependencies,
             "build_from_source": options.build_from_source,
-            "head": options.head,
+            "head": head,
+            "build_bottle": options.build_bottle,
             "overwrite": options.overwrite,
             "link": options.link,
         },
@@ -1834,23 +1865,53 @@ class Installer:
         self.environment = environment
 
     # -- dependency resolution ------------------------------------------
-    def resolve(self, formula: Formula, with_dependencies: bool = True) -> list[Formula]:
-        """Return formulas in deterministic topological install order.
+    def _build_options_for(
+        self,
+        formula: Formula,
+        options: InstallOptions,
+        *,
+        target: bool = True,
+        extra: Iterable[str] = (),
+    ) -> BuildOptions:
+        """Resolve BuildOptions for one formula.
 
-        Dependencies always precede their dependents.  Ready nodes are
-        processed in lexicographic order, so the result does not depend on the
-        order in which a formula declares its dependencies.  Cycles and missing
-        dependencies raise :class:`DependencyError` with the offending path.
+        ``PYBREW_BUILD_OPTIONS`` contributes flags for every formula, CLI
+        options only for the requested formula, and dependency tags such as
+        ``depends_on "zeromq" => "with-pgm"`` are passed via ``extra``.
         """
 
+        env = os.environ if self.environment is None else self.environment
+        environment_options = parse_build_option_string(
+            env.get("PYBREW_BUILD_OPTIONS")
+        )
+        arguments: list[str] = list(environment_options)
+        if target:
+            arguments.extend(options.build_arguments())
+        arguments.extend(str(item) for item in extra)
+        return BuildOptions.for_formula(formula, arguments)
+
+    def _resolve_plan(
+        self,
+        formula: Formula,
+        with_dependencies: bool,
+        build_options: BuildOptions,
+    ) -> list[tuple[Formula, BuildOptions]]:
+        """Resolve dependency order plus the BuildOptions for each formula."""
+
         if not with_dependencies:
-            return [formula]
-        formulas: dict[str, Formula] = {}
+            return [(formula, build_options)]
+        formulas: dict[str, Formula] = {formula.name: formula}
+        options_by_name: dict[str, BuildOptions] = {formula.name: build_options}
+        inherited_args: dict[str, list[str]] = {formula.name: []}
         dependencies: dict[str, set[str]] = {}
         visiting: set[str] = set()
         visited: set[str] = set()
 
-        def visit(current: Formula, chain: list[str]) -> None:
+        def visit(
+            current: Formula,
+            current_options: BuildOptions,
+            chain: list[str],
+        ) -> None:
             if current.name in visited:
                 return
             if current.name in visiting:
@@ -1860,20 +1921,31 @@ class Installer:
             visiting.add(current.name)
             formulas[current.name] = current
             children: set[str] = set()
-            for dep in sorted(current.runtime_dependencies(), key=lambda item: item.name):
+            for dep in sorted(
+                current_options.selected_dependencies(current),
+                key=lambda item: item.name,
+            ):
                 try:
                     child = self.loader.load(dep.name)
                 except Exception as error:
                     raise DependencyError(
                         f"{current.name} depends on {dep.name}, which is not available: {error}"
                     ) from error
+                requested = dependency_option_flags(dep)
+                if requested:
+                    inherited = inherited_args.setdefault(child.name, [])
+                    inherited.extend(requested)
+                child_options = BuildOptions.for_formula(
+                    child, inherited_args.get(child.name, ())
+                )
+                options_by_name[child.name] = child_options
                 children.add(child.name)
-                visit(child, chain + [current.name])
+                visit(child, child_options, chain + [current.name])
             dependencies[current.name] = children
             visiting.discard(current.name)
             visited.add(current.name)
 
-        visit(formula, [])
+        visit(formula, build_options, [])
 
         # Kahn's algorithm with a lexicographic ready queue gives one stable
         # topological order for any declaration order.
@@ -1886,33 +1958,59 @@ class Installer:
                     indegree[name] += 1
         ready = [name for name, degree in indegree.items() if degree == 0]
         heapq.heapify(ready)
-        ordered: list[Formula] = []
+        ordered: list[tuple[Formula, BuildOptions]] = []
         while ready:
             name = heapq.heappop(ready)
-            ordered.append(formulas[name])
+            ordered.append(
+                (
+                    formulas[name],
+                    options_by_name.get(name, BuildOptions.for_formula(formulas[name])),
+                )
+            )
             for dependent in sorted(dependents[name]):
                 indegree[dependent] -= 1
                 if indegree[dependent] == 0:
                     heapq.heappush(ready, dependent)
         if len(ordered) != len(formulas):  # pragma: no cover - visit() catches cycles
-            remaining = sorted(set(formulas) - {item.name for item in ordered})
+            remaining = sorted(set(formulas) - {item.name for item, _ in ordered})
             raise DependencyError(
                 "dependency cycle detected: " + " -> ".join(remaining + [remaining[0]])
             )
         return ordered
 
+    def resolve(self, formula: Formula, with_dependencies: bool = True) -> list[Formula]:
+        """Return formulas in deterministic topological install order.
+
+        Dependencies always precede their dependents.  Ready nodes are
+        processed in lexicographic order, so the result does not depend on the
+        order in which a formula declares its dependencies.  Cycles and missing
+        dependencies raise :class:`DependencyError` with the offending path.
+        """
+
+        build_options = BuildOptions.for_formula(formula)
+        return [
+            item
+            for item, _ in self._resolve_plan(
+                formula, with_dependencies, build_options
+            )
+        ]
+
     # -- install ---------------------------------------------------------
     def install(self, formula: Formula, options: InstallOptions) -> list[InstallResult]:
         with_dependencies = not options.ignore_dependencies
-        order = self.resolve(formula, with_dependencies=with_dependencies)
+        target_options = self._build_options_for(formula, options)
+        plan = self._resolve_plan(
+            formula, with_dependencies, target_options
+        )
         results: list[InstallResult] = []
-        for index, item in enumerate(order):
+        for item, item_options in plan:
             is_target = item.name == formula.name
             result = self.install_one(
                 item,
                 options,
                 as_dependency=not is_target,
                 apply_bottle_file=is_target,
+                build_options=item_options,
             )
             results.append(result)
         return results
@@ -1923,6 +2021,7 @@ class Installer:
         options: InstallOptions,
         as_dependency: bool = False,
         apply_bottle_file: bool = False,
+        build_options: Optional[BuildOptions] = None,
     ) -> InstallResult:
         package_version = formula.pkg_version
         keg = self.config.keg_path(formula.name, package_version)
@@ -1940,21 +2039,26 @@ class Installer:
                     skipped=True,
                 )
 
+        if build_options is None:
+            build_options = self._build_options_for(formula, options)
+
         if options.dry_run:
             return InstallResult(
                 formula.name,
                 package_version,
                 keg,
-                from_bottle=not options.build_from_source,
+                from_bottle=not (options.build_from_source or build_options.head),
                 linked=False,
                 skipped=True,
             )
 
         bottle_manifest: Optional[BottleManifest] = None
         bottle_tag: Optional[str] = None
-        if options.head or options.build_from_source:
+        if build_options.head or options.build_from_source:
             from_bottle = False
-            self._install_from_source(formula, keg, options)
+            self._install_from_source(
+                formula, keg, options, build_options
+            )
         else:
             bottle = formula.bottle_for_tag(self.config.bottle_tag)
             if bottle is None:
@@ -1974,7 +2078,11 @@ class Installer:
 
         sbom = build_keg_sbom(keg)
         build_metadata = _build_metadata(
-            options, from_bottle, bottle_tag, self.environment
+            options,
+            from_bottle,
+            bottle_tag,
+            self.environment,
+            build_options,
         )
         compiler = (
             build_metadata.get("environment", {}).get("PYBREW_CC")
@@ -1989,8 +2097,14 @@ class Installer:
                 bottle_manifest.summary() if bottle_manifest is not None else None
             ),
             sbom=sbom,
-            source_metadata=_source_metadata(formula, options),
+            source_metadata=_source_metadata(
+                formula, options, build_options
+            ),
             build_metadata=build_metadata,
+            runtime_dependencies=[
+                dep.name
+                for dep in build_options.selected_dependencies(formula)
+            ],
             installed_time=int(time.time()),
             source_modified_time=(
                 int(formula.path.stat().st_mtime)
@@ -2027,7 +2141,10 @@ class Installer:
             keg,
             from_bottle=from_bottle,
             linked=linked,
-            dependencies=[dep.name for dep in formula.runtime_dependencies()],
+            dependencies=[
+                dep.name
+                for dep in build_options.selected_dependencies(formula)
+            ],
         )
 
     # -- bottles ---------------------------------------------------------
@@ -2084,8 +2201,16 @@ class Installer:
         return manifest
 
     # -- source ----------------------------------------------------------
-    def _install_from_source(self, formula: Formula, keg: Path, options: InstallOptions) -> None:
-        stable = formula.head if options.head else formula.stable
+    def _install_from_source(
+        self,
+        formula: Formula,
+        keg: Path,
+        options: InstallOptions,
+        build_options: Optional[BuildOptions] = None,
+    ) -> None:
+        if build_options is None:
+            build_options = self._build_options_for(formula, options)
+        stable = formula.head if build_options.head else formula.stable
         if not stable.url:
             raise UnsupportedInstall(
                 f"{formula.name} cannot be installed from source: missing url"
@@ -2094,7 +2219,7 @@ class Installer:
             archive = self.downloader.fetch(
                 stable.url, stable.sha256, hint=f"{formula.name}-source"
             )
-        elif options.head:
+        elif build_options.head:
             archive = self.downloader.fetch_unverified(
                 stable.url, hint=f"{formula.name}-head-source"
             )
@@ -2116,6 +2241,7 @@ class Installer:
                     verbose=self.verbose or options.verbose,
                     downloader=self.downloader,
                     environment=self.environment,
+                    build_options=build_options,
                 )
                 if _linkage_check_requested(options):
                     _raise_for_linkage(staging, check_linkage(staging, self.config))

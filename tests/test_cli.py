@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import io
 import json
+import tarfile
 
 from pathlib import Path
 
@@ -315,3 +318,86 @@ def test_cli_services_cleanup_keeps_custom_installed_labels(
     assert all(path.exists() for path in kept)
     assert all(not path.exists() for path in stale)
     assert "com.example.ghost.plist" in proc.stdout
+
+
+def _write_option_cli_fixture(sample, tmp_path: Path) -> Path:
+    project = tmp_path / "optcli-src"
+    project.mkdir()
+    for marker in ("ssl", "no-ssl", "readline-off", "bottle"):
+        (project / f"{marker}.txt").write_text(f"{marker}\n", encoding="utf-8")
+    archive = tmp_path / "src" / "optcli-1.0.tar.gz"
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(archive, "w:gz") as tar:
+        for path in sorted(project.iterdir()):
+            data = path.read_bytes()
+            info = tarfile.TarInfo(f"optcli-1.0/{path.name}")
+            info.size = len(data)
+            info.mode = 0o644
+            tar.addfile(info, io.BytesIO(data))
+    formula = sample.tap / "Formula" / "optcli.rb"
+    formula.write_text(
+        "class Optcli < Formula\n"
+        '  desc "CLI option fixture"\n'
+        '  homepage "https://example.com/optcli"\n'
+        f'  url "{archive.as_uri()}"\n'
+        f'  sha256 "{hashlib.sha256(archive.read_bytes()).hexdigest()}"\n'
+        '  license "MIT"\n'
+        '  option "with-ssl", "enable ssl"\n'
+        '  option "without-readline", "disable readline"\n'
+        "\n  def install\n"
+        '    if build.with?("ssl")\n'
+        '      bin.install "ssl.txt"\n'
+        "    else\n"
+        '      bin.install "no-ssl.txt"\n'
+        "    end\n"
+        '    if build.without?("readline")\n'
+        '      bin.install "readline-off.txt"\n'
+        "    end\n"
+        '    if build.bottle?\n'
+        '      bin.install "bottle.txt"\n'
+        "    end\n"
+        "  end\n"
+        "end\n",
+        encoding="utf-8",
+    )
+    return formula
+
+
+def test_install_formula_options_from_cli_and_env(run_cli, sample, tmp_path: Path) -> None:
+    _write_option_cli_fixture(sample, tmp_path)
+    proc = run_cli(
+        "install",
+        "--build-from-source",
+        "--with-ssl",
+        "--without-readline",
+        "--build-bottle",
+        "optcli",
+    )
+    assert proc.returncode == 0, proc.stderr
+    bin_dir = sample.prefix / "Cellar" / "optcli" / "1.0" / "bin"
+    assert (bin_dir / "ssl.txt").is_file()
+    assert not (bin_dir / "no-ssl.txt").exists()
+    assert (bin_dir / "readline-off.txt").is_file()
+    assert (bin_dir / "bottle.txt").is_file()
+
+    env_prefix = tmp_path / "env-prefix"
+    env_proc = run_cli(
+        "install",
+        "--build-from-source",
+        "optcli",
+        prefix=env_prefix,
+        extra_env={
+            "PYBREW_BUILD_OPTIONS": "with-ssl,without-readline,build-bottle"
+        },
+    )
+    assert env_proc.returncode == 0, env_proc.stderr
+    env_bin = env_prefix / "Cellar" / "optcli" / "1.0" / "bin"
+    assert (env_bin / "ssl.txt").is_file()
+    assert (env_bin / "readline-off.txt").is_file()
+    assert (env_bin / "bottle.txt").is_file()
+
+
+def test_formula_options_are_install_only(run_cli) -> None:
+    proc = run_cli("info", "--with-ssl", "hello")
+    assert proc.returncode == 2
+    assert "unrecognized arguments" in proc.stderr
