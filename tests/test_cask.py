@@ -4266,7 +4266,7 @@ def test_livecheck_url_strategy_dispatch() -> None:
 
 def test_livecheck_unknown_strategy_is_explicit() -> None:
     cask = Cask(
-        token="unknown", version="1.0", livecheck={"strategy": ":extract_plist"}
+        token="unknown", version="1.0", livecheck={"strategy": ":header_match"}
     )
     result = cask.check_livecheck(page="x")
     assert result["executed"] is False
@@ -4284,3 +4284,187 @@ def test_livecheck_literal_strategy_symbol_dispatch() -> None:
     result = cask.check_livecheck(page="tool-2.0")
     assert result["executed"] is True
     assert result["result"] == ["2.0"]
+
+
+# ---------------------------------------------------------------------------
+# Remaining bounded livecheck strategies + using/verified options
+# ---------------------------------------------------------------------------
+
+
+def test_livecheck_electron_builder_strategy() -> None:
+    page = (
+        "version: 1.2.3\n"
+        "files:\n"
+        "  - url: Tool-1.2.3.zip\n"
+        "path: Tool-1.2.3.zip\n"
+    )
+    cask = Cask(
+        token="electron",
+        version="1.2.3",
+        livecheck={
+            "strategy": ":electron_builder",
+            "url": "https://example.com/appcast.yml",
+        },
+    )
+    result = cask.check_livecheck(page=page)
+    assert result["executed"] is True
+    assert result["result"] == ["1.2.3"]
+    assert cask.livecheck_status(page=page)["status"] == "up_to_date"
+
+    regex_cask = Cask(
+        token="electron-regex",
+        version="1.0",
+        livecheck={
+            "strategy": ":electron_builder",
+            "regex": r"(\d+\.\d+)" ,
+            "url": "https://example.com/appcast.yml",
+        },
+    )
+    regex_result = regex_cask.check_livecheck(page=page)
+    assert regex_result["executed"] is False
+    assert "strategy block" in (regex_result["error"] or "")
+
+
+def test_livecheck_extract_plist_strategy() -> None:
+    page = (
+        '<plist><dict><key>CFBundleShortVersionString</key>'
+        "<string>2.0</string><key>CFBundleVersion</key>"
+        "<string>2.0.1</string></dict></plist>"
+    )
+    cask = Cask(
+        token="plist",
+        version="2.0",
+        livecheck={
+            "strategy": ":extract_plist",
+            "url": "https://example.com/Tool.zip",
+        },
+    )
+    result = cask.check_livecheck(page=page)
+    assert result["executed"] is True
+    assert result["result"] == ["2.0", "2.0.1"]
+    assert cask.livecheck_status(page=page)["status"] == "up_to_date"
+
+
+def test_livecheck_pypi_strategy() -> None:
+    cask = Cask(
+        token="pypi",
+        version="1.2.3",
+        livecheck={
+            "strategy": ":pypi",
+            "url": "https://files.pythonhosted.org/packages/aa/bb/"
+            "example-1.2.3.tar.gz",
+        },
+    )
+    seen: list[str] = []
+
+    def fetcher(url: str) -> str:
+        seen.append(url)
+        return '{"info": {"version": "1.2.3"}}'
+
+    result = cask.check_livecheck(fetcher=fetcher)
+    assert result["executed"] is True
+    assert result["result"] == ["1.2.3"]
+    assert seen == ["https://pypi.org/pypi/example/json"]
+
+
+def test_livecheck_hackage_strategy() -> None:
+    cask = Cask(
+        token="hackage",
+        version="1.2.3",
+        livecheck={
+            "strategy": ":hackage",
+            "url": "https://hackage.haskell.org/package/example-1.2.3/"
+            "example-1.2.3.tar.gz",
+        },
+    )
+    seen: list[str] = []
+
+    def fetcher(url: str) -> str:
+        seen.append(url)
+        return "<h3>example-1.2.3/</h3>"
+
+    result = cask.check_livecheck(fetcher=fetcher)
+    assert result["executed"] is True
+    assert result["result"] == ["1.2.3"]
+    assert seen == ["https://hackage.haskell.org/package/example/src/"]
+
+
+def test_livecheck_json_xml_yaml_strategies() -> None:
+    json_cask = Cask(
+        token="json",
+        version="2.0",
+        livecheck={"strategy": ":json", "url": "https://example.com/x"},
+    )
+    assert json_cask.check_livecheck(
+        page='{"version": "2.0"}'
+    )["result"] == ["2.0"]
+
+    xml_cask = Cask(
+        token="xml",
+        version="3.1",
+        livecheck={"strategy": ":xml", "url": "https://example.com/x"},
+    )
+    assert xml_cask.check_livecheck(
+        page='<item version="3.1" />'
+    )["result"] == ["3.1"]
+
+    yaml_cask = Cask(
+        token="yaml",
+        version="4.2",
+        livecheck={"strategy": ":yaml", "url": "https://example.com/x"},
+    )
+    assert yaml_cask.check_livecheck(
+        page="version: 4.2\n"
+    )["result"] == ["4.2"]
+
+
+def test_livecheck_verified_option_is_enforced() -> None:
+    matching = Cask(
+        token="verified",
+        version="2.0",
+        livecheck={
+            "strategy": ":url",
+            "url": "https://example.com/Tool-2.0.zip",
+            "url_options": {"verified": r"example\.com/Tool"},
+        },
+    )
+    assert matching.check_livecheck()["executed"] is True
+
+    mismatch = Cask(
+        token="verified-mismatch",
+        version="2.0",
+        livecheck={
+            "strategy": ":url",
+            "url": "https://example.com/Tool-2.0.zip",
+            "url_options": {"verified": r"other\.example"},
+        },
+    )
+    result = mismatch.check_livecheck()
+    assert result["executed"] is False
+    assert "does not match verified" in (result["error"] or "")
+
+
+def test_livecheck_using_option_is_validated() -> None:
+    accepted = Cask(
+        token="using-ok",
+        version="2.0",
+        livecheck={
+            "strategy": ":url",
+            "url": "https://example.com/Tool-2.0.zip",
+            "url_options": {"using": ":homebrew_curl"},
+        },
+    )
+    assert accepted.check_livecheck()["executed"] is True
+
+    unsupported = Cask(
+        token="using-bad",
+        version="2.0",
+        livecheck={
+            "strategy": ":url",
+            "url": "https://example.com/Tool-2.0.zip",
+            "url_options": {"using": ":svn"},
+        },
+    )
+    result = unsupported.check_livecheck()
+    assert result["executed"] is False
+    assert "using ':svn' is not supported" in (result["error"] or "")

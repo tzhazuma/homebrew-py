@@ -786,7 +786,17 @@ class PybrewCaskScriptContext
       sudo_tool = ENV["PYBREW_SUDO"].to_s
       sudo_tool = "sudo" if sudo_tool.empty?
       user_flags = sudo_as_root ? ["-u", "root"] : []
-      argv = [sudo_tool, *user_flags, "-E", "--", *argv]
+      # pybrew runs commands through pipes (non-interactive).  Use `-n`
+      # unless an askpass helper was explicitly provided: no TTY prompts.
+      askpass = ENV["PYBREW_SUDO_ASKPASS"].to_s
+      sudo_flags = []
+      if askpass.empty?
+        sudo_flags << "-n"
+      else
+        ENV["SUDO_ASKPASS"] = askpass
+        sudo_flags << "-A"
+      end
+      argv = [sudo_tool, *user_flags, *sudo_flags, "-E", "--", *argv]
     end
     if input.nil? && timeout.nil?
       stdout, stderr, status = Open3.capture3(environment, *argv, **spawn_options)

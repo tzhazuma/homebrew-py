@@ -3543,3 +3543,218 @@ end
     formula, config = _installed_formula(tmp_path, source)
     result = run_formula_test(formula, config, ruby=_REAL_RUBY)
     assert result.success is True
+
+
+@requires_ruby
+def test_dependency_subprocess_fallback_isolates_env_and_constants(
+    tmp_path: Path,
+) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(
+        tap,
+        "dep-lib",
+        '''  test do
+    ENV["PYBREW_SUBPROCESS_ENV_LEAK"] = "leaked"
+    Object.const_set(:PYBREW_SUBPROCESS_CONST_LEAK, "leaked")
+    assert_equal "leaked", ENV["PYBREW_SUBPROCESS_ENV_LEAK"]
+    assert_equal "leaked", PYBREW_SUBPROCESS_CONST_LEAK
+  end''',
+    )
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  assert_equal :subprocess, FormulaTestContext.dependency_isolation_mode
+  Formula["dep-lib"].test
+  assert_nil ENV["PYBREW_SUBPROCESS_ENV_LEAK"]
+  refute Object.const_defined?(:PYBREW_SUBPROCESS_CONST_LEAK)
+end
+""",
+        taps=[tap],
+    )
+    formula.dependencies = [Dependency(name="dep-lib")]
+    _install_keg(config, "dep-lib", output="dep-ok")
+    result = run_formula_test(
+        formula,
+        config,
+        ruby=_REAL_RUBY,
+        env={"PYBREW_TEST_ISOLATE_DEPENDENCIES": "subprocess"},
+    )
+    assert result.success is True
+
+
+@requires_ruby
+def test_dependency_subprocess_captures_output_and_skip(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(
+        tap,
+        "dep-lib",
+        '  test do\n    $stdout.write("child-out\\n")\n  end',
+    )
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  assert_output("child-out\\n") { Formula["dep-lib"].test }
+end
+""",
+        taps=[tap],
+    )
+    formula.dependencies = [Dependency(name="dep-lib")]
+    _install_keg(config, "dep-lib", output="dep-ok")
+    result = run_formula_test(
+        formula,
+        config,
+        ruby=_REAL_RUBY,
+        env={"PYBREW_TEST_ISOLATE_DEPENDENCIES": "subprocess"},
+    )
+    assert result.success is True
+
+    skip_tap = tmp_path / "skip-tap"
+    _write_tap_formula(
+        skip_tap,
+        "dep-skip",
+        '  test do\n    skip "subprocess dep skip"\n  end',
+    )
+    formula, config = _installed_formula(
+        tmp_path / "skip-root",
+        'do\n  Formula["dep-skip"].test\nend',
+        taps=[skip_tap],
+    )
+    formula.dependencies = [Dependency(name="dep-skip")]
+    _install_keg(config, "dep-skip", output="dep-ok")
+    result = run_formula_test(
+        formula,
+        config,
+        ruby=_REAL_RUBY,
+        env={"PYBREW_TEST_ISOLATE_DEPENDENCIES": "subprocess"},
+    )
+    assert result.success is True
+    assert result.stdout.count("subprocess dep skip") == 1
+
+
+@requires_ruby
+def test_dependency_subprocess_propagates_failure(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(tap, "dep-lib", "  test do\n    assert false\n  end")
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  Formula["dep-lib"].test\nend', taps=[tap]
+    )
+    formula.dependencies = [Dependency(name="dep-lib")]
+    _install_keg(config, "dep-lib", output="dep-ok")
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(
+            formula,
+            config,
+            ruby=_REAL_RUBY,
+            env={"PYBREW_TEST_ISOLATE_DEPENDENCIES": "subprocess"},
+        )
+    assert "Formula test failed" in excinfo.value.stderr
+
+
+@requires_ruby
+def test_dependency_subprocess_timeout_kills_child(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(tap, "dep-lib", "  test do\n    sleep 5\n  end")
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  Formula["dep-lib"].test\nend', taps=[tap]
+    )
+    formula.dependencies = [Dependency(name="dep-lib")]
+    _install_keg(config, "dep-lib", output="dep-ok")
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(
+            formula,
+            config,
+            ruby=_REAL_RUBY,
+            env={
+                "PYBREW_TEST_ISOLATE_DEPENDENCIES": "subprocess",
+                "PYBREW_DEPENDENCY_TIMEOUT": "0.3",
+            },
+        )
+    assert "timed out" in excinfo.value.stderr
+
+
+@requires_ruby
+def test_host_detection_without_env_overrides(tmp_path: Path) -> None:
+    source = """do
+  architecture = Hardware::CPU.arch
+  assert [:arm64, :x86_64].include?(architecture)
+  assert [:arm, :intel].include?(Hardware::CPU.type)
+  assert_equal Hardware::CPU.type, Hardware::CPU.family
+  refute_empty Hardware::CPU.model.to_s
+  assert [32, 64].include?(Hardware::CPU.bits)
+  assert_equal(Hardware::CPU.bits == 64, Hardware::CPU.is_64_bit?)
+  assert Hardware::CPU.cores >= 1
+  assert Hardware::CPU.physical_cores >= 1
+  assert Hardware::CPU.physical_cores <= Hardware::CPU.cores
+  assert_kind_of Array, Hardware::CPU.flags
+  refute_empty OS.kernel_version.to_s
+  assert(OS.mac? || OS.linux?)
+  refute(OS.mac? && OS.linux?)
+  assert_nil MacOS::Version.from_symbol(:not_a_release)
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_host_detection_uses_local_xcode_and_clang_commands(tmp_path: Path) -> None:
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    clang = fake_bin / "clang"
+    clang.write_text(
+        '#!/bin/sh\n'
+        'echo "Apple clang version 17.0.0 (clang-1700.0.1)"\n'
+        'echo "Build version 1700.0.1"\n'
+    )
+    clang.chmod(0o755)
+    xcodebuild = fake_bin / "xcodebuild"
+    xcodebuild.write_text('#!/bin/sh\necho "Xcode 99.1"\necho "Build version 9900"\n')
+    xcodebuild.chmod(0o755)
+    fake_xcode = tmp_path / "Xcode.app"
+    fake_xcode.mkdir()
+    path_value = str(fake_bin) + os.pathsep + os.environ.get("PATH", "")
+
+    xcode_formula, xcode_config = _installed_formula(
+        tmp_path / "xcode-root",
+        """do
+  assert MacOS::Xcode.installed?
+  assert_equal "99.1", MacOS::Xcode.version
+end
+""",
+    )
+    xcode_result = run_formula_test(
+        xcode_formula,
+        xcode_config,
+        ruby=_REAL_RUBY,
+        env={
+            "PATH": path_value,
+            "PYBREW_XCODE_PATH": str(fake_xcode),
+            "PYBREW_XCODE_INSTALLED": "1",
+        },
+    )
+    assert xcode_result.success is True
+
+    clt_formula, clt_config = _installed_formula(
+        tmp_path / "clt-root",
+        """do
+  assert MacOS::CLT.installed?
+  assert_equal "17.0.0", MacOS::CLT.version
+  assert_equal "17.0.0", DevelopmentTools.clang_version
+  assert_equal "1700.0.1", DevelopmentTools.clang_build_version
+  assert DevelopmentTools.installed?
+end
+""",
+    )
+    clt_result = run_formula_test(
+        clt_formula,
+        clt_config,
+        ruby=_REAL_RUBY,
+        env={
+            "PATH": path_value,
+            "PYBREW_XCODE_INSTALLED": "0",
+            "PYBREW_CLT_INSTALLED": "1",
+            "PYBREW_CLANG": str(clang),
+        },
+    )
+    assert clt_result.success is True

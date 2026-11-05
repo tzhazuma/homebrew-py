@@ -4979,10 +4979,11 @@ def test_formula_installer_loaded_writes_install_receipt(
     keg = _build(tmp_path, formula)
     assert (keg / "receipt.txt").read_text().splitlines() == [
         "true",
-        "arch,built_as_bottle,changed_files,compiler,homebrew_version,"
-        "installed_as_dependency,installed_on_request,poured_from_bottle,"
+        "HEAD,arch,bottle,built_as_bottle,built_on,changed_files,compiler,"
+        "cxxstdlib,homebrew_version,installed_as_dependency,"
+        "installed_on_request,loaded_from_api,poured_from_bottle,"
         "runtime_dependencies,sbom,source,source_modified_time,stdlib,tap,"
-        "time,version",
+        "time,unused_options,used_options,version,version_scheme",
         "2.0",
         "true",
         "dep",
@@ -10180,5 +10181,269 @@ def test_resource_stage_edge_forms_symlinks_staging_path_and_overwrite(
         "true",
         "true|edge-block",
         "ArgumentError",
+        "true",
+    ]
+
+
+# ---------------------------------------------------------------------------
+# Closure wave: per-URL channel cache/TTL, factory order/migration edges and
+# full Tab/SBOM/bottle-pour receipt parity.
+# ---------------------------------------------------------------------------
+
+
+def test_formulary_per_url_channel_cache_ttl_and_sidecar_namespace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    counter_dir = tmp_path / "counters"
+    counter_dir.mkdir()
+    fake_curl = tmp_path / "per-url-curl"
+    fake_curl.write_text(
+        "#!/bin/sh\n"
+        'headers=""\n'
+        'prev=""\n'
+        'url=""\n'
+        'for arg in "$@"; do\n'
+        '  if [ "$prev" = "-D" ]; then headers="$arg"; fi\n'
+        '  case "$arg" in http*) url="$arg" ;; esac\n'
+        '  prev="$arg"\n'
+        'done\n'
+        'case "$url" in\n'
+        "  *stable*) name=stable ;;\n"
+        "  *) name=beta ;;\n"
+        "esac\n"
+        'count_file="' + str(counter_dir) + '/$name.txt"\n'
+        'count=$(cat "$count_file" 2>/dev/null || echo 0)\n'
+        'printf \'%s\' "$((count + 1))" > "$count_file"\n'
+        'case "$*" in\n'
+        '  *If-None-Match*)\n'
+        '    printf \'HTTP/1.1 304 Not Modified\\r\\nETag: "%s"\\r\\n\\r\\n\' "$name" > "$headers"\n'
+        '    exit 0\n'
+        '    ;;\n'
+        'esac\n'
+        'printf \'HTTP/1.1 200 OK\\r\\nETag: "%s"\\r\\n\\r\\n\' "$name" > "$headers"\n'
+        'printf \'{"formulae":[{"name":"url-cache-one","desc":"%s desc","version":"1.0"}]}\' "$name"\n'
+    )
+    fake_curl.chmod(0o755)
+    sidecar = tmp_path / "per-url-sidecar.json"
+    monkeypatch.setenv("PYBREW_FORMULA_API_URL_STABLE", "https://api.example.test/stable.json")
+    monkeypatch.setenv("PYBREW_FORMULA_API_URL_BETA", "https://api.example.test/beta.json")
+    monkeypatch.setenv("PYBREW_FORMULA_API_CHANNELS", "stable,beta")
+    monkeypatch.setenv("PYBREW_FORMULA_API_CURL", str(fake_curl))
+    monkeypatch.setenv("PYBREW_FORMULA_API_SIDECAR", str(sidecar))
+    monkeypatch.setenv("PYBREW_FORMULA_API_TTL", "3600")
+    monkeypatch.setenv("FAKE_CACHE_DIR", str(counter_dir))
+    body = (
+        '  count = lambda do |name|\n'
+        '    Pathname.new(ENV["FAKE_CACHE_DIR"]).join("#{name}.txt").read.to_i\n'
+        '  end\n'
+        '  Formulary.ensure_api_json_loaded\n'
+        '  first = [count.call("stable"), count.call("beta")]\n'
+        '  Formulary.ensure_api_json_loaded\n'
+        '  cached = [count.call("stable"), count.call("beta")]\n'
+        '  ENV["PYBREW_FORMULA_API_TTL"] = "0"\n'
+        '  Formulary.ensure_api_json_loaded\n'
+        '  refreshed = [count.call("stable"), count.call("beta")]\n'
+        '  stable_url = "https://api.example.test/stable.json"\n'
+        '  beta_url = "https://api.example.test/beta.json"\n'
+        '  sidecar = JSON.parse(Pathname.new(ENV["PYBREW_FORMULA_API_SIDECAR"]).read)\n'
+        '  read_stable = Formulary.remote_sidecar_read(stable_url)\n'
+        '  read_beta = Formulary.remote_sidecar_read(beta_url)\n'
+        '  merged = Formulary.formula_class_get_from_api("url-cache-one")\n'
+        '  Formulary.clear_cache\n'
+        '  cleared = !Pathname.new(ENV["PYBREW_FORMULA_API_SIDECAR"]).file?\n'
+        '  (prefix/"per-url-cache.txt").write [\n'
+        '    first.join(","), cached.join(","), refreshed.join(","),\n'
+        '    sidecar["urls"].keys.sort.join(","),\n'
+        '    sidecar["urls"][stable_url]["etag"].to_s,\n'
+        '    sidecar["urls"][beta_url]["etag"].to_s,\n'
+        '    (sidecar["urls"][stable_url]["fetched_at"].to_f > 0).to_s,\n'
+        '    sidecar["etag"].to_s,\n'
+        '    read_stable[:entries].length.to_s, read_beta[:entries].length.to_s,\n'
+        '    merged.loaded_namespace.nil?.to_s, merged.loaded_version,\n'
+        '    cleared.to_s\n'
+        '  ].join("\\n")\n'
+    )
+    keg = _run_raw_body(tmp_path, body, name="ruby-per-url-cache")
+    assert (keg / "per-url-cache.txt").read_text().splitlines() == [
+        "1,1",
+        "1,1",
+        "2,2",
+        "https://api.example.test/beta.json,https://api.example.test/stable.json",
+        '"stable"',
+        '"beta"',
+        "true",
+        '"beta"',
+        "1",
+        "1",
+        "false",
+        "1.0",
+        "true",
+    ]
+
+
+def test_factory_order_trace_tap_migration_and_qualified_api_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    tap_root = tmp_path / "taps" / "user1" / "alpha"
+    (tap_root / "Formula").mkdir(parents=True)
+    (tap_root / "Formula" / "oldname.rb").write_text(
+        'class Oldname < Formula\n  desc "old formula"\n  version "1.0"\n  def install; end\nend\n'
+    )
+    (tap_root / "Formula" / "newtarget.rb").write_text(
+        'class Newtarget < Formula\n  desc "new target"\n  version "2.0"\n  def install; end\nend\n'
+    )
+    api_file = tmp_path / "factory-api.json"
+    api_file.write_text(
+        json.dumps(
+            {
+                "formulae": [
+                    {
+                        "name": "api-only",
+                        "desc": "api only",
+                        "homepage": "https://example.test/api",
+                        "version": "3.0",
+                    }
+                ]
+            }
+        )
+    )
+    monkeypatch.setenv("PYBREW_TAPS", str(tap_root))
+    monkeypatch.setenv("PYBREW_FORMULA_API_JSON", str(api_file))
+    monkeypatch.setenv(
+        "PYBREW_TAP_MIGRATIONS",
+        json.dumps(
+            {
+                "user1/alpha/oldname": "user1/alpha/newtarget",
+                "oldname": "user1/alpha/newtarget",
+                "short-old": "user1/alpha/newtarget",
+                "loop-a": "loop-b",
+                "loop-b": "loop-a",
+            }
+        ),
+    )
+    body = (
+        '  default_order = Formulary.factory_loader_order("user1/alpha/newtarget")\n'
+        '    .map { |entry| entry["loader"] }.join(",")\n'
+        '  ENV["PYBREW_FORMULA_API_FIRST"] = "1"\n'
+        '  api_first = Formulary.factory_loader_order("api-only")\n'
+        '    .map { |entry| entry["loader"] }.join(",")\n'
+        '  ENV.delete("PYBREW_FORMULA_API_FIRST")\n'
+        '  migrated = Formulary.factory("user1/alpha/oldname")\n'
+        '  migration_trace = Formulary.factory_trace["migration"].to_s\n'
+        '  tap_trace = Formulary.factory_trace["choice"].to_s\n'
+        '  short_migrated = Formulary.factory("short-old")\n'
+        '  name_type = Formulary.tap_formula_name_type("oldname")\n'
+        '  loop_result = Formulary.factory("loop-a")\n'
+        '  loop_ok = !loop_result.nil?\n'
+        '  api_fallback = Formulary.factory("user1/alpha/api-only")\n'
+        '  Formulary.enable_factory_cache!\n'
+        '  first_cached = Formulary.factory("user1/alpha/newtarget")\n'
+        '  second_cached = Formulary.factory("user1/alpha/newtarget")\n'
+        '  cache_hit = Formulary.factory_trace["cache_hit"].to_s\n'
+        '  (prefix/"factory-edges.txt").write [\n'
+        '    default_order, api_first, migrated.loaded_desc, migration_trace,\n'
+        '    tap_trace, short_migrated.loaded_desc,\n'
+        '    name_type[0].to_s, name_type[2].to_s,\n'
+        '    loop_ok.to_s, api_fallback.loaded_desc,\n'
+        '    first_cached.equal?(second_cached).to_s, cache_hit\n'
+        '  ].join("\\n")\n'
+    )
+    keg = _run_raw_body(tmp_path, body, name="ruby-factory-edges")
+    assert (keg / "factory-edges.txt").read_text().splitlines() == [
+        "bottle,uri,tap,path,api,name",
+        "bottle,uri,api,tap,path,name",
+        "new target",
+        "user1/alpha/newtarget",
+        "tap",
+        "new target",
+        "newtarget",
+        "migration",
+        "true",
+        "api only",
+        "true",
+        "true",
+    ]
+
+
+def test_receipt_full_tab_sbom_and_bottle_pour_parity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    formula = _formula(
+        "ruby-receipt-full",
+        "1.0",
+        (
+            '  path = prefix/"receipt-full.rb"\n'
+            '  path.write <<~RUBY\n'
+            '    class ReceiptFull < Formula\n'
+            '      version "4.0"\n'
+            '      head "https://example.test/head.tar.gz"\n'
+            '      bottle do\n'
+            '        sha256 cellar: :any, arm64_sonoma: "bottle-sha"\n'
+            '      end\n'
+            '      depends_on "dep"\n'
+            '      install do\n'
+            '        bin.mkpath\n'
+            '        (bin/"tool").write("#!/bin/sh\\necho full\\n")\n'
+            '      end\n'
+            '    end\n'
+            '  RUBY\n'
+            '  klass = Formulary.load_formula_from_path("receipt-full", path)\n'
+            '  installer = FormulaInstaller.new(\n'
+            '    klass.new, installed_on_request: true, used_options: ["--with-x"],\n'
+            '    build_bottle: true\n'
+            '  )\n'
+            '  pour_before = installer.pour_bottle?.to_s\n'
+            '  pour_nil = installer.pour.nil?.to_s\n'
+            '  installer.install\n'
+            '  receipt_path = HOMEBREW_PREFIX/"Cellar"/"receipt-full"/"4.0"/"INSTALL_RECEIPT.json"\n'
+            '  receipt = JSON.parse(receipt_path.read)\n'
+            '  tab = Tab.for_keg(receipt_path.dirname)\n'
+            '  files = receipt.dig("sbom", "files") || {}\n'
+            '  (prefix/"receipt-full.txt").write [\n'
+            '    receipt["built_as_bottle"].to_s,\n'
+            '    receipt["poured_from_bottle"].to_s,\n'
+            '    receipt["HEAD"].to_s,\n'
+            '    receipt["version_scheme"].to_s,\n'
+            '    receipt["loaded_from_api"].to_s,\n'
+            '    receipt["used_options"].join(","),\n'
+            '    receipt["unused_options"].join(","),\n'
+            '    receipt["cxxstdlib"]["compiler"],\n'
+            '    receipt["cxxstdlib"]["stdlib"],\n'
+            '    receipt["built_on"]["os"].to_s.empty?.to_s,\n'
+            '    receipt["built_on"]["cpu_family"].to_s.empty?.to_s,\n'
+            '    receipt["bottle"]["sha256"],\n'
+            '    receipt["bottle"]["cellar"],\n'
+            '    receipt["bottle"]["tag"],\n'
+            '    files.key?("bin/tool").to_s,\n'
+            '    tab.bottle["sha256"].to_s,\n'
+            '    tab.cxxstdlib["compiler"].to_s,\n'
+            '    tab.head?.to_s,\n'
+            '    tab.used_options.join(","),\n'
+            '    tab.sbom_files.key?("bin/tool").to_s,\n'
+            '    tab.built_on["os"].to_s.empty?.to_s,\n'
+            '    installer.install_bottle_for?(Object.new, false).to_s,\n'
+            '    pour_before, pour_nil\n'
+            '  ].join("\\n")\n'
+        ),
+    )
+    keg = _build(tmp_path, formula)
+    lines = (keg / "receipt-full.txt").read_text().splitlines()
+    assert lines[0:7] == ["true", "false", "true", "0", "false", "--with-x", ""]
+    assert lines[7] == "clang"
+    assert lines[8] == ("libc++" if is_macos() else "libstdc++")
+    assert lines[9:14] == ["false", "false", "bottle-sha", "any", "arm64_sonoma"]
+    assert lines[14:] == [
+        "true",
+        "bottle-sha",
+        "clang",
+        "true",
+        "--with-x",
+        "true",
+        "false",
+        "false",
+        "false",
         "true",
     ]

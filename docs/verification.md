@@ -3,7 +3,7 @@
 ## Full parity batch 2026-11-05
 
 Closed the documented partial areas across all owners; full suite grew from
-1156 to **1336 passed, 6 skipped**.
+1156 to **1356 passed, 6 skipped**.
 
 - **Cask**: evaluator `zap` now captures trash/delete/rmdir/pkgutil; livecheck
   URL kwargs merge into request headers; installed caskfile falls back to JSON;
@@ -29,8 +29,23 @@ Closed the documented partial areas across all owners; full suite grew from
   index (file:// fixtures work).
 - Real install verification: `REAL INSTALL VERIFIED`.
 - Commits `57d927e` + `54fa7c5`; CI `41973914882` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
-- Inventory of the remaining 17 partial areas: `docs/parity-backlog.md`.
+- Inventory of the remaining 5 partial areas: `docs/parity-backlog.md`.
 
+
+## Residual parity batch 2026-11-05 (round 7)
+
+- Formulary: per-URL sidecar cache/TTL namespace, factory order trace,
+  API-first switch, tap migrations/renames, qualified API fallback.
+- FormulaInstaller: loaded bottle-block metadata, full Tab/SBOM fields,
+  cxxstdlib/built_on/used options and round-trip receipt parity.
+- Test DSL: true subprocess isolation on non-fork hosts, sysctl/proc/cpuinfo
+  model/cores and xcodebuild/clang host detection.
+- Cask: electron_builder/extract_plist/pypi/hackage/json/xml/yaml livecheck
+  strategies, using/verified option enforcement, sudo askpass/non-interactive
+  contract, exotic script capture coverage.
+- Superenv: remaining -Xlinker/-Xpreprocessor/-Xassembler and response-file
+  families, Xcode version matrix, LSM/user-namespace capability reporting.
+- Full suite: **1356 passed, 6 skipped**; real install verified.
 
 ## Residual parity batch 2026-11-05 (round 6)
 

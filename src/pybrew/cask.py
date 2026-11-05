@@ -395,13 +395,10 @@ class Cask:
             .lower()
             .replace("-", "_")
         )
-        # URL/git built-in strategies normalize/fetch their own URL; only
-        # page-based strategies (and arbitrary strategy blocks) prefetch.
-        prefetch_page = bool(strategy_source) or strategy_name in (
-            "",
-            "page_match",
-            "sparkle",
-        )
+        # Built-in strategies fetch through the dispatch layer (which applies
+        # their URL options/verification); only arbitrary strategy blocks and
+        # regex-only livechecks need the status layer to prefetch.
+        prefetch_page = bool(strategy_source) or not strategy_name
 
         page_text: Optional[str] = None
         if page is not None:

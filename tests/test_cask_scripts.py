@@ -1077,6 +1077,7 @@ def test_generated_shim_opt_in_sudo_uses_fake_tool(
 
     assert proc.returncode == 0, proc.stderr
     assert log.read_text().splitlines() == [
+        "-n",
         "-E",
         "--",
         "/bin/echo",
@@ -1109,8 +1110,40 @@ def test_generated_shim_opt_in_sudo_as_root_uses_fake_tool(
     assert log.read_text().splitlines() == [
         "-u",
         "root",
+        "-n",
         "-E",
         "--",
         "/bin/echo",
         "root",
     ]
+
+
+def test_generated_shim_sudo_askpass_contract(tmp_path: Path) -> None:
+    log = tmp_path / "sudo-askpass.log"
+    askpass = tmp_path / "askpass"
+    askpass.write_text("#!/bin/sh\necho secret\n", encoding="utf-8")
+    askpass.chmod(0o755)
+    fake = tmp_path / "fake-sudo"
+    fake.write_text(
+        "#!/bin/sh\n"
+        "printf 'args:%s\\n' \"$*\" >> " + str(log) + "\n"
+        "printf 'askpass:%s\\n' \"$SUDO_ASKPASS\" >> " + str(log) + "\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+
+    proc = _run_shim_body(
+        tmp_path,
+        'system_command "/bin/echo", args: ["ask"], sudo: true',
+        env={
+            "PYBREW_ALLOW_CASK_SUDO": "1",
+            "PYBREW_SUDO": str(fake),
+            "PYBREW_SUDO_ASKPASS": str(askpass),
+        },
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    lines = log.read_text().splitlines()
+    assert f"args:-A -E -- /bin/echo ask" in lines
+    assert f"askpass:{askpass}" in lines
+    assert not any("args:-n " in line for line in lines)

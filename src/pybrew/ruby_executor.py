@@ -4817,23 +4817,67 @@ class FormulaInstaller
       File.mtime(source_path.to_s).to_f
     end
     stdlib = OS.mac? ? "libc++" : "libstdc++"
+    compiler = DevelopmentTools.default_compiler.to_s
+    arch = Hardware::CPU.arch.to_s
+    bottle_data = begin
+      if formula.respond_to?(:bottle)
+        spec = formula.bottle
+        if spec.nil?
+          nil
+        else
+          {
+            "root_url" => spec.root_url,
+            "tag" => (spec.tag.nil? ? nil : spec.tag.to_s),
+            "sha256" => spec.sha256,
+            "cellar" => spec.cellar,
+            "rebuild" => spec.rebuild,
+          }
+        end
+      end
+    rescue ScriptError, StandardError
+      nil
+    end
+    built_on = begin
+      {
+        "os" => OS.mac? ? "MacOS" : "Linux",
+        "os_version" => (OS.mac? ? MacOS.full_version.to_s : OS.version.to_s),
+        "cpu_family" => Hardware::CPU.family.to_s,
+        "x86_64" => Hardware::CPU.intel?,
+      }
+    rescue ScriptError, StandardError
+      {}
+    end
+    used_options = Array(
+      @options[:used_options] || @options["used_options"] ||
+      (formula.respond_to?(:build_flags) ? formula.build_flags : [])
+    ).map(&:to_s)
     {
       "version" => formula.version.to_s,
       "installed_on_request" => installed_on_request?,
       "installed_as_dependency" => !installed_on_request?,
       "runtime_dependencies" => runtime_dependencies,
       "poured_from_bottle" => false,
-      "built_as_bottle" => false,
+      "built_as_bottle" => build_bottle? || false,
+      "bottle" => bottle_data,
       "homebrew_version" => HOMEBREW_VERSION,
       "time" => Time.now.to_i,
       "source_modified_time" => source_modified_time,
-      "compiler" => DevelopmentTools.default_compiler.to_s,
-      "arch" => Hardware::CPU.arch.to_s,
+      "compiler" => compiler,
+      "arch" => arch,
       "stdlib" => stdlib,
+      "cxxstdlib" => { "compiler" => compiler, "stdlib" => stdlib },
+      "built_on" => built_on,
       "changed_files" => [],
+      "HEAD" => formula.respond_to?(:head?) ? formula.head? : false,
+      "version_scheme" => (formula.respond_to?(:version_scheme) ? formula.version_scheme.to_i : 0),
+      "loaded_from_api" => (formula.respond_to?(:loaded_from_metadata?) ? formula.loaded_from_metadata? : false),
+      "used_options" => used_options,
+      "unused_options" => [],
       "source" => {
         "path" => source_path.nil? ? nil : source_path.to_s,
         "checksum" => nil,
+        "tap" => formula_tap_name,
+        "tap_git_head" => nil,
       },
       "tap" => formula_tap_name,
       "sbom" => install_sbom_data,
@@ -8976,6 +9020,18 @@ class Tab
     @data["cxxstdlib"]
   end
 
+  def bottle
+    @data["bottle"].is_a?(Hash) ? @data["bottle"] : nil
+  end
+
+  def bottle=(value)
+    @data["bottle"] = value.is_a?(Hash) ? value : nil
+  end
+
+  def bottle_rebuild=(value)
+    @data["bottle_rebuild"] = value
+  end
+
   def empty_source_versions
     []
   end
@@ -9492,6 +9548,57 @@ class PybrewPypiPackages
   end
 end
 
+class PybrewBottleDefinition
+  def initialize
+    @files = {}
+    @root_url = nil
+    @rebuild = 0
+    @current_tag = nil
+  end
+
+  def root_url(value = nil)
+    @root_url = value unless value.nil?
+    @root_url
+  end
+
+  def rebuild(value = nil)
+    @rebuild = value.to_i unless value.nil?
+    @rebuild
+  end
+
+  def sha256(**options)
+    if options.empty?
+      @files["all"] = { "sha256" => nil, "cellar" => nil, "rebuild" => @rebuild }
+      return nil
+    end
+    cellar = options[:cellar]
+    tag_keys = options.keys - [:cellar, :rebuild]
+    if tag_keys.empty?
+      tag = "all"
+      value = nil
+    else
+      tag = tag_keys.first.to_s
+      value = options[tag_keys.first]
+    end
+    @current_tag ||= tag
+    @files[tag] = {
+      "sha256" => value,
+      "cellar" => (cellar.nil? ? nil : cellar.to_s),
+      "rebuild" => @rebuild,
+    }
+    value
+  end
+
+  def to_hash
+    {
+      "root_url" => @root_url,
+      "rebuild" => @rebuild,
+      "files" => @files,
+      "current_tag" => (@current_tag || @files.keys.first),
+    }
+  end
+end
+
 class PybrewResourceDefinition
   FIELDS = %i[
     url sha256 version using mirror mirrors file data apply strip type resolves
@@ -9786,7 +9893,7 @@ class PybrewLoadedFormula
                   :loaded_revision, :loaded_version_scheme,
                   :loaded_test_block, :loaded_install_block,
                   :loaded_caveats_block, :loaded_post_install_block,
-                  :loaded_bottle, :loaded_service, :loaded_livecheck,
+                  :loaded_bottle, :loaded_bottle_spec, :loaded_service, :loaded_livecheck,
                   :loaded_resources, :loaded_patches, :loaded_options,
                   :loaded_channel, :loaded_channels,
                   :loaded_head, :loaded_stable, :loaded_fetch_block,
@@ -9895,6 +10002,18 @@ class PybrewLoadedFormula
 
     def bottle(&block)
       @loaded_bottle = block
+      @loaded_bottle_spec = begin
+        definition = PybrewBottleDefinition.new
+        definition.instance_eval(&block) if block
+        definition.to_hash
+      rescue ScriptError, StandardError
+        { "root_url" => nil, "rebuild" => 0, "files" => {}, "current_tag" => nil }
+      end
+      nil
+    end
+
+    def loaded_bottle_spec
+      @loaded_bottle_spec
     end
 
     def livecheck(&block)
@@ -10121,6 +10240,21 @@ class PybrewLoadedFormula
     !self.class.loaded_bottle.nil?
   end
 
+  def bottle
+    spec = self.class.loaded_bottle_spec
+    return nil if spec.nil?
+
+    PybrewBottleSpec.new(spec)
+  end
+
+  def bottle_hash
+    bottle.nil? ? {} : bottle.json
+  end
+
+  def bottle_tags
+    bottle.nil? ? [] : bottle.bottle_tags
+  end
+
   def livecheck?
     !self.class.loaded_livecheck.nil?
   end
@@ -10230,20 +10364,120 @@ module Formulary
   # empty formula class.
   FORMULA_STRUCT_REQUIRED_ATTRIBUTES = %i[desc version].freeze
 
+  TAP_MIGRATIONS_ENV = "PYBREW_TAP_MIGRATIONS"
+
+  def factory_trace
+    @factory_trace ||= {}
+  end
+
+  def reset_factory_trace!(ref, options = {})
+    @factory_trace = {
+      "ref" => ref.to_s,
+      "from" => options[:from].to_s,
+      "migration" => nil,
+      "choice" => nil,
+      "cache_hit" => false,
+      "order" => factory_loader_order(ref),
+    }
+  end
+
+  # Ordered loader candidates for this ref, with availability flags.  pybrew
+  # is source-first by default; ``PYBREW_FORMULA_API_FIRST=1`` switches to
+  # Homebrew's API-before-tap order.
+  def factory_loader_order(ref)
+    matrix = begin
+      loader_matrix(ref)
+    rescue ScriptError, StandardError
+      {}
+    end
+    sequence = if ENV["PYBREW_FORMULA_API_FIRST"].to_s == "1"
+      [
+        [:bottle, matrix[:bottle]], [:uri, matrix[:uri]], [:api, matrix[:api]],
+        [:tap, matrix[:tap]], [:path, matrix[:path]], [:name, matrix[:name]],
+      ]
+    else
+      [
+        [:bottle, matrix[:bottle]], [:uri, matrix[:uri]], [:tap, matrix[:tap]],
+        [:path, matrix[:path]], [:api, matrix[:api]], [:name, matrix[:name]],
+      ]
+    end
+    sequence.map { |loader, available| { "loader" => loader.to_s, "available" => !!available } }
+  end
+
+  def tap_migrations
+    migrations = PYBREW_CONFIG["tap_migrations"]
+    return migrations if migrations.is_a?(Hash)
+
+    raw = ENV[TAP_MIGRATIONS_ENV].to_s.strip
+    return {} if raw.empty?
+
+    begin
+      data = JSON.parse(raw)
+      data.is_a?(Hash) ? data : {}
+    rescue ScriptError, StandardError
+      {}
+    end
+  end
+
+  # Resolve a configured tap migration/rename to a fully-qualified ref.
+  def tap_migration_target(ref)
+    raw = ref.to_s.sub(/\.rb\z/, "")
+    return nil if raw.empty?
+
+    migrations = tap_migrations
+    short = raw.split("/").last
+    value = migrations[raw] || migrations[short]
+    return nil if value.nil?
+
+    target = value.to_s.strip
+    return nil if target.empty? || target == raw
+
+    if target.include?("/")
+      target
+    elsif raw.include?("/")
+      "#{raw.split("/")[0..-2].join("/")}/#{target}"
+    else
+      target
+    end
+  end
+
   # Homebrew's factory returns a Formula.  When the metadata reference points at
   # a local formula file (tap source), evaluate it with
   # ``load_formula_from_path`` and return the loaded class; otherwise fall back
   # to the metadata reference.  Broken/unsupported source also falls back.
   def factory(ref, *args, **options)
+    reset_factory_trace!(ref, options)
     cache_key = factory_cache_key(ref, args, options)
     if factory_cached? && (@factory_cache ||= {}).key?(cache_key)
+      factory_trace["cache_hit"] = true
+      factory_trace["choice"] = "cache"
       return @factory_cache[cache_key]
+    end
+
+    @factory_migrations ||= []
+    migration = begin
+      tap_migration_target(ref)
+    rescue ScriptError, StandardError
+      nil
+    end
+    if !migration.nil? && !@factory_migrations.include?(migration.to_s) &&
+       @factory_migrations.length < 5
+      factory_trace["migration"] = migration
+      @factory_migrations << migration.to_s
+      begin
+        migrated = factory(migration, *args, **options)
+        factory_trace["migration"] = migration
+        return migrated
+      ensure
+        @factory_migrations.delete(migration.to_s)
+      end
     end
 
     if options[:from].to_s == "api"
       ensure_api_json_loaded
       begin
         api_formula = formula_class_get_from_api(ref)
+        factory_trace["choice"] = "api"
         (@factory_cache ||= {})[cache_key] = api_formula if factory_cached?
         return api_formula
       rescue PybrewFormulaUnavailableError
@@ -10259,12 +10493,14 @@ module Formulary
         flags: options[:flags] || [],
         ignore_errors: options[:ignore_errors] || false
       )
+      factory_trace["choice"] = "path"
       (@factory_cache ||= {})[cache_key] = loaded if factory_cached?
       return loaded
     end
 
     tap_alias_formula = resolve_tap_alias(ref)
     unless tap_alias_formula.nil?
+      factory_trace["choice"] = "tap_alias"
       (@factory_cache ||= {})[cache_key] = tap_alias_formula if factory_cached?
       return tap_alias_formula
     end
@@ -10277,6 +10513,7 @@ module Formulary
         flags: options[:flags] || [],
         ignore_errors: options[:ignore_errors] || false
       )
+      factory_trace["choice"] = "tap"
       (@factory_cache ||= {})[cache_key] = loaded if factory_cached?
       return loaded
     end
@@ -10291,6 +10528,7 @@ module Formulary
       formula = factory_api_alias(ref)
     end
     formula = reference if formula.nil?
+    factory_trace["choice"] ||= formula.is_a?(Class) ? "api" : "name"
     (@factory_cache ||= {})[cache_key] = formula if factory_cached?
     formula
   end
@@ -10423,7 +10661,16 @@ module Formulary
       ensure_api_json_loaded
       formula_class_get_from_api(ref)
     rescue PybrewFormulaUnavailableError
-      nil
+      short = ref.to_s.split("/").last
+      if short == ref.to_s
+        nil
+      else
+        begin
+          formula_class_get_from_api(short)
+        rescue PybrewFormulaUnavailableError
+          nil
+        end
+      end
     end
   end
 
@@ -10702,6 +10949,9 @@ module Formulary
       klass = load_formula_from_struct!(api_struct_name(entry), entry)
       klass.loaded_channels = channels_by_name[name] if klass.respond_to?(:loaded_channels=)
       klass.loaded_channel = channels_by_name[name].first if klass.respond_to?(:loaded_channel=)
+      if klass.respond_to?(:loaded_namespace=) && klass.loaded_namespace.nil?
+        klass.loaded_namespace = api_channel_namespace(channels_by_name[name].first)
+      end
       api_channel_index[name] = channels_by_name[name]
       klass
     end
@@ -10985,20 +11235,35 @@ module Formulary
     Pathname.new(raw)
   end
 
+  SIDECAR_MAX_URLS = 50
+
+  def normalize_sidecar_entry(url, entry)
+    return nil unless entry.is_a?(Hash) && entry["entries"].is_a?(Array)
+
+    {
+      url: url,
+      entries: entry["entries"],
+      etag: entry["etag"].to_s,
+      last_modified: entry["last_modified"].to_s,
+      content_hash: entry["content_hash"].to_s,
+      fetched_at: entry["fetched_at"].to_f,
+    }
+  end
+
+  # Reads the per-URL sidecar cache.  The legacy single-entry format
+  # ({"url" => ..., "entries" => ...}) is still understood.
   def remote_sidecar_read(url)
     path = remote_sidecar_path
     return nil if path.nil? || !path.file?
 
     data = JSON.parse(path.read)
-    return nil unless data.is_a?(Hash) && data["url"] == url && data["entries"].is_a?(Array)
+    return nil unless data.is_a?(Hash)
+    if data["urls"].is_a?(Hash)
+      return normalize_sidecar_entry(url, data["urls"][url])
+    end
+    return nil unless data["url"] == url
 
-    {
-      url: data["url"],
-      entries: data["entries"],
-      etag: data["etag"].to_s,
-      last_modified: data["last_modified"].to_s,
-      content_hash: data["content_hash"].to_s,
-    }
+    normalize_sidecar_entry(url, data)
   rescue ScriptError, StandardError
     nil
   end
@@ -11007,13 +11272,35 @@ module Formulary
     path = remote_sidecar_path
     return nil if path.nil?
 
+    urls = {}
+    begin
+      previous = path.file? ? JSON.parse(path.read) : {}
+      if previous.is_a?(Hash) && previous["urls"].is_a?(Hash)
+        urls = previous["urls"].dup
+      elsif previous.is_a?(Hash) && previous["url"] == url && previous["entries"].is_a?(Array)
+        urls[url] = previous
+      end
+    rescue ScriptError, StandardError
+      urls = {}
+    end
+    urls[url] = {
+      "url" => url,
+      "etag" => etag,
+      "last_modified" => last_modified,
+      "content_hash" => content_hash,
+      "fetched_at" => Time.now.to_f,
+      "entries" => entries,
+    }
+    urls = urls.to_a.last(SIDECAR_MAX_URLS).to_h
     path.dirname.mkpath
     path.write(JSON.pretty_generate({
       "url" => url,
       "etag" => etag,
       "last_modified" => last_modified,
       "content_hash" => content_hash,
+      "fetched_at" => Time.now.to_f,
       "entries" => entries,
+      "urls" => urls,
     }) + "\n")
     nil
   rescue ScriptError, StandardError
@@ -11040,6 +11327,14 @@ module Formulary
     memory = (@remote_api_json_cache ||= {})
     cached = memory[url]
     cached = remote_sidecar_read(url) if cached.nil?
+    if !cached.nil? && cached[:entries].is_a?(Array)
+      ttl = api_json_ttl_seconds
+      fetched_at = cached[:fetched_at].to_f
+      if !ttl.nil? && ttl.positive? && fetched_at.positive? &&
+         (Time.now.to_f - fetched_at) < ttl
+        return cached[:entries]
+      end
+    end
 
     transport = ENV[API_CURL_ENV].to_s.strip
     transport = "curl" if transport.empty?
@@ -11072,7 +11367,12 @@ module Formulary
           raise PybrewFormulaUnavailableError,
                 "HTTP 304 for #{url} but no cached API JSON is available"
         end
+        cached = cached.merge(fetched_at: Time.now.to_f)
         memory[url] = cached
+        remote_sidecar_write(
+          url: url, entries: cached[:entries], etag: cached[:etag],
+          last_modified: cached[:last_modified], content_hash: cached[:content_hash]
+        ) unless remote_sidecar_path.nil?
         return cached[:entries]
       end
       if status.to_i >= 400
@@ -11096,6 +11396,7 @@ module Formulary
         etag: etag,
         last_modified: last_modified,
         content_hash: content_hash,
+        fetched_at: Time.now.to_f,
       }
       remote_sidecar_write(
         url: url,
@@ -12046,6 +12347,15 @@ module Formulary
   end
 
   def tap_formula_name_type(name, tap = nil)
+    target = begin
+      tap_migration_target(name)
+    rescue ScriptError, StandardError
+      nil
+    end
+    if !target.nil?
+      short = target.split("/").last
+      return [short, tap, :migration, nil]
+    end
     [name.to_s, tap, nil, nil]
   end
 

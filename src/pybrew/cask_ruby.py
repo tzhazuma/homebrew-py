@@ -758,6 +758,194 @@ def _git_livecheck_candidates(
     return candidates, None
 
 
+def _strategy_url_options(
+    cask: Cask, livecheck: dict[str, Any]
+) -> dict[str, Any]:
+    """Merge cask and livecheck URL options (livecheck wins)."""
+
+    merged: dict[str, Any] = {}
+    for options in (cask.url_options, livecheck.get("url_options")):
+        if isinstance(options, dict):
+            for key, value in options.items():
+                if value is not None:
+                    merged[str(key).lstrip(":")] = value
+    return merged
+
+
+def _strategy_verify_url(
+    options: dict[str, Any], url: Optional[str]
+) -> None:
+    verified = options.get("verified")
+    if verified is None:
+        return
+    text = str(verified).strip()
+    if text in (":packaged", "packaged"):
+        return
+    pattern = text
+    match = re.fullmatch(r"/(.*)/([imx]*)", pattern, re.DOTALL)
+    if match is not None:
+        pattern = match.group(1)
+    try:
+        compiled = re.compile(pattern)
+    except re.error as error:
+        raise CaskError(f"invalid livecheck verified pattern: {error}") from error
+    if not url or compiled.search(url) is None:
+        raise CaskError(
+            f"livecheck URL {url!r} does not match verified pattern"
+        )
+
+
+def _strategy_using(options: dict[str, Any]) -> Optional[str]:
+    using = options.get("using")
+    if using is None:
+        return None
+    name = str(using).strip().lstrip(":").lower()
+    if not name:
+        return None
+    if name not in ("curl", "homebrew_curl", "git"):
+        raise CaskError(
+            f"livecheck using {using!r} is not supported by strategy dispatch"
+        )
+    return name
+
+
+def _strategy_yaml_versions(page: str) -> list[str]:
+    """Bounded YAML version extraction for electron-builder appcasts."""
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+    for line in page.splitlines():
+        match = re.match(
+            r"^\s*[\"']?version[\"']?\s*:\s*[\"']?([^\"'\s#]+)",
+            line,
+        )
+        if match is None:
+            continue
+        value = match.group(1).strip()
+        if value and value not in seen:
+            seen.add(value)
+            candidates.append(value)
+    if not candidates:
+        candidates = _strategy_candidates(page, None)
+    return candidates
+
+
+def _strategy_electron_versions(page: str, regex: Optional[str]) -> list[str]:
+    if regex:
+        raise CaskError(
+            "electron_builder only supports a regex with a strategy block"
+        )
+    return _strategy_yaml_versions(page)
+
+
+def _strategy_extract_plist_versions(
+    page: str, regex: Optional[str]
+) -> list[str]:
+    """Bounded Info.plist extraction (no archive download/extraction)."""
+
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def add(value: Any) -> None:
+        text = str(value or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            candidates.append(text)
+
+    keys = ("CFBundleShortVersionString", "CFBundleVersion")
+    for key in keys:
+        pattern = (
+            rf"<key>{re.escape(key)}</key>\s*<string>([^<]+)</string>"
+        )
+        for value in re.findall(pattern, page):
+            add(value)
+    if regex:
+        for value in _strategy_candidates(page, regex):
+            add(value)
+    if not candidates:
+        candidates = _strategy_candidates(page, None)
+    return candidates
+
+
+def _strategy_json_versions(
+    page: str, regex: Optional[str], keys: tuple[str, ...]
+) -> list[str]:
+    import json as json_module
+
+    candidates: list[str] = []
+    try:
+        payload = json_module.loads(page)
+    except (TypeError, ValueError):
+        payload = None
+
+    def walk(value: Any) -> None:
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if str(key) in keys and item is not None:
+                    candidates.append(str(item))
+                walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+
+    if payload is not None:
+        walk(payload)
+    if regex:
+        candidates.extend(_strategy_candidates(page, regex))
+    if not candidates:
+        candidates = _strategy_candidates(page, None)
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in candidates:
+        text = str(value).strip()
+        if text and text not in seen:
+            seen.add(text)
+            normalized.append(text)
+    return normalized
+
+
+def _strategy_pypi_url(url: Optional[str]) -> Optional[str]:
+    if not url:
+        return None
+    import urllib.parse
+
+    name = urllib.parse.urlsplit(url).path.rsplit("/", 1)[-1]
+    match = re.match(r"^(.+?)-\d[^/]*?(?:\.tar\.[A-Za-z0-9]+|\.[A-Za-z0-9]+)$", name)
+    if match is None:
+        return None
+    package = match.group(1).replace("%20", "-").replace("_", "-")
+    return f"https://pypi.org/pypi/{package}/json"
+
+
+def _strategy_hackage_urls(
+    url: Optional[str],
+) -> tuple[Optional[str], Optional[str]]:
+    if not url:
+        return None, None
+    import urllib.parse
+
+    name = urllib.parse.urlsplit(url).path.rsplit("/", 1)[-1]
+    match = re.match(r"^(.+?)-\d", name)
+    if match is None:
+        return None, None
+    package = match.group(1)
+    escaped = re.escape(package).replace("\\-", "-")
+    target = f"https://hackage.haskell.org/package/{package}/src/"
+    pattern = rf"<h3>{escaped}-(.*?)/?</h3>"
+    return target, pattern
+
+
+def _strategy_page_text_with_options(
+    fetcher: Optional[Callable[[str], Any]],
+    url: Optional[str],
+    page: Optional[str | bytes],
+    options: dict[str, Any],
+) -> str:
+    _strategy_using(options)
+    _strategy_verify_url(options, url)
+    return _strategy_page_text(fetcher, url, page)
+
+
 def _execute_python_livecheck_strategy(
     cask: Cask,
     *,
@@ -773,24 +961,33 @@ def _execute_python_livecheck_strategy(
     regex = livecheck.get("regex")
     regex_text = str(regex) if regex is not None else None
     url = _strategy_url(cask, livecheck)
+    options = _strategy_url_options(cask, livecheck)
     page_size = 0
     try:
         if name == "page_match":
             if regex_text is None:
                 raise CaskError("page_match requires a livecheck regex")
-            page_text = _strategy_page_text(fetcher, url, page)
+            page_text = _strategy_page_text_with_options(
+                fetcher, url, page, options
+            )
             page_size = len(page_text)
             candidates = _strategy_candidates(page_text, regex_text)
         elif name == "sparkle":
-            page_text = _strategy_page_text(fetcher, url, page)
+            page_text = _strategy_page_text_with_options(
+                fetcher, url, page, options
+            )
             page_size = len(page_text)
             candidates = _sparkle_candidates(page_text, regex_text)
         elif name == "github_latest":
             target = _github_latest_url(url or "")
+            _strategy_using(options)
+            _strategy_verify_url(options, url)
             page_text = _strategy_page_text(fetcher, target, page)
             page_size = len(page_text)
             candidates = _github_latest_candidates(page_text, regex_text)
         elif name == "git":
+            _strategy_using(options)
+            _strategy_verify_url(options, url)
             candidates, error = _git_livecheck_candidates(url, timeout)
             if error is not None:
                 result = _strategy_result(
@@ -806,7 +1003,73 @@ def _execute_python_livecheck_strategy(
                 raise CaskError(
                     "url strategy requires a livecheck or cask URL"
                 )
+            _strategy_using(options)
+            _strategy_verify_url(options, url)
             candidates = _strategy_candidates(url, regex_text)
+        elif name == "electron_builder":
+            page_text = _strategy_page_text_with_options(
+                fetcher, url, page, options
+            )
+            page_size = len(page_text)
+            candidates = _strategy_electron_versions(page_text, regex_text)
+        elif name == "extract_plist":
+            page_text = _strategy_page_text_with_options(
+                fetcher, url, page, options
+            )
+            page_size = len(page_text)
+            candidates = _strategy_extract_plist_versions(
+                page_text, regex_text
+            )
+        elif name == "pypi":
+            target = _strategy_pypi_url(url)
+            if target is None:
+                raise CaskError(
+                    "pypi strategy requires a files.pythonhosted.org URL"
+                )
+            _strategy_using(options)
+            _strategy_verify_url(options, url)
+            page_text = _strategy_page_text(fetcher, target, page)
+            page_size = len(page_text)
+            candidates = _strategy_json_versions(
+                page_text, regex_text, ("version",)
+            )
+        elif name == "hackage":
+            target, default_regex = _strategy_hackage_urls(url)
+            if target is None:
+                raise CaskError(
+                    "hackage strategy requires a hackage/downloads URL"
+                )
+            _strategy_using(options)
+            _strategy_verify_url(options, url)
+            page_text = _strategy_page_text(fetcher, target, page)
+            page_size = len(page_text)
+            candidates = _strategy_candidates(
+                page_text, regex_text or default_regex
+            )
+        elif name == "json":
+            page_text = _strategy_page_text_with_options(
+                fetcher, url, page, options
+            )
+            page_size = len(page_text)
+            candidates = _strategy_json_versions(
+                page_text, regex_text, ("version", "latest_version")
+            )
+        elif name == "xml":
+            page_text = _strategy_page_text_with_options(
+                fetcher, url, page, options
+            )
+            page_size = len(page_text)
+            candidates = _strategy_candidates(
+                page_text, regex_text
+            )
+            if not candidates:
+                candidates = _sparkle_candidates(page_text, regex_text)
+        elif name in ("yaml", "electron_builder"):
+            page_text = _strategy_page_text_with_options(
+                fetcher, url, page, options
+            )
+            page_size = len(page_text)
+            candidates = _strategy_yaml_versions(page_text)
         else:
             result = _strategy_result(
                 executed=False,

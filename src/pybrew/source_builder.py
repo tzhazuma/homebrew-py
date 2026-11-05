@@ -1219,7 +1219,15 @@ def _flag_value(
     if token.startswith("-L") and len(token) > 2:
         return "library", token[2:], 1
     if token in ("-Wl,-L", "-Wl,-L,") and index + 1 < len(arguments):
-        return "library", arguments[index + 1], 2
+        following = arguments[index + 1]
+        if following.startswith("-Wl,"):
+            following = following[len("-Wl,") :]
+        return "library", following, 2
+    if token == "-Wl,-F" and index + 1 < len(arguments):
+        following = arguments[index + 1]
+        if following.startswith("-Wl,"):
+            following = following[len("-Wl,") :]
+        return "framework", following, 2
     for prefix in ("-Wl,-L,", "-Wl,-L="):
         if token.startswith(prefix) and len(token) > len(prefix):
             return "library", token[len(prefix) :], 1
@@ -1228,9 +1236,36 @@ def _flag_value(
         and index + 2 < len(arguments)
         and arguments[index + 1] == "-L"
     ):
+        if index + 3 < len(arguments) and arguments[index + 2] == "-Xlinker":
+            return "library", arguments[index + 3], 4
         return "library", arguments[index + 2], 3
+    if token == "-Xlinker" and index + 3 < len(arguments):
+        option = arguments[index + 1]
+        kind = {
+            "-L": "library",
+            "-F": "framework",
+            "-rpath": "rpath",
+            "-R": "rpath",
+            "-rpath-link": "rpath",
+            "-I": "include",
+            "-isystem": "include",
+            "--sysroot": "sysroot",
+        }.get(option)
+        if kind is not None and arguments[index + 2] == "-Xlinker":
+            return kind, arguments[index + 3], 4
+    if token in ("-Xpreprocessor", "-Xassembler") and index + 2 < len(arguments):
+        option = arguments[index + 1]
+        if option in ("-I", "-isystem", "-F"):
+            return (
+                "framework" if option == "-F" else "include",
+                arguments[index + 2],
+                3,
+            )
     if token in ("-Wl,--sysroot",) and index + 1 < len(arguments):
-        return "sysroot", arguments[index + 1], 2
+        following = arguments[index + 1]
+        if following.startswith("-Wl,"):
+            following = following[len("-Wl,") :]
+        return "sysroot", following, 2
     for prefix in ("-Wl,--sysroot=", "-Wl,--sysroot,"):
         if token.startswith(prefix) and len(token) > len(prefix):
             return "sysroot", token[len(prefix) :], 1
@@ -1436,6 +1471,21 @@ def sanitize_flag_list(
     index = 0
     while index < len(args):
         token = args[index]
+        if token.startswith("-Wl,@") and len(token) > len("-Wl,@"):
+            expanded = _read_response_file(token[len("-Wl,@") :])
+            if expanded is not None:
+                if response_expansions >= _MAX_RESPONSE_EXPANSIONS:
+                    if diagnostics is not None:
+                        diagnostics.append(
+                            f"response file expansion limit reached for {token}"
+                        )
+                    index += 1
+                    continue
+                args[index:index + 1] = [
+                    f"-Wl,{part}" for part in expanded
+                ]
+                response_expansions += 1
+                continue
         if token.startswith("@") and len(token) > 1:
             expanded = _read_response_file(token[1:])
             if expanded is not None:
@@ -1655,7 +1705,15 @@ def flag_value(args, index):
     if token.startswith("-L") and len(token) > 2:
         return "library", token[2:], 1
     if token in ("-Wl,-L", "-Wl,-L,") and index + 1 < len(args):
-        return "library", args[index + 1], 2
+        following = args[index + 1]
+        if following.startswith("-Wl,"):
+            following = following[len("-Wl,"):]
+        return "library", following, 2
+    if token == "-Wl,-F" and index + 1 < len(args):
+        following = args[index + 1]
+        if following.startswith("-Wl,"):
+            following = following[len("-Wl,"):]
+        return "framework", following, 2
     for flag_prefix in ("-Wl,-L,", "-Wl,-L="):
         if token.startswith(flag_prefix) and len(token) > len(flag_prefix):
             return "library", token[len(flag_prefix):], 1
@@ -1664,9 +1722,36 @@ def flag_value(args, index):
         and index + 2 < len(args)
         and args[index + 1] == "-L"
     ):
+        if index + 3 < len(args) and args[index + 2] == "-Xlinker":
+            return "library", args[index + 3], 4
         return "library", args[index + 2], 3
+    if token == "-Xlinker" and index + 3 < len(args):
+        option = args[index + 1]
+        kind = {
+            "-L": "library",
+            "-F": "framework",
+            "-rpath": "rpath",
+            "-R": "rpath",
+            "-rpath-link": "rpath",
+            "-I": "include",
+            "-isystem": "include",
+            "--sysroot": "sysroot",
+        }.get(option)
+        if kind is not None and args[index + 2] == "-Xlinker":
+            return kind, args[index + 3], 4
+    if token in ("-Xpreprocessor", "-Xassembler") and index + 2 < len(args):
+        option = args[index + 1]
+        if option in ("-I", "-isystem", "-F"):
+            return (
+                "framework" if option == "-F" else "include",
+                args[index + 2],
+                3,
+            )
     if token == "-Wl,--sysroot" and index + 1 < len(args):
-        return "sysroot", args[index + 1], 2
+        following = args[index + 1]
+        if following.startswith("-Wl,"):
+            following = following[len("-Wl,"):]
+        return "sysroot", following, 2
     if token.startswith("-Wl,--sysroot=") and len(token) > len("-Wl,--sysroot="):
         return "sysroot", token[len("-Wl,--sysroot="):], 1
     if token.startswith("-Wl,--sysroot,") and len(token) > len("-Wl,--sysroot,"):
@@ -1967,6 +2052,20 @@ response_expansions = 0
 index = 0
 while index < len(arguments):
     token = arguments[index]
+    if token.startswith("-Wl,@") and len(token) > len("-Wl,@"):
+        expanded = read_response_file(token[len("-Wl,@"):])
+        if expanded is not None:
+            if response_expansions >= MAX_RESPONSE_EXPANSIONS:
+                diagnostics.append(
+                    "response file expansion limit reached for %s" % token
+                )
+                index += 1
+                continue
+            arguments[index:index + 1] = [
+                "-Wl," + part for part in expanded
+            ]
+            response_expansions += 1
+            continue
     if token.startswith("@") and len(token) > 1:
         expanded = read_response_file(token[1:])
         if expanded is not None:
@@ -2849,6 +2948,56 @@ def sdk_name_for_version(version: Optional[str]) -> str:
     return f"macosx{raw}"
 
 
+def xcode_version(
+    environment: Optional[Mapping[str, str]] = None,
+    *,
+    system: Optional[str] = None,
+) -> Optional[str]:
+    """Best-effort Xcode version probe, injectable via PYBREW_XCODEBUILD."""
+
+    env = os.environ if environment is None else environment
+    explicit = _first_environment_value(
+        env, ("PYBREW_XCODE_VERSION", "XCODE_VERSION")
+    )
+    if explicit:
+        return explicit
+    host = platform.system() if system is None else system
+    override = env.get("PYBREW_XCODEBUILD")
+    if host != "Darwin" and not override:
+        return None
+    if override:
+        try:
+            command = shlex.split(override)
+        except ValueError:
+            command = [override]
+    else:
+        found = shutil.which("xcodebuild", path=env.get("PATH") or os.defpath)
+        if not found:
+            return None
+        command = [found]
+    if not command:
+        return None
+    try:
+        result = subprocess.run(
+            [*command, "-version"],
+            env=dict(env),
+            cwd=tempfile.gettempdir(),
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    for line in (result.stdout or "").splitlines():
+        stripped = line.strip()
+        if stripped.lower().startswith("xcode "):
+            value = stripped[len("xcode ") :].strip()
+            return value[:100] or None
+    return None
+
+
 def sdk_version_matrix(
     environment: Optional[Mapping[str, str]] = None,
     *,
@@ -2869,6 +3018,7 @@ def sdk_version_matrix(
         "deployment_target": _first_environment_value(
             env, ("PYBREW_MIN_OS", "MACOSX_DEPLOYMENT_TARGET")
         ),
+        "xcode_version": xcode_version(env, system=system),
     }
 
 
@@ -3277,6 +3427,8 @@ def sandbox_backend_capabilities(
         return {
             "available": True,
             "backend": "sandbox-exec",
+            "lsm": "seatbelt",
+            "user_namespace": False,
             "network_isolation": True,
             "namespace_isolation": False,
             "capability_drop": False,
@@ -3292,6 +3444,8 @@ def sandbox_backend_capabilities(
         return {
             "available": True,
             "backend": "bwrap",
+            "lsm": "seccomp-available" if seccomp_available else "none",
+            "user_namespace": False,
             "network_isolation": True,
             "namespace_isolation": True,
             "capability_drop": True,
@@ -3302,6 +3456,8 @@ def sandbox_backend_capabilities(
     return {
         "available": True,
         "backend": "explicit",
+        "lsm": "none",
+        "user_namespace": False,
         "network_isolation": False,
         "namespace_isolation": False,
         "capability_drop": False,
@@ -3643,6 +3799,9 @@ def build_environment(
     sdk_version = _first_environment_value(env, ("PYBREW_SDK_VERSION", "SDK_VERSION"))
     if sdk_version is not None and _SDK_VERSION_RE.fullmatch(sdk_version):
         env.setdefault("SDK_VERSION", sdk_version)
+    detected_xcode = xcode_version(env)
+    if detected_xcode is not None:
+        env.setdefault("XCODE_VERSION", detected_xcode)
 
     arch = architecture_flag(env)
     if arch is not None:

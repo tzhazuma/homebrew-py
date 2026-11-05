@@ -980,7 +980,99 @@ class FormulaTestContext
   # available from the configured local taps, test sources are passed in from
   # Python), so ``Formula["name"]`` resolves those and fails clearly otherwise.
   class Formula
-    PATH_METHODS = %w[
+    # Run a dependency test in a fresh Ruby interpreter (true non-fork process
+  # isolation).  Context is serialized to JSON, the body is written beside it,
+  # and outcome/output are read back from files.  This is used when fork is
+  # unavailable or explicitly disabled by forcing :subprocess.
+  def dependency_subprocess_result(source, testpath)
+    result_path = File.join(testpath, ".pybrew-dependency-result")
+    config_path = File.join(testpath, ".pybrew-dependency-config.json")
+    body_path = File.join(testpath, ".pybrew-dependency-body.rb")
+    stdout_path = File.join(testpath, ".pybrew-dependency-stdout")
+    stderr_path = File.join(testpath, ".pybrew-dependency-stderr")
+    child_config = {
+      "name" => @name.to_s,
+      "version" => @info["version"].to_s,
+      "testpath" => testpath.to_s,
+      "prefix" => @info["prefix"].to_s,
+      "homebrew_prefix" => @context.homebrew_prefix.to_s,
+      "cellar" => @context.cellar.to_s,
+      "paths" => @info["paths"] || {},
+      "formulae" => @context.formulae,
+      "source_catalog" => @context.source_catalog,
+      "source_roots" => @context.source_roots,
+    }
+    File.write(config_path, JSON.generate(child_config))
+    File.write(body_path, source)
+    runner = File.expand_path($PROGRAM_NAME)
+    child_env = ENV.to_h.merge("PYBREW_DEPENDENCY_RESULT" => result_path.to_s)
+    pid = begin
+      Process.spawn(
+        child_env,
+        RbConfig.ruby,
+        runner,
+        config_path,
+        body_path,
+        chdir: testpath,
+        pgroup: true,
+        out: stdout_path,
+        err: stderr_path
+      )
+    rescue StandardError => error
+      raise FormulaTestFailure, "could not start dependency subprocess: #{error.message}"
+    end
+
+    timeout_value = ENV["PYBREW_DEPENDENCY_TIMEOUT"].to_s
+    timeout_seconds = timeout_value.empty? ? 120.0 : timeout_value.to_f
+    begin
+      Timeout.timeout(timeout_seconds) { Process.wait(pid) }
+    rescue Timeout::Error
+      begin
+        Process.kill("KILL", -pid)
+      rescue StandardError
+        begin
+          Process.kill("KILL", pid)
+        rescue StandardError
+          # The child already exited or is not killable.
+        end
+      end
+      begin
+        Process.wait(pid)
+      rescue StandardError
+        # Already reaped by the timeout path.
+      end
+      replay_dependency_output(stdout_path, stderr_path)
+      raise FormulaTestFailure,
+            "dependency test timed out after #{timeout_seconds}s"
+    end
+
+    replay_dependency_output(stdout_path, stderr_path)
+    unless File.file?(result_path)
+      raise FormulaTestFailure,
+            "dependency test subprocess exited without reporting a result"
+    end
+    kind, message = Marshal.load(File.binread(result_path))
+    File.delete(result_path) rescue nil
+    case kind
+    when :skip
+      raise FormulaTestSkip, message
+    when :failure
+      raise FormulaTestFailure, message
+    when :error
+      raise RuntimeError, message
+    end
+  end
+
+  def replay_dependency_output(stdout_path, stderr_path)
+    if File.file?(stdout_path)
+      File.open(stdout_path, "rb") { |handle| $stdout.write(handle.read) }
+    end
+    if File.file?(stderr_path)
+      File.open(stderr_path, "rb") { |handle| $stderr.write(handle.read) }
+    end
+  end
+
+  PATH_METHODS = %w[
       bin sbin lib include share etc libexec opt_bin opt_sbin opt_lib
       opt_include opt_share opt_libexec opt_pkgshare pkgshare var man
       man1 man2 man3 man4 man5 man6 man7 man8 doc info pkgetc
@@ -1140,7 +1232,8 @@ class FormulaTestContext
         end
         Dir.chdir(dependency_testpath)
         context = @context.dependency_test_context(@info, dependency_testpath)
-        if FormulaTestContext.dependency_subprocess_enabled?
+        mode = FormulaTestContext.dependency_isolation_mode
+        if mode == :fork
           # Run the dependency test in a forked child: environment changes,
           # arbitrary constants and other process-global state are copy-on-write
           # and cannot leak into the parent test.  The child reports its outcome
@@ -1207,6 +1300,8 @@ class FormulaTestContext
           when :error
             raise RuntimeError, message
           end
+        elsif mode == :subprocess
+          dependency_subprocess_result(source, dependency_testpath)
         else
           FormulaTestContext.evaluate_source(context, source, "(formula #{@name} test)")
         end
@@ -1323,7 +1418,7 @@ class FormulaTestContext
     zsh_completion fish_completion elisp
   ].freeze
 
-  attr_reader :homebrew_prefix, :cellar, :formulae
+  attr_reader :homebrew_prefix, :cellar, :formulae, :source_catalog, :source_roots
 
   def initialize(config)
     @config = config
@@ -1507,19 +1602,16 @@ class FormulaTestContext
   # hosts, where the same-process fallback keeps the older bounded isolation.
   def self.dependency_isolation_mode
     raw = ENV["PYBREW_TEST_ISOLATE_DEPENDENCIES"].to_s.strip.downcase
-    return :fork if dependency_subprocess_enabled?
-    return :in_process_explicit if %w[0 false no off].include?(raw)
+    return :in_process_explicit if %w[0 false no off in_process explicit].include?(raw)
+    return :subprocess if %w[subprocess ruby].include?(raw)
+    return :fork if %w[fork 1 true yes on].include?(raw) && Process.respond_to?(:fork)
+    return :subprocess unless Process.respond_to?(:fork)
 
-    :in_process_unavailable
+    :fork
   end
 
   def self.dependency_subprocess_enabled?
-    return false unless Process.respond_to?(:fork)
-
-    raw = ENV["PYBREW_TEST_ISOLATE_DEPENDENCIES"].to_s.strip.downcase
-    return false if %w[0 false no off].include?(raw)
-
-    true
+    dependency_isolation_mode == :fork
   end
 
   # Environment for a dependency test: its own prefix/testpath/cwd/tmpdir/home
@@ -2627,14 +2719,31 @@ module Hardware
       override = ENV["PYBREW_CPU_MODEL"].to_s
       return override unless override.empty?
 
-      RbConfig::CONFIG["host_cpu"].to_s
+      @model ||= begin
+        value = if OS.mac?
+          `"/usr/sbin/sysctl" -n machdep.cpu.brand_string 2>/dev/null`.strip
+        elsif File.file?("/proc/cpuinfo")
+          text = File.read("/proc/cpuinfo")
+          text[/^model name\s*:\s*(.*)$/, 1].to_s.strip
+        else
+          ""
+        end
+        value.empty? ? RbConfig::CONFIG["host_cpu"].to_s : value
+      rescue StandardError
+        RbConfig::CONFIG["host_cpu"].to_s
+      end
     end
 
     def self.bits
       override = ENV["PYBREW_CPU_BITS"].to_s
       return override.to_i unless override.empty?
 
-      is_64_bit? ? 64 : 32
+      @bits ||= begin
+        pointer = [0].pack("p").bytesize * 8
+        pointer.positive? ? pointer : (is_64_bit? ? 64 : 32)
+      rescue StandardError
+        is_64_bit? ? 64 : 32
+      end
     end
 
     def self.arm?
@@ -2747,7 +2856,27 @@ module Hardware
       override = ENV["PYBREW_CPU_PHYSICAL_CORES"].to_s
       return override.to_i if override.to_i.positive?
 
-      cores
+      @physical_cores ||= begin
+        value = if OS.mac?
+          `"/usr/sbin/sysctl" -n hw.physicalcpu 2>/dev/null`.strip.to_i
+        elsif File.file?("/proc/cpuinfo")
+          text = File.read("/proc/cpuinfo")
+          pairs = text.scan(/^physical id\s*:\s*(\d+)$/).zip(
+            text.scan(/^core id\s*:\s*(\d+)$/)
+          )
+          pairs = pairs.select { |pair| pair[1] }
+          if pairs.empty?
+            text[/^cpu cores\s*:\s*(\d+)$/, 1].to_i
+          else
+            pairs.uniq.length
+          end
+        else
+          0
+        end
+        value.positive? ? value : cores
+      rescue StandardError
+        cores
+      end
     end
   end
 end
@@ -2793,7 +2922,13 @@ module MacOS
       override = ENV["PYBREW_CLT_INSTALLED"].to_s.downcase
       return %w[1 true yes on].include?(override) unless override.empty?
 
-      File.directory?("/Library/Developer/CommandLineTools")
+      return true if File.directory?("/Library/Developer/CommandLineTools")
+      return true if MacOS.active_developer_dir.to_s == "/Library/Developer/CommandLineTools"
+
+      clang_path = `"/usr/bin/xcrun" --find clang 2>/dev/null`.to_s.strip
+      File.executable?("/usr/bin/xcrun") && clang_path.include?("CommandLineTools")
+    rescue StandardError
+      false
     end
 
     def self.version
@@ -2803,7 +2938,8 @@ module MacOS
 
       @version ||= begin
         output = `#{clang} --version 2>/dev/null`.to_s
-        output[/clang-(\d+(?:\.\d+)+)/, 1]
+        output[/clang version\s+([0-9.]+)/i, 1] ||
+          output[/clang-([0-9.]+)/, 1]
       rescue StandardError
         nil
       end
@@ -2813,7 +2949,11 @@ module MacOS
       override = ENV["PYBREW_CLANG"].to_s
       return override unless override.empty?
 
-      "/Library/Developer/CommandLineTools/usr/bin/clang"
+      candidate = "/Library/Developer/CommandLineTools/usr/bin/clang"
+      return candidate if File.executable?(candidate)
+      return "/usr/bin/clang" if File.executable?("/usr/bin/clang")
+
+      "clang"
     end
 
     def self.sdk_path
@@ -2826,7 +2966,13 @@ module MacOS
       override = ENV["PYBREW_XCODE_INSTALLED"].to_s.downcase
       return %w[1 true yes on].include?(override) unless override.empty?
 
-      File.directory?(path)
+      return true if File.directory?(path)
+      return true if MacOS.active_developer_dir.to_s.include?("Xcode.app")
+
+      candidate = xcodebuild.to_s
+      !candidate.empty? && candidate.include?("Xcode.app")
+    rescue StandardError
+      false
     end
 
     def self.path
@@ -2838,14 +2984,32 @@ module MacOS
       Pathname.new(path)
     end
 
+    def self.xcodebuild
+      override = ENV["PYBREW_XCODEBUILD"].to_s
+      return override unless override.empty?
+
+      ENV["PATH"].to_s.split(File::PATH_SEPARATOR).each do |directory|
+        next if directory.empty?
+
+        candidate = File.join(directory, "xcodebuild")
+        return candidate if File.executable?(candidate)
+      end
+      candidate = "/usr/bin/xcodebuild"
+      File.executable?(candidate) ? candidate : nil
+    end
+
     def self.version
       override = ENV["PYBREW_XCODE_VERSION"].to_s
       return override unless override.empty?
       return nil unless installed?
 
       @version ||= begin
-        output = `/usr/bin/xcodebuild -version 2>/dev/null`.to_s
-        output[/^Xcode\s+([0-9.]+)/, 1]
+        binary = xcodebuild
+        return nil if binary.nil?
+
+        output = `#{binary} -version 2>/dev/null`.to_s
+        output[/^Xcode\s+([0-9.]+)/, 1] ||
+          output[/^Build version\s+([0-9A-Za-z.]+)/, 1]
       rescue StandardError
         nil
       end
@@ -2869,16 +3033,30 @@ module DevelopmentTools
     ENV["PYBREW_CLANG"].to_s.empty? ? "clang" : ENV["PYBREW_CLANG"]
   end
 
+  def self.clang_output
+    binary = clang.to_s
+    return "" if binary.empty?
+
+    `#{binary} --version 2>/dev/null`.to_s
+  rescue StandardError
+    ""
+  end
+
   def self.clang_version
     override = ENV["PYBREW_CLANG_VERSION"].to_s
     return override unless override.empty?
 
-    MacOS::Xcode.version || MacOS::CLT.version
+    output = clang_output
+    output[/clang version\s+([0-9.]+)/i, 1] ||
+      MacOS::Xcode.version || MacOS::CLT.version
   end
 
   def self.clang_build_version
     override = ENV["PYBREW_CLANG_BUILD_VERSION"].to_s
-    override.empty? ? clang_version : override
+    return override unless override.empty?
+
+    output = clang_output
+    output[/Build version\s+([0-9A-Za-z.]+)/, 1] || clang_version
   end
 
   def self.default_compiler
@@ -2899,7 +3077,12 @@ module DevelopmentTools
 
   def self.gcc_version
     override = ENV["PYBREW_GCC_VERSION"].to_s
-    override.empty? ? "0" : override
+    return override unless override.empty?
+
+    output = `gcc --version 2>/dev/null`.to_s
+    output[/gcc[^\n]*?([0-9]+(?:\.[0-9]+)+)/i, 1] || "0"
+  rescue StandardError
+    "0"
   end
 
   def self.compiler_version
@@ -2949,17 +3132,36 @@ def run_formula_test_body(config)
   FormulaTestContext.evaluate_source(context, source)
 end
 
+def write_dependency_result(kind, message = "")
+  path = ENV["PYBREW_DEPENDENCY_RESULT"].to_s
+  return if path.empty?
+
+  File.binwrite(path, Marshal.dump([kind, message]))
+end
+
+dependency_result_path = ENV["PYBREW_DEPENDENCY_RESULT"].to_s
 begin
   run_formula_test_body(config)
+  write_dependency_result(:ok)
 rescue FormulaTestSkip => error
-  $stdout.puts "Formula test skipped: #{error.message}"
+  write_dependency_result(:skip, error.message)
+  if dependency_result_path.empty?
+    $stdout.puts "Formula test skipped: #{error.message}"
+  end
   exit 0
 rescue FormulaTestFailure => error
-  $stderr.puts "Formula test failed: #{error.message}"
+  write_dependency_result(:failure, error.message)
+  if dependency_result_path.empty?
+    $stderr.puts "Formula test failed: #{error.message}"
+  end
   exit 1
 rescue SystemExit
   raise
 rescue Exception => error
+  write_dependency_result(:error, "#{error.class}: #{error.message}")
+  unless dependency_result_path.empty?
+    exit 1
+  end
   $stderr.puts "Formula test raised #{error.class}: #{error.message}"
   error.backtrace.to_a.first(15).each { |line| $stderr.puts "  #{line}" }
   exit 1

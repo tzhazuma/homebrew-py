@@ -2312,3 +2312,34 @@ def test_script_body_capture_handles_modifier_conditionals(
     assert "def helper" in cask.preflight
     assert "puts helper" in cask.preflight
     assert not cask.extra.get("ruby_warnings")
+
+
+@requires_ruby
+def test_script_body_capture_preserves_heredocs_and_rescue(
+    allow_ruby: None,
+) -> None:
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  preflight do\n'
+            '    text = <<~TXT\n'
+            '      do not stop at this end\n'
+            '    TXT\n'
+            '    words = %q{do end}\n'
+            '    begin\n'
+            '      puts words if text.length > 0\n'
+            '    rescue StandardError\n'
+            '      puts "rescue"\n'
+            '    ensure\n'
+            '      puts "ensure"\n'
+            '    end\n'
+            '  end\n'
+        )
+    )
+
+    assert cask.preflight is not None
+    assert "do not stop at this end" in cask.preflight
+    assert "%q{do end}" in cask.preflight
+    assert "rescue StandardError" in cask.preflight
+    assert "ensure" in cask.preflight
+    assert not cask.extra.get("ruby_warnings")

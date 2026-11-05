@@ -3087,3 +3087,88 @@ def test_seccomp_status_and_bwrap_namespace_hardening(tmp_path: Path) -> None:
     )
     assert capabilities["namespace_isolation"] is True
     assert capabilities["capability_drop"] is True
+
+
+def test_xlinker_and_wl_response_file_cases(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    tokens = source_builder.sanitize_flag_list(
+        [
+            "-Xlinker",
+            "-rpath",
+            "-Xlinker",
+            "/usr/lib",
+            "-Xlinker",
+            "--sysroot",
+            "-Xlinker",
+            "/SDK",
+            "-Xlinker",
+            "-F",
+            "-Xlinker",
+            "/Library/Frameworks",
+            "-Xlinker",
+            "-L",
+            "-Xlinker",
+            "/usr/lib",
+            "-Xpreprocessor",
+            "-I",
+            "/usr/include",
+            "-Xassembler",
+            "-I",
+            "/usr/local/include",
+        ],
+        tmp_path / "prefix",
+    )
+    text = " ".join(tokens)
+    assert "/usr/lib" not in text
+    assert "/Library/Frameworks" not in text
+    assert "/usr/include" not in text
+    assert "/usr/local/include" not in text
+    assert "/SDK" in tokens
+
+    response = tmp_path / "linker.rsp"
+    response.write_text("-rpath /usr/lib\n-L /lib\n-DFROM_LINKER_RSP=1\n")
+    expanded = source_builder.sanitize_flag_list(
+        [f"-Wl,@{response}"], tmp_path / "prefix"
+    )
+    expanded_text = " ".join(expanded)
+    assert "/usr/lib" not in expanded_text
+    assert "/lib" not in expanded_text
+    assert "-Wl,-DFROM_LINKER_RSP=1" in expanded
+
+
+def test_xcode_version_matrix_with_fake_xcodebuild(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    fake = tmp_path / "xcodebuild"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" > "$PYBREW_XCODEBUILD_LOG"\n'
+        "printf '%s\\n' 'Xcode 15.3'\n"
+        "printf '%s\\n' 'Build version 15E204a'\n"
+    )
+    fake.chmod(0o755)
+    log = tmp_path / "xcodebuild.log"
+    env = {
+        "PATH": "/usr/bin:/bin",
+        "PYBREW_XCODEBUILD": str(fake),
+        "PYBREW_XCODEBUILD_LOG": str(log),
+        "PYBREW_SDK_VERSION": "14.0",
+        "PYBREW_ARCH": "arm64",
+    }
+    assert source_builder.xcode_version(env, system="Darwin") == "15.3"
+    matrix = source_builder.sdk_version_matrix(
+        env, system="Darwin", machine="arm64"
+    )
+    assert matrix["xcode_version"] == "15.3"
+    assert matrix["sdk_name"] == "macosx14.0"
+    assert "-version" in log.read_text()
+
+    fake_exec = tmp_path / "sandbox-exec"
+    fake_exec.write_text("#!/bin/sh\nexit 0\n")
+    fake_exec.chmod(0o755)
+    capabilities = source_builder.sandbox_backend_capabilities(
+        {"PYBREW_SANDBOX_BINARY": str(fake_exec)}, system="Darwin"
+    )
+    assert capabilities["lsm"] == "seatbelt"
+    assert capabilities["user_namespace"] is False
