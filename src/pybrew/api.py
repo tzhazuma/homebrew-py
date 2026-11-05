@@ -8,7 +8,9 @@ usable on a machine without a homebrew-core checkout.
 from __future__ import annotations
 
 import json
+import os
 import re
+import time
 from pathlib import Path
 import urllib.error
 import urllib.request
@@ -103,10 +105,44 @@ def _search_match(pattern: str, *values: object) -> bool:
     return pattern.casefold() in text.casefold()
 
 
+def _index_json(
+    api_url: str,
+    timeout: int,
+    cache_path: Optional[Path] = None,
+    ttl: int = 86400,
+) -> Any:
+    """Load an index JSON, optionally reusing a mtime-based file cache."""
+
+    if cache_path is not None:
+        try:
+            if time.time() - cache_path.stat().st_mtime < max(0, ttl):
+                return json.loads(cache_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            pass
+    data = _request_json(api_url, timeout=timeout)
+    if cache_path is not None:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(
+                json.dumps(data, separators=(",", ":")), encoding="utf-8"
+            )
+        except OSError:
+            pass
+    return data
+
+
+def _search_ttl() -> int:
+    try:
+        return max(0, int(os.environ.get("PYBREW_SEARCH_CACHE_TTL", "86400")))
+    except ValueError:
+        return 86400
+
+
 def search_formulae_online(
     pattern: str,
     api_url: str = FORMULA_INDEX_API,
     timeout: int = 30,
+    cache_path: Optional[Path] = None,
 ) -> list[Formula]:
     """Search the full formulae.brew.sh formula index.
 
@@ -114,7 +150,7 @@ def search_formulae_online(
     requested formula.  The index is public JSON; callers may override the URL
     (for example with a ``file://`` fixture in tests).
     """
-    data = _request_json(api_url, timeout=timeout)
+    data = _index_json(api_url, timeout, cache_path=cache_path, ttl=_search_ttl())
     if not isinstance(data, list):
         raise DownloadError(f"{api_url}: expected a JSON array")
     results: list[Formula] = []
@@ -142,9 +178,10 @@ def search_casks_online(
     pattern: str,
     api_url: str = CASK_INDEX_API,
     timeout: int = 30,
+    cache_path: Optional[Path] = None,
 ) -> list[Cask]:
     """Search the full formulae.brew.sh cask index as a fallback."""
-    data = _request_json(api_url, timeout=timeout)
+    data = _index_json(api_url, timeout, cache_path=cache_path, ttl=_search_ttl())
     if not isinstance(data, list):
         raise DownloadError(f"{api_url}: expected a JSON array")
     results: list[Cask] = []

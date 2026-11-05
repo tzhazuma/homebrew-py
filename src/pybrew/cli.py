@@ -601,13 +601,20 @@ def cmd_fetch(args: argparse.Namespace) -> int:
 
 def cmd_search(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
+    cache_dir = Path(
+        os.environ.get("PYBREW_SEARCH_CACHE_DIR", str(config.cache / "api"))
+    )
     if getattr(args, "cask", False):
         cask_loader = _cask_loader(config)
         casks = cask_loader.search(args.pattern)
         if not casks:
             api_url = os.environ.get("PYBREW_CASK_SEARCH_API", CASK_INDEX_API)
             try:
-                casks = search_casks_online(args.pattern, api_url=api_url)
+                casks = search_casks_online(
+                    args.pattern,
+                    api_url=api_url,
+                    cache_path=cache_dir / "cask.json",
+                )
             except DownloadError as error:
                 print(f"Error: {error}", file=sys.stderr)
                 return 1
@@ -619,7 +626,11 @@ def cmd_search(args: argparse.Namespace) -> int:
     if not results:
         api_url = os.environ.get("PYBREW_FORMULA_SEARCH_API", FORMULA_INDEX_API)
         try:
-            results = search_formulae_online(args.pattern, api_url=api_url)
+            results = search_formulae_online(
+                args.pattern,
+                api_url=api_url,
+                cache_path=cache_dir / "formula.json",
+            )
         except DownloadError as error:
             print(f"Error: {error}", file=sys.stderr)
             return 1
@@ -1357,7 +1368,7 @@ def cmd_services(args: argparse.Namespace) -> int:
 
 def cmd_doctor(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
-    issues = diagnose_issues(config)
+    issues = diagnose_issues(config, loader=_loader(config) if config.taps else None)
     linkage_payload = None
     if getattr(args, "linkage", False):
         installer = Installer(config, _loader(config))

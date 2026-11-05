@@ -2124,3 +2124,134 @@ def test_evaluator_zap_directives_reach_installer(
     assert trash in removed and deleted in removed and empty_dir in removed
     assert not trash.exists() and not deleted.exists() and not empty_dir.exists()
     assert log.read_text().splitlines() == ["--forget", "com.example.ruby-zappy"]
+
+
+# ---------------------------------------------------------------------------
+# Zap quit/signal/login_item: bounded, test-safe execution
+# ---------------------------------------------------------------------------
+
+
+def _fake_command(path: Path, body: str) -> Path:
+    path.write_text("#!/bin/sh\n" + body + "\n", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def test_zap_quit_signal_login_item_test_safe(
+    cask_env: SimpleNamespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cask = parse_cask_source(
+        'cask "zappy-program" do\n  version "1.0"\n'
+        '  zap quit: ["com.example.one", "com.example.two"],\n'
+        '      signal: [["TERM", "com.example.app"], ["HUP", "com.example.other"]],\n'
+        '      login_item: ["Login One"]\n'
+        'end\n'
+    )
+    osa_log = tmp_path / "osascript.log"
+    osascript = _fake_command(
+        tmp_path / "osascript",
+        "printf '%s\\n' \"$@\" >> " + str(osa_log),
+    )
+    pgrep_log = tmp_path / "pgrep.log"
+    pgrep = _fake_command(
+        tmp_path / "pgrep",
+        "printf '%s\\n' \"$@\" >> " + str(pgrep_log) + "\nprintf '4242\\n'",
+    )
+    kill_log = tmp_path / "kill.log"
+    killer = _fake_command(
+        tmp_path / "kill",
+        "printf '%s\\n' \"$@\" >> " + str(kill_log),
+    )
+    monkeypatch.setenv("PYBREW_OSASCRIPT", str(osascript))
+    monkeypatch.setenv("PYBREW_PGREP", str(pgrep))
+    monkeypatch.setenv("PYBREW_KILL", str(killer))
+
+    removed = cask_env.installer.zap(cask)
+
+    assert removed == []
+    osa = osa_log.read_text()
+    assert "com.example.one" in osa
+    assert "com.example.two" in osa
+    assert "Login One" in osa
+    assert pgrep_log.read_text().splitlines() == [
+        "-f",
+        "com.example.app",
+        "-f",
+        "com.example.other",
+    ]
+    assert kill_log.read_text().splitlines() == [
+        "-TERM",
+        "4242",
+        "-HUP",
+        "4242",
+    ]
+
+
+def test_zap_signal_invalid_directive_is_rejected(
+    cask_env: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cask = parse_cask_source('cask "zappy-bad" do\n  version "1.0"\nend\n')
+    cask.zap_directives["signal"] = [["NOPE", "com.example.app"]]
+    monkeypatch.setenv("PYBREW_PGREP", "/bin/true")
+    monkeypatch.setenv("PYBREW_KILL", "/bin/true")
+
+    with pytest.raises(CaskError, match="unsupported zap signal"):
+        cask_env.installer.zap(cask)
+
+    cask.zap_directives["signal"] = [["TERM"]]
+    with pytest.raises(CaskError, match="each zap signal directive"):
+        cask_env.installer.zap(cask)
+
+
+def test_zap_login_item_path_dictionary(
+    cask_env: SimpleNamespace,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cask = parse_cask_source('cask "zappy-login" do\n  version "1.0"\nend\n')
+    cask.zap_directives["login_item"] = [
+        {"path": "/Applications/Login.app"}
+    ]
+    osa_log = tmp_path / "osascript.log"
+    osascript = _fake_command(
+        tmp_path / "osascript",
+        "printf '%s\\n' \"$@\" >> " + str(osa_log),
+    )
+    monkeypatch.setenv("PYBREW_OSASCRIPT", str(osascript))
+
+    cask_env.installer.zap(cask)
+
+    osa = osa_log.read_text()
+    assert "System Events" in osa
+    assert "path is" in osa
+    assert "/Applications/Login.app" in osa
+
+
+# ---------------------------------------------------------------------------
+# Generic artifact option audit
+# ---------------------------------------------------------------------------
+
+
+def test_generic_artifact_steps_unknown_option_is_precise(
+    cask_env: SimpleNamespace,
+) -> None:
+    archive = cask_env.tmp_path / "Generic-1.0.zip"
+    digest = _make_zip(archive, {"notes.txt": b"notes\n"})
+    _write_cask(
+        cask_env.tap,
+        "generic-audit",
+        "1.0",
+        digest,
+        archive,
+        artifacts=(
+            '  artifact "ignored", steps: [["mkdir", "out"]], '
+            'mode: :copy'
+        ),
+    )
+
+    with pytest.raises(
+        CaskError, match="only steps/dirmethod/base_dir are bounded"
+    ):
+        cask_env.installer.install(cask_env.loader.load("generic-audit"))

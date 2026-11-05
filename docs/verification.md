@@ -3,7 +3,7 @@
 ## Full parity batch 2026-11-05
 
 Closed the documented partial areas across all owners; full suite grew from
-1156 to **1218 passed, 6 skipped**.
+1156 to **1272 passed, 6 skipped**.
 
 - **Cask**: evaluator `zap` now captures trash/delete/rmdir/pkgutil; livecheck
   URL kwargs merge into request headers; installed caskfile falls back to JSON;
@@ -31,6 +31,26 @@ Closed the documented partial areas across all owners; full suite grew from
 - Commits `57d927e` + `54fa7c5`; CI `41973914882` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 - Inventory of the remaining 18 partial areas: `docs/parity-backlog.md`.
 
+
+## Residual parity batch 2026-11-05 (round 3)
+
+- Cask: zap `quit`/`signal`/`login_item` (fake-tool tested), balanced
+  `def`/`class`/`module` script-body capture with deterministic warnings, and
+  literal-parser livecheck URL kwargs/strategy/regex metadata.
+- Test DSL: large-tap (>500 names) dynamic source aliases with an 8 KiB/2000
+  source bound, fork process-group timeout/reap, and Minitest reflection/pattern
+  edge coverage.
+- Superenv: pkg-config integration for installed dependencies, compiler family
+  probe matrix, joined/separated `-Wl` rpath scrubbing, and strict sandbox
+  wrapper tests.
+- Services: canonical `sh.brew.*` labels with legacy aliases, ServiceSpec hash
+  round-trip, env-override warnings, Homebrew-style default log paths.
+- Ruby shim: channel TTL/key cache, 50-page GraphQL pagination and rate-limit
+  retries, broad local Xcode/CLT/SDK detection, dynamic resources/stage forms,
+  custom codesign identity.
+- CLI: online search index caching (`PYBREW_SEARCH_CACHE_DIR`/`TTL`), doctor
+  reports installed formulae deleted from their tap.
+- Full suite: **1272 passed, 6 skipped**; real install verified.
 
 ## Scheduled upstream check 2026-11-05 09:00
 

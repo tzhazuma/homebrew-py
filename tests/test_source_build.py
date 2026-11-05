@@ -2485,3 +2485,247 @@ def test_patch_target_containment_normal_and_traversal(
     fake_patch.chmod(0o755)
     with pytest.raises(source_builder.BuildError, match="no verifiable patch targets"):
         source_builder.SourceBuilder(formula, config)._apply_patches(project)
+
+
+def test_pkg_config_integration_uses_bounded_fake_tool(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    dependency = tmp_path / "pkgdep"
+    (dependency / "include").mkdir(parents=True)
+    (dependency / "lib").mkdir()
+    (dependency / "lib" / "pkgconfig").mkdir()
+    (dependency / "lib" / "pkgconfig" / "foo.pc").write_text(
+        "Name: foo\nVersion: 1.0\n"
+    )
+    fake = tmp_path / "fake-pkg-config"
+    args_log = tmp_path / "pkg-args.txt"
+    path_log = tmp_path / "pkg-path.txt"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" > "$PYBREW_PKG_LOG"\n'
+        'printf "%s\\n" "$PKG_CONFIG_PATH" > "$PYBREW_PKG_PATH_LOG"\n'
+        'case "$1" in\n'
+        f'  --cflags) printf "%s\\n" "-DFROMPC=1 -I{dependency / "include"}";;\n'
+        f'  --libs) printf "%s\\n" "-L{dependency / "lib"} -lfoo";;\n'
+        "esac\n"
+    )
+    fake.chmod(0o755)
+    config = _source_config(tmp_path)
+    env = source_builder.build_environment(
+        config,
+        {
+            "PATH": "/usr/bin:/bin",
+            "PYBREW_PKG_CONFIG": str(fake),
+            "PYBREW_PKG_LOG": str(args_log),
+            "PYBREW_PKG_PATH_LOG": str(path_log),
+        },
+        dependency_paths=[dependency],
+    ).env
+    assert "-DFROMPC=1" in shlex.split(env["CFLAGS"])
+    assert f"-I{dependency / 'include'}" in shlex.split(env["CPPFLAGS"])
+    assert "-lfoo" in shlex.split(env["LDFLAGS"])
+    assert f"-L{dependency / 'lib'}" in shlex.split(env["LDFLAGS"])
+    assert "foo" in args_log.read_text()
+    assert str(dependency / "lib" / "pkgconfig") in path_log.read_text()
+
+    disabled = source_builder.build_environment(
+        config,
+        {
+            "PATH": "/usr/bin:/bin",
+            "PYBREW_PKG_CONFIG": "",
+            "PYBREW_PKG_LOG": str(args_log),
+        },
+        dependency_paths=[dependency],
+    ).env
+    assert "-lfoo" not in shlex.split(disabled["LDFLAGS"])
+
+
+def test_compiler_probe_matrix_classifies_families(tmp_path: Path) -> None:
+    import platform
+    import pybrew.source_builder as source_builder
+
+    fake = tmp_path / "matrix-compiler"
+    fake.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        '  --version) printf "%s\\n" "$PYBREW_PROBE_VERSION"; exit 0;;\n'
+        '  -dumpmachine) printf "%s\\n" "$PYBREW_PROBE_TARGET"; exit 0;;\n'
+        "esac\n"
+        "exit 0\n"
+    )
+    fake.chmod(0o755)
+    target = (
+        "arm64-apple-darwin"
+        if platform.system() == "Darwin"
+        else "x86_64-linux-gnu"
+    )
+    matrix = (
+        ("Apple clang version 15.0.0 (clang-1500.0.40.1)", "apple-clang"),
+        ("clang version 17.0.0", "clang"),
+        ("gcc (GCC) 13.2.1 20230801", "gcc"),
+        ("cc (GCC) 12.2.0", "gcc"),
+    )
+    for version, expected in matrix:
+        selection = source_builder.select_compiler(
+            {
+                "PATH": str(tmp_path),
+                "PYBREW_CC": str(fake),
+                "PYBREW_CXX": str(fake),
+                "PYBREW_PROBE_VERSION": version,
+                "PYBREW_PROBE_TARGET": target,
+            }
+        )
+        assert selection.cc_family == expected, version
+        assert selection.detected_family == expected, version
+
+
+def test_sanitizer_scrubs_joined_and_separated_wl_rpath_forms(
+    tmp_path: Path,
+) -> None:
+    import pybrew.source_builder as source_builder
+
+    tokens = source_builder.sanitize_flag_list(
+        [
+            "-std=c11",
+            "-arch",
+            "arm64",
+            "-O2",
+            "-Wl,-rpath,/usr/lib",
+            "-Wl,-rpath=/usr/local/lib",
+            "-Wl,-R,/lib",
+            "-Wl,-R",
+            "/usr/lib64",
+            "-Wl,-rpath",
+            "-Wl,/usr/local/lib",
+            "-Wl,-rpath-link,/usr/lib",
+            "-Wl,-rpath-link",
+            "/usr/local/lib",
+            "-Wl,-rpath,/opt/foreign/lib",
+        ],
+        tmp_path / "prefix",
+    )
+    text = " ".join(tokens)
+    for forbidden in (
+        "/usr/lib",
+        "/usr/local/lib",
+        "/lib64",
+        "/opt/foreign",
+    ):
+        assert forbidden not in text
+    assert "-std=c11" in tokens
+    assert "-O2" in tokens
+    assert tokens[tokens.index("-arch") + 1] == "arm64"
+
+
+def test_sandbox_strict_profile_and_dsl_system_wrapper(tmp_path: Path) -> None:
+    import pybrew.source_builder as source_builder
+
+    fake = tmp_path / "sandbox-exec"
+    fake.write_text("#!/bin/sh\nexit 0\n")
+    fake.chmod(0o755)
+    cwd = tmp_path / "build"
+    cwd.mkdir()
+    (tmp_path / "keg").mkdir()
+    strict = source_builder.plan_build_sandbox(
+        ["cc"],
+        cwd=cwd,
+        writable_roots=[tmp_path / "keg"],
+        environment={
+            "PYBREW_SANDBOX": "1",
+            "PYBREW_SANDBOX_BINARY": str(fake),
+            "PYBREW_SANDBOX_STRICT": "1",
+        },
+        system="Darwin",
+    )
+    assert strict is not None
+    assert "(deny default)" in strict.profile
+    assert str((tmp_path / "keg").resolve()) in strict.profile
+    assert "(deny network*)" in strict.profile
+
+    project = tmp_path / "sandbox-dsl-src"
+    project.mkdir()
+    (project / "README").write_text("sandbox dsl\n")
+    tap, _ = _make_tap(
+        tmp_path,
+        "sandbox-dsl",
+        "1.0",
+        project,
+        "\n".join(
+            [
+                '    system "/bin/sh", "-c", '
+                "'printf sandboxed > sandbox-output.txt'",
+                '    bin.install "sandbox-output.txt"',
+            ]
+        ),
+    )
+    config = Config.default(
+        prefix=tmp_path / "sandbox-prefix",
+        taps=[tap],
+        cache=tmp_path / "sandbox-cache",
+    )
+    config.ensure()
+    loader = FormulaLoader(discover_taps([tap]))
+    formula = loader.load("sandbox-dsl")
+    sandbox = tmp_path / "dsl-sandbox"
+    sandbox.write_text(
+        "#!/bin/sh\n"
+        'printf "%s\\n" "$*" > "$PYBREW_SANDBOX_LOG"\n'
+        'exec "$@"\n'
+    )
+    sandbox.chmod(0o755)
+    log = tmp_path / "dsl-sandbox.log"
+    installer = Installer(
+        config,
+        loader,
+        environment={
+            "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+            "PYBREW_SANDBOX": "1",
+            "PYBREW_SANDBOX_BINARY": str(sandbox),
+            "PYBREW_SANDBOX_LOG": str(log),
+        },
+    )
+    result = installer.install(
+        formula, InstallOptions(build_from_source=True)
+    )[-1]
+    assert (result.keg / "bin" / "sandbox-output.txt").read_text() == "sandboxed"
+    assert "/bin/sh" in log.read_text()
+
+
+def test_superenv_shim_scrubs_separated_wl_rpath_forms(tmp_path: Path) -> None:
+    import subprocess
+    import pybrew.source_builder as source_builder
+
+    config = _source_config(tmp_path)
+    fake_bin = tmp_path / "fake-bin"
+    cc = _fake_compiler(fake_bin, "clang", "cc-report.txt")
+    cxx = _fake_compiler(fake_bin, "clang++", "cxx-report.txt")
+    prepared = source_builder.build_environment(
+        config,
+        {
+            "PATH": str(fake_bin),
+            "PYBREW_SUPERENV": "1",
+            "PYBREW_CC": str(cc),
+            "PYBREW_CXX": str(cxx),
+        },
+    )
+    subprocess.run(
+        [
+            prepared.env["CC"],
+            "-std=c11",
+            "-Wl,-rpath,/usr/lib",
+            "-Wl,-rpath",
+            "/usr/local/lib",
+            "-Wl,-R",
+            "/lib64",
+            "-c",
+            "unit.c",
+        ],
+        cwd=tmp_path,
+        env=prepared.env,
+        check=True,
+    )
+    argv = shlex.split(_compiler_report(tmp_path / "cc-report.txt")["argv"])
+    assert "-std=c11" in argv
+    assert not any("/usr/lib" in token for token in argv)
+    assert not any("/usr/local/lib" in token for token in argv)
+    assert not any("/lib64" in token for token in argv)

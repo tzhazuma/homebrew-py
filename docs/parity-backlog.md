@@ -27,8 +27,7 @@ token, HS256 JWS, tap Aliases and bounded source aliases.
 
 Remaining:
 
-- multi-channel remote API subsetting (channel-specific TTL/namespace);
-- embedded public-key JWKS fetch/cache and RS256 verification;
+- complete channel-specific TTL/namespace edge cases;
 - full loader choice matrix for ambiguous tap/API/local references.
 
 ### 2. FormulaInstaller fetch/build/deps/link/cleanup
@@ -78,19 +77,18 @@ Remaining: full option propagation across every strategy and redirect path.
 
 ### 7. Cask script shim
 
-Remaining: exact `system_command`/`sudo` safety semantics; script body capture
-for unbalanced lexer input; unsupported zap keys beyond
-trash/delete/rmdir/pkgutil.
+Remaining: kext/script/launchctl/early_script zap actions; exact
+`system_command`/`sudo` semantics; exotic unbalanced Ruby capture.
 
 ### 8. Test DSL arbitrary formula lookup
 
-Remaining: dynamic source-only aliases beyond the eager/lazy scan limits;
-fully lazy tap indexes for >10000 formulae.
+Remaining: aliases beyond the 10000-name / 2000-source / 8 KiB eager bounds;
+fully lazy tap indexes at very large scale.
 
 ### 9. Test DSL dependency test isolation
 
-Remaining: same-process fallback on hosts without `fork`; parent timeout does
-not clean up orphaned child processes.
+Remaining: same-process fallback on hosts without `fork` (timeout process-group
+cleanup is now implemented where `fork`/`setpgid` exist).
 
 ### 10. Test DSL version object / revision
 
@@ -120,8 +118,8 @@ Remaining: broad host detection without env overrides.
 
 ### 15. Utils modules
 
-Remaining: full GraphQL connection coverage (reviews/team/sponsorship pages)
-and exact secondary-rate-limit backoff across all transports.
+Remaining: full GraphQL connection coverage beyond the bounded cursor pages
+(reviews/team/sponsorship edge pages) and exact backoff across every transport.
 
 ### 16. SystemConfig host details
 
@@ -130,13 +128,15 @@ Homebrew detail level.
 
 ### 17. Service Ruby helpers
 
-Remaining: canonical `sh.brew.*` labels vs pybrew `homebrew.mxcl.*`; explicit
-service option persistence; rich service env warning surfaces.
+Remaining: canonical `sh.brew.*` is opt-in (legacy default retained for
+`test_bundle.py`); doctor/cleanup custom-label coverage; hash persistence omits
+local env context. PATH policy is unified and env warnings are surfaced.
 
 ### 18. Patch/resource edge cases
 
-Remaining: dynamic resource names, `stage { }` block form, exotic patch forms
-(brace patch blocks and target containment now implemented).
+Remaining: exotic patch forms beyond `patch do`/brace/`:DATA`/inline/local-file;
+dynamic resources and `stage { }` are implemented. Target containment is in
+place.
 
 ## Execution rule
 

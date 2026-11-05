@@ -1113,7 +1113,14 @@ _SYSTEM_LIBRARY_ROOTS = (
     "/lib",
     "/lib64",
 )
-_RPATH_PREFIXES = ("-Wl,-rpath,", "-Wl,-rpath=", "-Wl,-R,", "-Wl,-R=")
+_RPATH_PREFIXES = (
+    "-Wl,-rpath,",
+    "-Wl,-rpath=",
+    "-Wl,-R,",
+    "-Wl,-R=",
+    "-Wl,-rpath-link,",
+    "-Wl,-rpath-link=",
+)
 
 
 def _path_under(path: str, roots: Iterable[str]) -> bool:
@@ -1173,10 +1180,13 @@ def _flag_value(
     for prefix in _RPATH_PREFIXES:
         if token.startswith(prefix):
             return "rpath", token[len(prefix) :], 1
-    if token == "-Wl,-rpath" and index + 1 < len(arguments):
+    if token in ("-Wl,-rpath", "-Wl,-R", "-Wl,-rpath-link") and (
+        index + 1 < len(arguments)
+    ):
         following = arguments[index + 1]
         if following.startswith("-Wl,"):
-            return "rpath", following[len("-Wl,") :], 2
+            following = following[len("-Wl,") :]
+        return "rpath", following, 2
     return None
 
 
@@ -1441,7 +1451,14 @@ SYSTEM_LIBRARY_ROOTS = (
     "/lib",
     "/lib64",
 )
-RPATH_PREFIXES = ("-Wl,-rpath,", "-Wl,-rpath=", "-Wl,-R,", "-Wl,-R=")
+RPATH_PREFIXES = (
+    "-Wl,-rpath,",
+    "-Wl,-rpath=",
+    "-Wl,-R,",
+    "-Wl,-R=",
+    "-Wl,-rpath-link,",
+    "-Wl,-rpath-link=",
+)
 PREFIX_ROOT = os.path.normpath(prefix)
 PREFIX_INCLUDE = os.path.normpath(include)
 PREFIX_LIBRARY = os.path.normpath(library)
@@ -1500,10 +1517,13 @@ def flag_value(args, index):
     for flag_prefix in RPATH_PREFIXES:
         if token.startswith(flag_prefix):
             return "rpath", token[len(flag_prefix):], 1
-    if token == "-Wl,-rpath" and index + 1 < len(args):
+    if token in ("-Wl,-rpath", "-Wl,-R", "-Wl,-rpath-link") and (
+        index + 1 < len(args)
+    ):
         following = args[index + 1]
         if following.startswith("-Wl,"):
-            return "rpath", following[len("-Wl,"):], 2
+            following = following[len("-Wl,"):]
+        return "rpath", following, 2
     return None
 
 
@@ -1846,6 +1866,9 @@ class CompilerSelection:
     cc_version: Optional[str] = None
     cxx_version: Optional[str] = None
     target: Optional[str] = None
+    cc_family: Optional[str] = None
+    cxx_family: Optional[str] = None
+    detected_family: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -1926,6 +1949,21 @@ def _probe_compiler(
     return run("--version"), run("-dumpmachine")
 
 
+def _classify_compiler(version: Optional[str]) -> Optional[str]:
+    if not version:
+        return None
+    lowered = version.lower()
+    if "apple clang" in lowered:
+        return "apple-clang"
+    if "clang" in lowered:
+        return "clang"
+    if "gcc" in lowered or "free software foundation" in lowered:
+        return "gcc"
+    if lowered.startswith("cc ") or lowered == "cc":
+        return "cc"
+    return None
+
+
 def _compiler_host_warning(target: Optional[str]) -> Optional[str]:
     if not target:
         return None
@@ -1963,6 +2001,8 @@ def _finalize_compiler_selection(
     target = cc_target or cxx_target
     if warning is None:
         warning = _compiler_host_warning(target)
+    cc_family = _classify_compiler(cc_version)
+    cxx_family = _classify_compiler(cxx_version)
     return CompilerSelection(
         cc=cc,
         cxx=cxx,
@@ -1971,6 +2011,9 @@ def _finalize_compiler_selection(
         cc_version=cc_version,
         cxx_version=cxx_version,
         target=target,
+        cc_family=cc_family,
+        cxx_family=cxx_family,
+        detected_family=cc_family or cxx_family,
     )
 
 
@@ -2687,6 +2730,94 @@ def _force_make_jobs(flags: str, jobs: int) -> str:
     return shlex.join(result)
 
 
+_MAX_PKG_CONFIG_MODULES = 32
+
+
+def pkg_config_flags(
+    dependency_paths: Iterable[Path],
+    *,
+    environment: Mapping[str, str],
+    prefix: Path,
+) -> tuple[list[str], list[str]]:
+    """Return bounded cflags/libs from pkg-config for installed deps.
+
+    ``PYBREW_PKG_CONFIG`` (then ``PKG_CONFIG``) overrides the executable;
+    an explicit empty value disables the integration.  Only ``.pc`` modules
+    found under the supplied dependency roots are queried, at most 32, with a
+    short timeout and no network access.
+    """
+
+    if "PYBREW_PKG_CONFIG" in environment:
+        raw = environment.get("PYBREW_PKG_CONFIG", "").strip()
+        if not raw:
+            return [], []
+        try:
+            command = shlex.split(raw)
+        except ValueError:
+            command = [raw]
+    elif environment.get("PKG_CONFIG"):
+        try:
+            command = shlex.split(environment["PKG_CONFIG"])
+        except ValueError:
+            command = [environment["PKG_CONFIG"]]
+    else:
+        found = shutil.which(
+            "pkg-config", path=environment.get("PATH") or os.defpath
+        )
+        if not found:
+            return [], []
+        command = [found]
+    if not command:
+        return [], []
+
+    pc_dirs: list[str] = []
+    modules: list[str] = []
+    for raw_path in dependency_paths:
+        for leaf in ("lib/pkgconfig", "lib64/pkgconfig", "share/pkgconfig"):
+            directory = Path(raw_path) / leaf
+            if not directory.is_dir() or str(directory) in pc_dirs:
+                continue
+            pc_dirs.append(str(directory))
+            for pc_file in sorted(directory.glob("*.pc")):
+                module = pc_file.stem
+                if module and module not in modules:
+                    modules.append(module)
+    if not modules:
+        return [], []
+    modules = modules[:_MAX_PKG_CONFIG_MODULES]
+
+    child_env = dict(environment)
+    existing = environment.get("PKG_CONFIG_PATH", "")
+    path_parts = list(pc_dirs)
+    if existing:
+        path_parts.extend(existing.split(os.pathsep))
+    child_env["PKG_CONFIG_PATH"] = os.pathsep.join(
+        dict.fromkeys(part for part in path_parts if part)
+    )
+
+    def query(flag: str) -> list[str]:
+        try:
+            result = subprocess.run(
+                [*command, flag, *modules],
+                env=child_env,
+                cwd=tempfile.gettempdir(),
+                text=True,
+                capture_output=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return []
+        if result.returncode != 0:
+            return []
+        try:
+            tokens = shlex.split(result.stdout or "")
+        except ValueError:
+            tokens = (result.stdout or "").split()
+        return sanitize_flag_list(tokens, prefix)
+
+    return query("--cflags"), query("--libs")
+
+
 @dataclass(frozen=True)
 class BuildSandboxPlan:
     """A bounded external wrapper for one build command."""
@@ -2836,6 +2967,13 @@ def build_environment(
     ``PYBREW_SDKROOT``/``PYBREW_XCRUN``, and Superenv shims via
     ``PYBREW_SUPERENV=1``.  None of these require full Homebrew Superenv and
     explicit user flags always win.
+
+    Residual Superenv gaps kept intentionally bounded: no full SDK version
+    matrix/Xcode layout emulation, no Homebrew formula-option dependency
+    resolution, no automatic rpath injection for dependencies, no shell quoting
+    for dependency paths containing spaces, pkg-config is limited to discovered
+    ``.pc`` modules (<=32, 5s, no network), and signature/entitlements
+    verification remains outside this module.
     """
 
     env = dict(os.environ if base_env is None else base_env)
@@ -2867,6 +3005,7 @@ def build_environment(
     for dependency in dependencies:
         for pkg_dir in (
             dependency / "lib" / "pkgconfig",
+            dependency / "lib64" / "pkgconfig",
             dependency / "share" / "pkgconfig",
         ):
             if pkg_dir.is_dir():
@@ -2878,9 +3017,14 @@ def build_environment(
         include_dir = dependency / "include"
         if include_dir.is_dir():
             include_flags.append(f"-I{include_dir}")
-        library_dir = dependency / "lib"
-        if library_dir.is_dir():
-            library_flags.append(f"-L{library_dir}")
+        for library_dir in (dependency / "lib", dependency / "lib64"):
+            if library_dir.is_dir():
+                library_flags.append(f"-L{library_dir}")
+    pkg_cflags, pkg_libs = pkg_config_flags(
+        dependencies, environment=env, prefix=prefix
+    )
+    compile_flags = include_flags + pkg_cflags
+    link_flags = library_flags + pkg_libs
     existing_pkg_config = env.get("PKG_CONFIG_PATH", "")
     if existing_pkg_config:
         pkg_config_paths.extend(existing_pkg_config.split(os.pathsep))
@@ -2899,10 +3043,10 @@ def build_environment(
     env["ACLOCAL_PATH"] = os.pathsep.join(
         dict.fromkeys(path for path in aclocal_paths if path)
     )
-    env["CPPFLAGS"] = _merge_flags(env.get("CPPFLAGS", ""), include_flags)
-    env["CFLAGS"] = _merge_flags(env.get("CFLAGS", ""), include_flags)
-    env["CXXFLAGS"] = _merge_flags(env.get("CXXFLAGS", ""), include_flags)
-    env["LDFLAGS"] = _merge_flags(env.get("LDFLAGS", ""), library_flags)
+    env["CPPFLAGS"] = _merge_flags(env.get("CPPFLAGS", ""), compile_flags)
+    env["CFLAGS"] = _merge_flags(env.get("CFLAGS", ""), compile_flags)
+    env["CXXFLAGS"] = _merge_flags(env.get("CXXFLAGS", ""), compile_flags)
+    env["LDFLAGS"] = _merge_flags(env.get("LDFLAGS", ""), link_flags)
     jobs_value = _first_environment_value(
         env, ("PYBREW_MAKE_JOBS", "HOMEBREW_MAKE_JOBS")
     )
@@ -2935,15 +3079,15 @@ def build_environment(
         if objc is not None:
             env["OBJC"] = objc
         env["OBJCFLAGS"] = _merge_flags(
-            env.get("OBJCFLAGS", ""), include_flags
+            env.get("OBJCFLAGS", ""), compile_flags
         )
     elif "OBJCFLAGS" in env:
-        env["OBJCFLAGS"] = _merge_flags(env["OBJCFLAGS"], include_flags)
+        env["OBJCFLAGS"] = _merge_flags(env["OBJCFLAGS"], compile_flags)
     if objcxx is not None or objcxx_standard_configured:
         if objcxx is not None:
             env["OBJCXX"] = objcxx
         env["OBJCXXFLAGS"] = _merge_flags(
-            env.get("OBJCXXFLAGS", ""), include_flags
+            env.get("OBJCXXFLAGS", ""), compile_flags
         )
     elif "OBJCXXFLAGS" in env:
         env["OBJCXXFLAGS"] = _merge_flags(

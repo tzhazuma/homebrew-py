@@ -7846,7 +7846,7 @@ def test_utils_github_graphql_pagination_rate_limit_enterprise(
         "https://ghe.example/api/graphql",
         "https://ghe.example/api/v3/repos/a/b",
         "true",
-        "10",
+        "50",
         "true",
     ]
 
@@ -8333,7 +8333,8 @@ def test_formulary_rs256_envelope_jws_and_embedded_key(
         envelope_payload, alg="PS512", envelope=True, b64=False,
         signing_key=private_pem,
     )
-    tampered = compact_token[:-1] + ("A" if compact_token[-1] != "A" else "B")
+    header_part, payload_part, signature_part = compact_token.split(".")
+    tampered = f"{header_part}.{payload_part}." + ("A" * len(signature_part))
     none_header = base64.urlsafe_b64encode(b'{"alg":"none"}').rstrip(b"=").decode()
     none_token = f"{none_header}.e30.e30"
 
@@ -8788,7 +8789,7 @@ def test_keg_codesign_verification_entitlements_and_identity(
         '    log.include?("--preserve-metadata=entitlements,requirements,flags,runtime").to_s,\n'
         '    log.include?("Test Identity").to_s,\n'
         '    plan["codesign_verify_commands"].length.to_s,\n'
-        '    single["signed"].to_s, single["verified"].to_s,\n'
+        '    single["signed"].to_s, single["verified"].to_s, single["identity"],\n'
         '    non_strict["codesign_verified"].first["verified"].to_s,\n'
         '    strict,\n'
         '    (count.call("--verify") >= 4).to_s\n'
@@ -8806,6 +8807,7 @@ def test_keg_codesign_verification_entitlements_and_identity(
         "1",
         "true",
         "true",
+        "Test Identity",
         "false",
         "RuntimeError|true",
         "true",
@@ -8892,3 +8894,258 @@ def test_dynamic_resource_names_stage_target_and_declared_metadata(
         "https://example.test/patch-3.0.diff",
         "true",
     ]
+
+
+# ---------------------------------------------------------------------------
+# Residual parity wave: channel TTL, embedded-key cache, >10-page GraphQL
+# pagination + secondary backoff, broad local MacOS/CLT detection and codesign
+# identity round-trips.
+# ---------------------------------------------------------------------------
+
+
+def test_formulary_channel_ttl_and_embedded_key_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    counter = tmp_path / "api-fetch-count.txt"
+    fake_curl = tmp_path / "ttl-curl"
+    fake_curl.write_text(
+        "#!/bin/sh\n"
+        'count_file="' + str(counter) + '"\n'
+        'count=$(cat "$count_file" 2>/dev/null || echo 0)\n'
+        'printf \'%s\' "$((count + 1))" > "$count_file"\n'
+        "printf '%s' '{\"formulae\":[{\"name\":\"ttl-one\",\"desc\":\"ttl\",\"version\":\"1.0\"}]}'\n"
+    )
+    fake_curl.chmod(0o755)
+    monkeypatch.setenv("PYBREW_FORMULA_API_URL_STABLE", "https://api.example.test/stable.json")
+    monkeypatch.setenv("PYBREW_FORMULA_API_URL_BETA", "https://api.example.test/beta.json")
+    monkeypatch.setenv("PYBREW_FORMULA_API_CHANNELS", "stable,beta")
+    monkeypatch.setenv("PYBREW_FORMULA_API_CURL", str(fake_curl))
+    body = (
+        '  count = lambda { Pathname.new("' + str(counter) + '").read.to_i }\n'
+        '  ENV["PYBREW_FORMULA_API_TTL"] = "3600"\n'
+        '  Formulary.ensure_api_json_loaded\n'
+        '  first = count.call\n'
+        '  Formulary.ensure_api_json_loaded\n'
+        '  cached = count.call\n'
+        '  ENV["PYBREW_FORMULA_API_TTL"] = "0"\n'
+        '  Formulary.ensure_api_json_loaded\n'
+        '  expired = count.call\n'
+        '  ENV["PYBREW_FORMULA_API_TTL"] = "3600"\n'
+        '  Formulary.ensure_api_json_loaded\n'
+        '  after_expiry = count.call\n'
+        '  (prefix/"channel-ttl.txt").write [\n'
+        '    first.to_s, cached.to_s, expired.to_s, after_expiry.to_s,\n'
+        '    Formulary.api_json_ttl_seconds.to_s\n'
+        '  ].join("\\n")\n'
+    )
+    keg = _run_raw_body(tmp_path, body, name="ruby-channel-ttl")
+    assert (keg / "channel-ttl.txt").read_text().splitlines() == [
+        "2",
+        "2",
+        "4",
+        "4",
+        "3600",
+    ]
+
+    _, _, public_pem = _ruby_rsa_jws(
+        {"formulae": [{"name": "cache-key", "desc": "d", "version": "1.0"}]}
+    )
+    key_path = tmp_path / "cache-key.pem"
+    key_path.write_text(public_pem)
+    key_body = (
+        '  ENV["PYBREW_FORMULA_API_JWS_PUBLIC_KEY"] = "' + str(key_path) + '"\n'
+        '  first = Formulary.jws_public_key\n'
+        '  second = Formulary.jws_public_key\n'
+        '  cached = first.equal?(second)\n'
+        '  size = Formulary.jws_public_key_cache_size\n'
+        '  Formulary.clear_cache\n'
+        '  cleared = Formulary.jws_public_key_cache_size\n'
+        '  (prefix/"key-cache.txt").write [\n'
+        '    cached.to_s, size.to_s, cleared.to_s,\n'
+        '    (first.is_a?(OpenSSL::PKey::RSA)).to_s\n'
+        '  ].join("\\n")\n'
+    )
+    keg2 = _run_raw_body(tmp_path, key_body, name="ruby-key-cache")
+    assert (keg2 / "key-cache.txt").read_text().splitlines() == [
+        "true",
+        "1",
+        "0",
+        "true",
+    ]
+
+
+def test_github_graphql_pagination_beyond_ten_pages_and_secondary_backoff(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    count_file = tmp_path / "graphql-count.txt"
+    paged = tmp_path / "graphql-many-pages"
+    paged.write_text(
+        "#!/usr/bin/ruby\n"
+        'require "json"\n'
+        'args = ARGV\n'
+        'data_index = args.index("--data")\n'
+        'payload = data_index ? JSON.parse(args[data_index + 1]) : {}\n'
+        'after = payload.dig("variables", "after").to_s\n'
+        'n = after[/\\d+/].to_i\n'
+        'count_file = ENV.fetch("FAKE_GRAPHQL_COUNT")\n'
+        'count = File.exist?(count_file) ? File.read(count_file).to_i : 0\n'
+        'File.write(count_file, (count + 1).to_s)\n'
+        'has_next = n < 11\n'
+        'node = { "number" => n + 1, "title" => "foo: update #{n + 1}",\n'
+        '         "url" => "https://github.com/homebrew/foo/pull/#{n + 1}",\n'
+        '         "state" => "OPEN" }\n'
+        'puts JSON.generate({ "data" => { "rateLimit" => { "remaining" => 10 },\n'
+        '  "repository" => { "pullRequests" => {\n'
+        '    "pageInfo" => { "hasNextPage" => has_next,\n'
+        '                    "endCursor" => has_next ? "c#{n + 1}" : nil },\n'
+        '    "nodes" => [node] } } } })\n'
+    )
+    paged.chmod(0o755)
+    monkeypatch.setenv("FAKE_GRAPHQL_COUNT", str(count_file))
+
+    retry_count = tmp_path / "retry-count.txt"
+    retrying = tmp_path / "github-retrying"
+    retrying.write_text(
+        "#!/bin/sh\n"
+        'headers=""\n'
+        'prev=""\n'
+        'url=""\n'
+        'for arg in "$@"; do\n'
+        '  if [ "$prev" = "-D" ]; then headers="$arg"; fi\n'
+        '  case "$arg" in http*) url="$arg" ;; esac\n'
+        '  prev="$arg"\n'
+        'done\n'
+        'count_file="' + str(retry_count) + '"\n'
+        'count=$(cat "$count_file" 2>/dev/null || echo 0)\n'
+        'printf \'%s\' "$((count + 1))" > "$count_file"\n'
+        'if [ "$count" = "0" ]; then\n'
+        "  printf 'HTTP/1.1 403 Forbidden\\r\\nretry-after: 0\\r\\n\\r\\n' > \"$headers\"\n"
+        "  printf '%s' '{\"message\":\"secondary rate limit\"}'\n"
+        'else\n'
+        "  printf 'HTTP/1.1 200 OK\\r\\n\\r\\n' > \"$headers\"\n"
+        "  printf '%s' '{\"ok\":true}'\n"
+        'fi\n'
+    )
+    retrying.chmod(0o755)
+
+    graphql_retry_count = tmp_path / "graphql-retry-count.txt"
+    graphql_retry = tmp_path / "graphql-retry"
+    graphql_retry.write_text(
+        "#!/bin/sh\n"
+        'count_file="' + str(graphql_retry_count) + '"\n'
+        'count=$(cat "$count_file" 2>/dev/null || echo 0)\n'
+        'printf \'%s\' "$((count + 1))" > "$count_file"\n'
+        'if [ "$count" = "0" ]; then\n'
+        "  printf '%s' '{\"errors\":[{\"type\":\"RATE_LIMITED\",\"message\":\"rate limited\"}],"
+        "\"data\":{\"rateLimit\":{\"resetAt\":\"2020-01-01T00:00:00Z\"}}}'\n"
+        'else\n'
+        "  printf '%s' '{\"data\":{\"rateLimit\":{\"remaining\":7},\"viewer\":{\"login\":\"octo\"}}}'\n"
+        'fi\n'
+    )
+    graphql_retry.chmod(0o755)
+
+    body = (
+        '  ENV["PYBREW_GITHUB_CURL"] = "' + str(paged) + '"\n'
+        '  nodes = Utils::GitHub.graphql_paginated_nodes(\n'
+        '    "query($after: String) { nodes }", {}, ["repository"],\n'
+        '    max_pages: 12, rate_limit_retries: 1\n'
+        '  )\n'
+        '  nodes = Utils::GitHub.graphql_paginated_nodes(\n'
+        '    "query { repository { pullRequests } }", {}, ["repository", "pullRequests"]\n'
+        '  ) if nodes.empty?\n'
+        '  prs = Utils::GitHub.graphql_fetch_pull_requests("foo", "homebrew/foo", state: "open")\n'
+        '  ENV["PYBREW_GITHUB_CURL"] = "' + str(retrying) + '"\n'
+        '  ENV["PYBREW_GITHUB_MAX_BACKOFF"] = "0"\n'
+        '  retried = Utils::GitHub.get_json("https://api.github.com/rate", retries: 1)\n'
+        '  calls = Pathname.new("' + str(retry_count) + '").read.to_i\n'
+        '  ENV["PYBREW_GITHUB_CURL"] = "' + str(graphql_retry) + '"\n'
+        '  graphql_retried = Utils::GitHub.graphql_paginated_nodes(\n'
+        '    "query { viewer { login } }", {}, ["viewer"], rate_limit_retries: 1\n'
+        '  )\n'
+        '  gql_calls = Pathname.new("' + str(graphql_retry_count) + '").read.to_i\n'
+        '  (prefix/"graphql-residual.txt").write [\n'
+        '    prs.length.to_s, prs.last["number"].to_s,\n'
+        '    Utils::GitHub.graphql_pagination_truncated?.to_s,\n'
+        '    retried["ok"].to_s, calls.to_s,\n'
+        '    Utils::GitHub.rate_limit_backoff_seconds(\n'
+        '      Utils::GitHub::API::RateLimitExceededError.new("x", reset: Time.now.to_i - 10)\n'
+        '    ).to_s,\n'
+        '    graphql_retried.is_a?(Array).to_s, gql_calls.to_s\n'
+        '  ].join("\\n")\n'
+    )
+    keg = _run_raw_body(tmp_path, body, name="ruby-graphql-residual")
+    lines = (keg / "graphql-residual.txt").read_text().splitlines()
+    assert lines[0] == "12"
+    assert lines[1] == "12"
+    assert lines[2] == "false"
+    assert lines[3] == "true"
+    assert lines[4] == "2"
+    assert lines[5] == "0"
+    assert lines[6] == "true"
+    assert lines[7] == "2"
+
+
+def test_macos_broad_local_detection_with_fake_xcrun_clt_and_system_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ALLOW_ENV, "1")
+    sdk_path = tmp_path / "MacOSX14.5.sdk"
+    sdk_path.mkdir()
+    (sdk_path / "SDKSettings.json").write_text(json.dumps({"Version": "14.5"}))
+    developer_dir = tmp_path / "Xcode.app" / "Contents" / "Developer"
+    (developer_dir / "Platforms/MacOSX.platform/Developer/SDKs").mkdir(parents=True)
+    fake_xcrun = tmp_path / "xcrun"
+    fake_xcrun.write_text(
+        "#!/bin/sh\n"
+        'case "$*" in\n'
+        "  *--show-sdk-path*) printf '%s\\n' \"" + str(sdk_path) + "\" ;;\n"
+        "  *--show-sdk-version*) printf '14.5\\n' ;;\n"
+        "esac\n"
+    )
+    fake_xcrun.chmod(0o755)
+    fake_select = tmp_path / "xcode-select"
+    fake_select.write_text(
+        "#!/bin/sh\nprintf '%s\\n' \"" + str(developer_dir) + "\"\n"
+    )
+    fake_select.chmod(0o755)
+    fake_pkgutil = tmp_path / "pkgutil"
+    fake_pkgutil.write_text(
+        "#!/bin/sh\nprintf 'package-id: com.apple.pkg.CLTools_Executables\\n"
+        "version: 15.3.0.1\\n'\n"
+    )
+    fake_pkgutil.chmod(0o755)
+    monkeypatch.setenv("PYBREW_XCRUN", str(fake_xcrun))
+    monkeypatch.setenv("PYBREW_XCODE_SELECT", str(fake_select))
+    monkeypatch.setenv("PYBREW_PKGUTIL", str(fake_pkgutil))
+    monkeypatch.setenv("HOMEBREW_MACOS_VERSION", "14.5")
+    monkeypatch.delenv("HOMEBREW_SDKROOT", raising=False)
+    monkeypatch.delenv("HOMEBREW_SDK_PATH", raising=False)
+    monkeypatch.delenv("HOMEBREW_SDK_VERSION", raising=False)
+    monkeypatch.delenv("HOMEBREW_XCODE_VERSION", raising=False)
+    monkeypatch.delenv("HOMEBREW_CLT_VERSION", raising=False)
+    body = (
+        '  sdk = MacOS.sdk\n'
+        '  clt = MacOS::CLT.version\n'
+        '  (prefix/"broad-macos.txt").write [\n'
+        '    sdk.nil? ? "nil" : sdk.path.to_s,\n'
+        '    sdk.nil? ? "nil" : sdk.version.to_s,\n'
+        '    MacOS.active_developer_dir.to_s,\n'
+        '    MacOS::Xcode.installed?.to_s,\n'
+        '    clt.nil? ? "nil" : clt.to_s,\n'
+        '    SystemConfig.describe_sdk.include?("MacOSX14.5.sdk").to_s,\n'
+        '    SystemConfig.describe_clt.to_s,\n'
+        '    MacOS::CLT.installed?.to_s\n'
+        '  ].join("\\n")\n'
+    )
+    keg = _run_raw_body(tmp_path, body, name="ruby-broad-macos")
+    lines = (keg / "broad-macos.txt").read_text().splitlines()
+    assert lines[0] == str(sdk_path)
+    assert lines[1] == "14.5"
+    assert lines[2] == str(developer_dir)
+    assert lines[3] == "true"
+    assert lines[4] == "15.3.0.1"
+    assert lines[5] == "true"
+    assert lines[6] == "15.3.0.1"
+    assert lines[7] == "true"

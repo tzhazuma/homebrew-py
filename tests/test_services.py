@@ -14,6 +14,8 @@ from pybrew.models import Formula
 from pybrew.paths import Config
 from pybrew.ruby_parser import parse_formula_source
 from pybrew.services import (
+    SERVICE_DEFAULT_LOGS_ENV,
+    SERVICE_NAME_STYLE_ENV,
     SERVICE_PATH_MODE_ENV,
     USER_CONFIG_HOME_ENV,
     LaunchctlRunner,
@@ -204,7 +206,7 @@ def test_literal_parser_reads_user_service_env(
 ) -> None:
     config = _config(tmp_path, monkeypatch)
     user_home = tmp_path / "user-config"
-    _write_user_env(
+    env_path = _write_user_env(
         user_home,
         "svc",
         """
@@ -249,8 +251,11 @@ def test_literal_parser_reads_user_service_env(
         "BAR": "value=with=equals",
         "SPACED": "trimmed",
     }
-    # Unknown directives keep their warning surface (shared with the evaluator).
-    assert spec.warnings == ["unsupported service directive `frobnicate`"]
+    # Unknown directives and skipped env lines share the warning surface.
+    assert spec.warnings == [
+        "unsupported service directive `frobnicate`",
+        f"Skipping invalid line in {env_path}: NOT A PAIR",
+    ]
 
     manager = ServiceManager(config)
     payload = manager.plist_payload(formula, spec)
@@ -1610,10 +1615,41 @@ def test_working_dir_takes_precedence_over_root_dir(
     assert f"RootDirectory={home / 'root'}" in unit
 
 
-def test_default_log_paths_when_service_paths_are_missing(
+def test_no_synthetic_log_paths_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Parity decision: only declared log/error paths are rendered.
+
+    Homebrew does not write ``var/log/<name>.log`` defaults, so pybrew does not
+    either unless ``PYBREW_SERVICE_DEFAULT_LOGS=1`` restores the old behaviour.
+    """
+
+    config = _config(tmp_path, monkeypatch)
+    monkeypatch.delenv("PYBREW_SERVICE_DEFAULT_LOGS", raising=False)
+    manager = ServiceManager(config)
+    formula = _formula()
+    spec = ServiceSpec(run=["/opt/svc/bin/svc"])
+
+    payload = manager.plist_payload(formula, spec)
+    assert "StandardOutPath" not in payload
+    assert "StandardErrorPath" not in payload
+    assert "WorkingDirectory" not in payload
+    assert "RootDirectory" not in payload
+    assert "StandardInPath" not in payload
+
+    unit = manager.unit_text(formula, spec)
+    assert "StandardOutput=" not in unit
+    assert "StandardError=" not in unit
+    assert "WorkingDirectory=" not in unit
+    assert "RootDirectory=" not in unit
+    assert "StandardInput=" not in unit
+
+
+def test_legacy_default_log_paths_are_opt_in(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = _config(tmp_path, monkeypatch)
+    monkeypatch.setenv("PYBREW_SERVICE_DEFAULT_LOGS", "1")
     manager = ServiceManager(config)
     formula = _formula()
     spec = ServiceSpec(run=["/opt/svc/bin/svc"])
@@ -1622,36 +1658,30 @@ def test_default_log_paths_when_service_paths_are_missing(
     payload = manager.plist_payload(formula, spec)
     assert payload["StandardOutPath"] == default_log
     assert payload["StandardErrorPath"] == default_log
-    assert "WorkingDirectory" not in payload
-    assert "RootDirectory" not in payload
-    assert "StandardInPath" not in payload
 
     unit = manager.unit_text(formula, spec)
     assert f"StandardOutput=append:{default_log}" in unit
     assert f"StandardError=append:{default_log}" in unit
-    assert "WorkingDirectory=" not in unit
-    assert "RootDirectory=" not in unit
-    assert "StandardInput=" not in unit
 
 
-def test_only_one_custom_log_path_keeps_the_other_default(
+def test_only_declared_log_path_is_rendered(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config = _config(tmp_path, monkeypatch)
+    monkeypatch.delenv("PYBREW_SERVICE_DEFAULT_LOGS", raising=False)
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
     manager = ServiceManager(config)
     formula = _formula()
-    default_log = str(config.prefix / "var" / "log" / "svc.log")
     spec = ServiceSpec(run=["/opt/svc/bin/svc"], log_path="~/custom.out")
 
     payload = manager.plist_payload(formula, spec)
     assert payload["StandardOutPath"] == str(home / "custom.out")
-    assert payload["StandardErrorPath"] == default_log
+    assert "StandardErrorPath" not in payload
 
     unit = manager.unit_text(formula, spec)
     assert f"StandardOutput=append:{home / 'custom.out'}" in unit
-    assert f"StandardError=append:{default_log}" in unit
+    assert "StandardError=" not in unit
     assert f"ExecStart={shlex.join(spec.run)}" in unit
 
 
@@ -1818,3 +1848,427 @@ def test_systemd_interval_timer_and_start(
     manager.start(formula)
     assert manager.timer_path(formula).is_file()
     assert "start homebrew.mxcl.svc.timer" in log.read_text()
+
+
+# ---------------------------------------------------------------------------
+# Canonical sh.brew.* labels with legacy homebrew.mxcl.* aliases
+# ---------------------------------------------------------------------------
+
+
+class _RecordingRunner:
+    """Minimal ServiceManager runner that records calls and fake statuses."""
+
+    def __init__(self, started: tuple[str, ...] = ()) -> None:
+        self.started = set(started)
+        self.calls: list[tuple[str, ...]] = []
+
+    def status(self, label: str) -> str:
+        self.calls.append(("status", label))
+        return "started" if label in self.started else "stopped"
+
+    def start(self, *args: object) -> None:
+        self.calls.append(("start", *[str(arg) for arg in args]))
+
+    def stop(self, *args: object) -> None:
+        self.calls.append(("stop", *[str(arg) for arg in args]))
+
+    def daemon_reload(self) -> None:
+        self.calls.append(("daemon-reload",))
+
+
+def test_default_name_style_keeps_pybrew_legacy_label(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    monkeypatch.delenv(SERVICE_NAME_STYLE_ENV, raising=False)
+    manager = ServiceManager(config)
+    formula = _formula()
+    spec = manager.spec_for(formula)
+
+    assert manager.label(formula, spec) == "homebrew.mxcl.svc"
+    assert manager.plist_path(formula, spec).name == "homebrew.mxcl.svc.plist"
+    assert manager.labels(formula, spec) == [
+        "homebrew.mxcl.svc",
+        "sh.brew.svc",
+        "homebrew.svc",
+    ]
+
+
+@pytest.mark.parametrize("style_env", ["canonical", "brew", "homebrew", "sh.brew"])
+def test_canonical_name_style_writes_sh_brew_labels(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, style_env: str
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    monkeypatch.setenv(SERVICE_NAME_STYLE_ENV, style_env)
+    runner = _RecordingRunner()
+    manager = ServiceManager(config, runner=runner)
+    formula = _formula()
+    spec = manager.spec_for(formula)
+
+    assert manager.label(formula, spec) == "sh.brew.svc"
+    assert manager.plist_path(formula, spec).name == "sh.brew.svc.plist"
+    assert manager.labels(formula, spec)[0] == "sh.brew.svc"
+    assert "homebrew.mxcl.svc" in manager.labels(formula, spec)
+
+    payload = manager.plist_payload(formula, spec)
+    assert payload["Label"] == "sh.brew.svc"
+
+
+def test_explicit_names_disable_alias_lookup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    monkeypatch.setenv(SERVICE_NAME_STYLE_ENV, "canonical")
+    manager = ServiceManager(config)
+    formula = _formula_with_service(
+        'run [opt_bin/"svc"]\n'
+        'name macos: "com.example.svc", linux: "custom-svc"'
+    )
+    spec = manager.spec_for(formula)
+
+    assert manager.label(formula, spec) == "com.example.svc"
+    assert manager.labels(formula, spec) == ["com.example.svc"]
+    manager.backend = "systemd"
+    assert manager.label(formula, spec) == "custom-svc"
+    assert manager.labels(formula, spec) == ["custom-svc"]
+
+
+def test_status_resolves_running_legacy_alias(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    monkeypatch.setenv(SERVICE_NAME_STYLE_ENV, "canonical")
+    manager = ServiceManager(config)
+    formula = _formula()
+    spec = manager.spec_for(formula)
+    legacy = manager.directory / "homebrew.mxcl.svc.plist"
+    manager.directory.mkdir(parents=True, exist_ok=True)
+    legacy.write_text("legacy plist")
+    runner = _RecordingRunner(started=("homebrew.mxcl.svc",))
+    manager.runner = runner
+
+    assert manager.status(formula) == "started"
+    assert ("status", "sh.brew.svc") in runner.calls
+    assert ("status", "homebrew.mxcl.svc") in runner.calls
+
+
+def test_status_none_when_no_alias_file_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    manager = ServiceManager(config)
+    runner = _RecordingRunner()
+    manager.runner = runner
+
+    assert manager.status(_formula()) == "none"
+    assert runner.calls == []
+
+
+def test_stop_and_remove_handle_legacy_alias_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    monkeypatch.setenv(SERVICE_NAME_STYLE_ENV, "canonical")
+    manager = ServiceManager(config)
+    formula = _formula()
+    spec = manager.spec_for(formula)
+    legacy = manager.directory / "homebrew.mxcl.svc.plist"
+    manager.directory.mkdir(parents=True, exist_ok=True)
+    legacy.write_text("legacy plist")
+    runner = _RecordingRunner()
+    manager.runner = runner
+
+    stopped = manager.stop(formula, spec)
+    assert stopped == legacy
+    assert ("stop", "homebrew.mxcl.svc", str(legacy)) in runner.calls
+
+    manager.remove(formula)
+    assert not legacy.exists()
+
+
+def test_remove_cleans_all_label_aliases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    manager = ServiceManager(config)
+    formula = _formula()
+    manager.directory.mkdir(parents=True, exist_ok=True)
+    paths = [
+        manager.directory / "homebrew.mxcl.svc.plist",
+        manager.directory / "sh.brew.svc.plist",
+    ]
+    for path in paths:
+        path.write_text("plist")
+    runner = _RecordingRunner()
+    manager.runner = runner
+
+    manager.remove(formula)
+
+    assert all(not path.exists() for path in paths)
+    # Explicit custom labels are still never touched by remove() for others.
+    assert {call[0] for call in runner.calls} == {"stop"}
+
+
+def test_cleanup_removes_canonical_and_legacy_orphans(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    manager = ServiceManager(config)
+    formula = _formula()
+    _install_fake_keg(config, formula)
+    manager.directory.mkdir(parents=True, exist_ok=True)
+    stale = [
+        manager.directory / "sh.brew.ghost.plist",
+        manager.directory / "homebrew.mxcl.ghost.plist",
+        manager.directory / "sh.brew.ghost.service",
+    ]
+    kept = [
+        manager.directory / "homebrew.mxcl.svc.plist",
+        manager.directory / "sh.brew.svc.plist",
+    ]
+    for path in [*stale, *kept]:
+        path.write_text("service")
+
+    removed = manager.cleanup()
+
+    assert set(removed) == set(stale)
+    assert all(path.exists() for path in kept)
+
+
+def test_systemd_canonical_label_and_legacy_alias(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    monkeypatch.setenv("PYBREW_SERVICE_BACKEND", "systemd")
+    runner = _RecordingRunner(started=("homebrew.mxcl.svc.service",))
+    manager = ServiceManager(config, runner=runner, name_style="canonical")
+    formula = _formula()
+    spec = manager.spec_for(formula)
+    manager.directory.mkdir(parents=True, exist_ok=True)
+    (manager.directory / "homebrew.mxcl.svc.service").write_text("legacy unit")
+
+    assert manager.label(formula, spec) == "sh.brew.svc"
+    assert manager.unit_path(formula, spec).name == "sh.brew.svc.service"
+    assert manager.status(formula) == "started"
+    assert ("status", "homebrew.mxcl.svc.service") in runner.calls
+
+
+# ---------------------------------------------------------------------------
+# Service option persistence (to_hash/from_hash round-trip)
+# ---------------------------------------------------------------------------
+
+
+def test_service_spec_to_hash_round_trip_preserves_options() -> None:
+    spec = ServiceSpec(
+        run=["/opt/svc/bin/svc", "--flag"],
+        working_dir="/var/lib/svc",
+        log_path="/var/log/svc.log",
+        error_log_path="/var/log/svc.err",
+        keep_alive={"successful_exit": True},
+        run_at_load=False,
+        interval=300,
+        process_type="background",
+        run_type="interval",
+        plist_name="com.example.svc",
+        service_name="custom-svc",
+        environment_variables={"FOO": "bar"},
+        require_root=True,
+        throttle_interval=5,
+        launch_only_once=True,
+        macos_legacy_timers=True,
+        nice=5,
+        restart_delay=7,
+        stop_timeout=9,
+        root_dir="/root",
+        input_path="/tmp/in",
+        cron={
+            "Minute": 0,
+            "Hour": 0,
+            "Day": "*",
+            "Month": "*",
+            "Weekday": "*",
+        },
+        sockets={"http": {"host": "127.0.0.1", "port": "8080", "type": "tcp"}},
+        run_type_explicit=True,
+    )
+
+    data = spec.to_hash()
+    restored = ServiceSpec.from_hash(data)
+
+    assert restored.run == spec.run
+    assert restored.working_dir == spec.working_dir
+    assert restored.log_path == spec.log_path
+    assert restored.error_log_path == spec.error_log_path
+    assert restored.keep_alive == spec.keep_alive
+    assert restored.run_at_load is False
+    assert restored.run_type == "interval"
+    assert restored.run_type_explicit is True
+    assert restored.interval == 300
+    assert restored.process_type == "background"
+    assert restored.plist_name == "com.example.svc"
+    assert restored.service_name == "custom-svc"
+    assert restored.environment_variables == {"FOO": "bar"}
+    assert restored.require_root is True
+    assert restored.throttle_interval == 5
+    assert restored.launch_only_once is True
+    assert restored.macos_legacy_timers is True
+    assert restored.nice == 5
+    assert restored.restart_delay == 7
+    assert restored.stop_timeout == 9
+    assert restored.root_dir == "/root"
+    assert restored.input_path == "/tmp/in"
+    assert restored.parse_cron() == spec.parse_cron()
+    assert restored.sockets == spec.sockets
+
+
+def test_to_hash_excludes_local_parse_context() -> None:
+    spec = ServiceSpec(
+        run=["/opt/svc/bin/svc"],
+        user_environment_variables={"FOO": "user"},
+        user_config_home="/home/user/.config/homebrew",
+        formula_name="svc",
+        warnings=["unsupported service directive `x`"],
+    )
+
+    data = spec.to_hash()
+
+    assert "user_environment_variables" not in data
+    assert "user_environment" not in data
+    assert "user_config_home" not in data
+    assert "formula_name" not in data
+    assert "warnings" not in data
+
+
+def test_from_hash_accepts_homebrew_service_shapes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("PYBREW_TARGET_OS", "linux")
+    data = {
+        "name": {"macos": "com.example.svc", "linux": "custom-svc"},
+        "run": {"macos": "/opt/mac/bin/svc", "linux": ["/opt/linux/bin/svc", "--f"]},
+        "run_type": "cron",
+        "cron": "0 6 * * 1",
+        "keep_alive": True,
+        "environment_variables": {"FOO": 1, "NONE": None},
+        "sockets": "tcp://127.0.0.1:8080",
+        "working_dir": "/var/lib/svc",
+        "launch_only_once": True,
+        "unknown": "ignored",
+    }
+
+    spec = ServiceSpec.from_hash(data)
+
+    assert spec.run == ["/opt/linux/bin/svc", "--f"]
+    assert spec.run_type == "cron"
+    assert spec.run_type_explicit is True
+    assert spec.parse_cron() == {
+        "Minute": 0,
+        "Hour": 6,
+        "Day": "*",
+        "Month": "*",
+        "Weekday": 1,
+    }
+    assert spec.keep_alive is True
+    assert spec.environment_variables == {"FOO": "1", "NONE": ""}
+    assert spec.sockets == {
+        "listeners": {"host": "127.0.0.1", "port": "8080", "type": "tcp"}
+    }
+    assert spec.working_dir == "/var/lib/svc"
+    assert spec.launch_only_once is True
+    assert spec.plist_name == "com.example.svc"
+    assert spec.service_name == "custom-svc"
+
+
+def test_from_hash_rejects_bad_shapes() -> None:
+    with pytest.raises(ServiceError, match="mapping"):
+        ServiceSpec.from_hash(["not", "a", "mapping"])  # type: ignore[arg-type]
+    with pytest.raises(ServiceError, match="run"):
+        ServiceSpec.from_hash({"run": 42})
+
+
+# ---------------------------------------------------------------------------
+# User env skip warnings
+# ---------------------------------------------------------------------------
+
+
+def _env_formula() -> Formula:
+    return _formula_with_service('run [opt_bin/"svc"]\nenvironment_variables FOO: "formula"')
+
+
+def test_user_env_world_writable_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, non_root: None
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    user_home = tmp_path / "user-config"
+    env_path = _write_user_env(user_home, "svc", "FOO=override\n", mode=0o666)
+    monkeypatch.setenv(USER_CONFIG_HOME_ENV, str(user_home))
+
+    spec = parse_service_block(_env_formula(), config)
+
+    assert spec.user_environment_variables == {}
+    assert spec.effective_environment_variables()["FOO"] == "formula"
+    assert spec.warnings == [f"Skipping {env_path}: file is world-writable."]
+
+
+def test_user_env_group_writable_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, non_root: None
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    user_home = tmp_path / "user-config"
+    env_path = _write_user_env(user_home, "svc", "FOO=override\n", mode=0o664)
+    monkeypatch.setenv(USER_CONFIG_HOME_ENV, str(user_home))
+
+    spec = parse_service_block(_env_formula(), config)
+
+    assert spec.warnings == [f"Skipping {env_path}: file is group-writable."]
+
+
+def test_user_env_root_service_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    user_home = tmp_path / "user-config"
+    env_path = _write_user_env(user_home, "svc", "FOO=override\n")
+    monkeypatch.setenv(USER_CONFIG_HOME_ENV, str(user_home))
+    monkeypatch.setattr(os, "geteuid", lambda: 0, raising=False)
+
+    spec = parse_service_block(_env_formula(), config)
+
+    assert spec.user_environment_variables == {}
+    assert spec.warnings == [
+        f"Skipping {env_path}: user env overrides are not supported for root services."
+    ]
+
+
+def test_user_env_warnings_are_deduplicated_on_render(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, non_root: None
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    user_home = tmp_path / "user-config"
+    _write_user_env(user_home, "svc", "FOO=override\n", mode=0o666)
+    monkeypatch.setenv(USER_CONFIG_HOME_ENV, str(user_home))
+    formula = _env_formula()
+    spec = parse_service_block(formula, config)
+    manager = ServiceManager(config)
+
+    manager.plist_payload(formula, spec)
+    manager.unit_text(formula, spec)
+
+    assert len(spec.warnings) == 1
+    assert "world-writable" in spec.warnings[0]
+
+
+def test_user_env_warnings_are_json_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, non_root: None
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    user_home = tmp_path / "user-config"
+    _write_user_env(user_home, "svc", "FOO=override\nNOT A PAIR\n", mode=0o600)
+    monkeypatch.setenv(USER_CONFIG_HOME_ENV, str(user_home))
+
+    spec = parse_service_block(_env_formula(), config)
+
+    assert json.loads(json.dumps({"warnings": spec.warnings})) == {
+        "warnings": spec.warnings
+    }
+    assert all(isinstance(warning, str) for warning in spec.warnings)

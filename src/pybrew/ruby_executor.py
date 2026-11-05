@@ -757,6 +757,32 @@ module MacOS
     alias eql? ==
   end
 
+  def self.xcrun_executable
+    raw = ENV["PYBREW_XCRUN"].to_s.strip
+    raw = ENV["HOMEBREW_XCRUN"].to_s.strip if raw.empty?
+    raw.empty? ? "/usr/bin/xcrun" : raw
+  end
+
+  def self.xcode_select_executable
+    raw = ENV["PYBREW_XCODE_SELECT"].to_s.strip
+    raw = ENV["HOMEBREW_XCODE_SELECT"].to_s.strip if raw.empty?
+    raw.empty? ? "/usr/bin/xcode-select" : raw
+  end
+
+  def self.pkgutil_executable
+    raw = ENV["PYBREW_PKGUTIL"].to_s.strip
+    raw = ENV["HOMEBREW_PKGUTIL"].to_s.strip if raw.empty?
+    raw.empty? ? "/usr/sbin/pkgutil" : raw
+  end
+
+  def self.run_local_tool(*command)
+    return "" if command.compact.empty?
+
+    Utils.popen_read(*command.map(&:to_s)).to_s
+  rescue ScriptError, StandardError
+    ""
+  end
+
   def self.full_version
     @full_version ||= begin
       raw = ENV["HOMEBREW_MACOS_VERSION"].to_s.strip
@@ -784,29 +810,52 @@ module MacOS
   # host is not macOS or the developer tools are missing.  Callers get nil or
   # an empty fallback instead.
   def self.sdk(version = nil)
-    return nil unless OS.mac?
-
     requested = version.nil? ? nil : version.to_s
     return @sdk if requested.nil? && defined?(@sdk) && @sdk
 
     raw = ENV["HOMEBREW_SDK_PATH"].to_s.strip
     raw = ENV["HOMEBREW_SDKROOT"].to_s.strip if raw.empty?
+    return nil if raw.empty? && !OS.mac?
+
     if raw.empty?
-      command = if requested.nil?
-        "/usr/bin/xcrun --show-sdk-path"
+      if requested.nil?
+        raw = run_local_tool(xcrun_executable, "--show-sdk-path").strip
       else
-        "/usr/bin/xcrun --sdk macosx#{requested} --show-sdk-path"
+        raw = run_local_tool(
+          xcrun_executable, "--sdk", "macosx#{requested}", "--show-sdk-path"
+        ).strip
       end
-      raw = `#{command} 2>/dev/null`.to_s.strip
     end
     if raw.empty?
-      fallback = "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
-      raw = fallback if File.directory?(fallback)
+      candidates = []
+      [Xcode.bundle_path, Pathname.new(active_developer_dir.to_s)].uniq.each do |root|
+        next if root.nil? || root.to_s.empty?
+
+        sdk_root = root/"Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs"
+        sdk_root = root/"Platforms/MacOSX.platform/Developer/SDKs" unless sdk_root.directory?
+        next unless sdk_root.directory?
+
+        candidates.concat(
+          sdk_root.children.select { |child| child.directory? && child.extname == ".sdk" }
+        )
+      end
+      candidates.sort_by! { |child| child.basename.to_s }
+      chosen = if requested.nil?
+        candidates.last
+      else
+        candidates.find { |child| child.basename.to_s.include?(requested) }
+      end
+      raw = chosen.to_s unless chosen.nil?
     end
     return nil if raw.empty?
 
     version_text = ENV["HOMEBREW_SDK_VERSION"].to_s.strip
-    version_text = `/usr/bin/xcrun --show-sdk-version 2>/dev/null`.to_s.strip if version_text.empty?
+    if version_text.empty?
+      version_text = SDK.read_sdk_version(Pathname.new(raw)).to_s rescue ""
+    end
+    if version_text.empty?
+      version_text = run_local_tool(xcrun_executable, "--show-sdk-version").strip
+    end
     version_text = requested if version_text.empty? && !requested.nil?
     version_text = MacOS.version.to_s if version_text.empty?
     found = PybrewSDK.new(PybrewVersion.new(version_text), Pathname.new(raw))
@@ -868,7 +917,7 @@ module MacOS
     return override unless override.empty?
     return @active_developer_dir if defined?(@active_developer_dir)
 
-    raw = `/usr/bin/xcode-select -print-path 2>/dev/null`.to_s.strip
+    raw = MacOS.run_local_tool(MacOS.xcode_select_executable, "-print-path").to_s.strip
     if raw.empty?
       fallback = "/Applications/Xcode.app/Contents/Developer"
       raw = fallback if File.directory?(fallback)
@@ -996,7 +1045,7 @@ module MacOS
       override = ENV["HOMEBREW_DEVELOPER_DIR"].to_s.strip
       return File.directory?(override) unless override.empty?
 
-      path = `/usr/bin/xcode-select -print-path 2>/dev/null`.to_s.strip
+      path = MacOS.run_local_tool(MacOS.xcode_select_executable, "-print-path").to_s.strip
       !path.empty? && File.directory?(path)
     rescue StandardError
       false
@@ -1006,7 +1055,9 @@ module MacOS
       override = ENV["HOMEBREW_CLT_VERSION"].to_s.strip
       return PybrewVersion.new(override) unless override.empty?
 
-      raw = `/usr/sbin/pkgutil --pkg-info=com.apple.pkg.CLTools_Executables 2>/dev/null`.to_s
+      raw = MacOS.run_local_tool(
+        MacOS.pkgutil_executable, "--pkg-info=com.apple.pkg.CLTools_Executables"
+      ).to_s
       match = raw[/^version:\s*(\S+)/, 1]
       match.nil? || match.empty? ? nil : PybrewVersion.new(match)
     rescue StandardError
@@ -7157,6 +7208,7 @@ class Keg
     end
     result = verify_codesign_signature(file)
     result["signed"] = true
+    result["identity"] = codesign_identity
     result["entitlements"] = codesign_entitlements(file)
     result
   end
@@ -7824,6 +7876,7 @@ class Keg
       "codesign_files" => plan["codesign_files"],
       "codesign_commands" => plan["codesign_commands"],
       "codesign_verify_commands" => plan["codesign_verify_commands"],
+      "codesign_identity" => codesign_identity,
       "codesigned" => codesigned,
       "codesign_verified" => codesign_verified,
       "entitlements" => entitlements,
@@ -10012,6 +10065,33 @@ module Formulary
     end
   end
 
+  # Parsed-key cache keyed by PEM digest; cleared by Formulary.clear_cache.
+  def jws_public_key_cache
+    @jws_public_key_cache ||= {}
+  end
+
+  def jws_public_key_cache_size
+    jws_public_key_cache.length
+  end
+
+  def jws_public_key
+    pem = jws_public_key_pem
+    return nil if pem.nil? || pem.empty?
+
+    digest = Digest::SHA256.hexdigest(pem)
+    cached = jws_public_key_cache[digest]
+    return cached unless cached.nil?
+
+    begin
+      key = OpenSSL::PKey::RSA.new(pem)
+    rescue ScriptError, StandardError => error
+      raise PybrewFormulaUnavailableError,
+            "invalid API JWS public key: #{error.class}: #{error.message}"
+    end
+    jws_public_key_cache[digest] = key
+    key
+  end
+
   def jws_public_key_pem
     raw = ENV["PYBREW_FORMULA_API_JWS_PUBLIC_KEY"].to_s.strip
     if raw.empty?
@@ -10060,18 +10140,12 @@ module Formulary
       return expected == signature
     end
 
-    pem = jws_public_key_pem
-    if pem.nil? || pem.empty?
+    key = jws_public_key
+    if key.nil?
       raise PybrewFormulaUnavailableError,
             "API JWS verification requires a public key for #{alg}: set " \
             "PYBREW_FORMULA_API_JWS_PUBLIC_KEY (PEM or path) or " \
             "#{API_JWS_KEY_ENV} to a PEM value"
-    end
-    key = begin
-      OpenSSL::PKey::RSA.new(pem)
-    rescue ScriptError, StandardError => error
-      raise PybrewFormulaUnavailableError,
-            "invalid API JWS public key: #{error.class}: #{error.message}"
     end
 
     if alg.to_s.start_with?("PS")
@@ -10439,14 +10513,42 @@ module Formulary
     loaded
   end
 
+  API_TTL_ENV = "PYBREW_FORMULA_API_TTL"
+
+  # Optional cache lifetime for channeled API JSON (seconds).  Unset keeps the
+  # historical signature-only caching; 0 forces a reload on every call.
+  def api_json_ttl_seconds
+    raw = ENV[API_TTL_ENV].to_s.strip
+    return nil if raw.empty?
+
+    raw.to_i
+  end
+
+  def api_json_ttl_expired?(loaded)
+    ttl = api_json_ttl_seconds
+    return false if ttl.nil?
+    return true if ttl <= 0
+
+    fetched_at = loaded[:fetched_at]
+    return true if fetched_at.nil?
+
+    (Time.now.to_f - fetched_at.to_f) >= ttl
+  end
+
   def ensure_api_json_loaded
     if api_channels_configured?
       signature = api_channels_signature
       loaded = @api_json_loaded
-      return nil if loaded && loaded[:channels_signature] == signature
+      if loaded && loaded[:channels_signature] == signature &&
+         !api_json_ttl_expired?(loaded)
+        return nil
+      end
 
       load_formula_from_api_channels!
-      @api_json_loaded = { channels_signature: signature }
+      @api_json_loaded = {
+        channels_signature: signature,
+        fetched_at: Time.now.to_f,
+      }
       return nil
     end
 
@@ -11003,6 +11105,7 @@ module Formulary
     @api_cache = {}
     @api_alias_map = {}
     @api_json_cache = {}
+    @jws_public_key_cache = {}
     @api_json_loaded = nil
     @remote_api_json_cache = nil
     @tap_source_alias_map = nil
@@ -12090,7 +12193,8 @@ module Utils
     # tests while capturing status/headers for error classification.  A fake
     # transport that writes a ``-D`` header file gets full HTTP semantics; one
     # that only prints JSON is treated as HTTP 200.
-    def get_json(url, data: nil, method: "GET", scopes: [], raise_errors: true)
+    def get_json(url, data: nil, method: "GET", scopes: [], raise_errors: true,
+                 retries: 0, max_backoff: nil)
       command = [curl_executable, "-sS", "-L", "-H", "Accept: application/vnd.github+json"]
       command += ["-H", "Authorization: Bearer #{token}"] unless token.nil?
       command += ["-X", method.to_s] unless method.to_s == "GET"
@@ -12106,7 +12210,20 @@ module Utils
       end
 
       code = response_status(headers)
-      raise_error(output, "", code, headers, Array(scopes)) if raise_errors && code.to_i >= 400
+      if raise_errors && code.to_i >= 400
+        begin
+          raise_error(output, "", code, headers, Array(scopes))
+        rescue API::RateLimitExceededError => error
+          remaining = [retries.to_i, 0].max
+          raise if remaining <= 0
+
+          sleep_seconds = rate_limit_backoff_seconds(error, max_backoff)
+          sleep sleep_seconds if sleep_seconds.positive?
+          return get_json(url, data: data, method: method, scopes: scopes,
+                          raise_errors: raise_errors, retries: remaining - 1,
+                          max_backoff: max_backoff)
+        end
+      end
       return nil if output.empty?
 
       JSON.parse(output)
@@ -12469,15 +12586,48 @@ module Utils
 
     # Walk GraphQL cursor pagination (pageInfo.hasNextPage/endCursor), stopping
     # after max_pages.  The returned nodes are concatenated in page order.
-    def graphql_paginated_nodes(query, variables, data_path, max_pages: 10)
+    GRAPHQL_MAX_PAGES = 50
+    GITHUB_MAX_BACKOFF_ENV = "PYBREW_GITHUB_MAX_BACKOFF"
+
+    # Bounded secondary-rate-limit backoff: never negative, capped at
+    # PYBREW_GITHUB_MAX_BACKOFF (default 300s) so injected/fake transports in
+    # tests and offline runs cannot stall for long.
+    def rate_limit_backoff_seconds(error, max_seconds = nil)
+      reset = error.respond_to?(:reset) ? error.reset.to_i : 0
+      seconds = [reset - Time.now.to_i, 0].max
+      configured = ENV[GITHUB_MAX_BACKOFF_ENV].to_s.strip
+      cap = if !max_seconds.nil?
+        max_seconds.to_i
+      elsif !configured.empty?
+        configured.to_i
+      else
+        300
+      end
+      cap = 0 if cap.negative?
+      [seconds, cap].min
+    end
+
+    def graphql_paginated_nodes(query, variables, data_path,
+                                max_pages: GRAPHQL_MAX_PAGES,
+                                rate_limit_retries: 0)
       nodes = []
       after = nil
       pages = 0
       @graphql_pagination_truncated = false
+      retries_left = [rate_limit_retries.to_i, 0].max
       loop do
         vars = (variables || {}).dup
         vars["after"] = after unless after.nil?
-        data = graphql_data(query, vars)
+        data = begin
+          graphql_data(query, vars)
+        rescue API::RateLimitExceededError => error
+          raise if retries_left <= 0
+
+          retries_left -= 1
+          backoff = rate_limit_backoff_seconds(error)
+          sleep backoff if backoff.positive?
+          retry
+        end
         container = Array(data_path).reduce(data) do |memo, key|
           memo.is_a?(Hash) ? memo[key] : nil
         end

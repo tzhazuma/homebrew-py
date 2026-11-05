@@ -58,10 +58,15 @@ MAX_EAGER_FORMULA_ENTRIES = 10000
 #: trigger this scan, keeping the 10000-formula path lightweight.
 MAX_SOURCE_ALIAS_SCAN = 2000
 
-#: Small taps additionally get an eager bounded source-alias scan so dynamic
-#: ``Formula[variable]`` alias lookups work without a prior literal lookup.
-#: Larger taps stay lazy/10000-friendly.
-MAX_EAGER_SOURCE_ALIAS_ENTRIES = 500
+#: Only a bounded prefix of each source is read during the source-alias scan;
+#: alias stanzas normally live near the top.  This keeps large-tap scanning
+#: bounded even for 10k taps.
+MAX_SOURCE_ALIAS_BYTES = 8192
+
+#: Dynamic ``Formula[variable]`` alias lookups work without a prior literal
+#: lookup while the tap is within the bounded eager metadata budget.  The
+#: source scan itself remains capped by MAX_SOURCE_ALIAS_SCAN/BYTES.
+MAX_EAGER_SOURCE_ALIAS_ENTRIES = 10000
 
 #: Bounded in-process caches (parsed formulae and tap indexes).
 FORMULA_CACHE_LIMIT = 256
@@ -128,6 +133,7 @@ require "json"
 require "open3"
 require "pathname"
 require "rbconfig"
+require "timeout"
 require "tmpdir"
 
 class FormulaTestFailure < StandardError
@@ -157,11 +163,13 @@ class FormulaTestContext
   # PYBREW_* keys that are process/platform configuration rather than parent
   # test state; dependency tests inherit these.
   PYBREW_INHERITED_ENV = %w[
+    PYBREW_DEPENDENCY_TIMEOUT
     PYBREW_MACOS_VERSION
     PYBREW_SDK_DIRS
     PYBREW_SDK_PATH
     PYBREW_SDK_VERSION
     PYBREW_TEST_FIXTURES
+    PYBREW_TEST_ISOLATE_DEPENDENCIES
     PYBREW_XCRUN
   ].freeze
 
@@ -1022,6 +1030,13 @@ class FormulaTestContext
           # which case we fall back to the same process.
           result_path = File.join(dependency_testpath, ".pybrew-dependency-result")
           pid = fork do
+            # Put the dependency test in its own process group so a parent
+            # timeout can kill the child and all subprocesses it spawned.
+            begin
+              Process.setpgid(0, 0)
+            rescue StandardError
+              # Some hosts disallow it; the pid-only kill fallback still runs.
+            end
             begin
               FormulaTestContext.evaluate_source(context, source, "(formula #{@name} test)")
               File.binwrite(result_path, Marshal.dump([:ok, ""]))
@@ -1038,7 +1053,28 @@ class FormulaTestContext
               exit! 0
             end
           end
-          Process.wait(pid)
+          timeout_value = ENV["PYBREW_DEPENDENCY_TIMEOUT"].to_s
+          timeout_seconds = timeout_value.empty? ? 120.0 : timeout_value.to_f
+          begin
+            Timeout.timeout(timeout_seconds) { Process.wait(pid) }
+          rescue Timeout::Error
+            begin
+              Process.kill("KILL", -pid)
+            rescue StandardError
+              begin
+                Process.kill("KILL", pid)
+              rescue StandardError
+                # The child already exited or is not killable.
+              end
+            end
+            begin
+              Process.wait(pid)
+            rescue StandardError
+              # Already reaped by the timeout path.
+            end
+            raise FormulaTestFailure,
+                  "dependency test timed out after #{timeout_seconds}s"
+          end
           unless File.file?(result_path)
             raise FormulaTestFailure,
                   "dependency test subprocess exited without reporting a result"
@@ -2845,7 +2881,10 @@ class _TapIndex:
                     return
                 scanned += 1
                 try:
-                    source = path.read_text(encoding="utf-8", errors="replace")
+                    with path.open("rb") as handle:
+                        source = handle.read(MAX_SOURCE_ALIAS_BYTES).decode(
+                            "utf-8", "replace"
+                        )
                 except OSError:
                     continue
                 for alias_name in pattern.findall(source):
@@ -3133,9 +3172,10 @@ def _formula_entries(
             entries[eager_name] = entry
             entries.setdefault(f"{tap.name}/{eager_name}", entry)
 
-    # Small taps eagerly discover source-only aliases so dynamic
-    # ``Formula[variable]`` alias lookups work; large taps stay lazy to
-    # preserve the 10000-formula lightweight path.
+    # Taps within the bounded eager metadata budget discover source-only
+    # aliases eagerly so dynamic ``Formula[variable]`` alias lookups work
+    # without a prior literal lookup.  The scan reads only a bounded prefix of
+    # each source and is capped by MAX_SOURCE_ALIAS_SCAN.
     if len(index.by_name) <= MAX_EAGER_SOURCE_ALIAS_ENTRIES and not index._source_alias_attempted:
         index._scan_source_aliases()
 

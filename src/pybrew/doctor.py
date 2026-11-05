@@ -5,9 +5,10 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, Optional
 
 from .cellar import Cellar, read_receipt
+from .errors import FormulaNotFound
 from .paths import LINK_DIRS, Config
 
 
@@ -21,7 +22,7 @@ def _broken_symlinks(root: Path) -> Iterable[Path]:
                 yield path
 
 
-def diagnose_issues(config: Config) -> list[dict[str, str]]:
+def diagnose_issues(config: Config, loader: Optional[Any] = None) -> list[dict[str, str]]:
     issues: list[dict[str, str]] = []
 
     def issue(category: str, message: str) -> None:
@@ -43,8 +44,25 @@ def diagnose_issues(config: Config) -> list[dict[str, str]]:
     for name, versions in sorted(installed.items()):
         for version in versions:
             keg = config.keg_path(name, version)
-            if not read_receipt(keg):
+            receipt = read_receipt(keg)
+            if not receipt:
                 issue("cellar", f"missing INSTALL_RECEIPT.json: {keg}")
+                continue
+            if loader is not None:
+                source = receipt.get("source") or {}
+                source_path = source.get("path") if isinstance(source, dict) else None
+                if source_path:
+                    path = Path(str(source_path))
+                    if any(path.is_relative_to(tap) for tap in config.taps):
+                        try:
+                            loader.load(name)
+                        except FormulaNotFound:
+                            issue(
+                                "formula",
+                                f"installed formula is no longer in its tap: {name} ({path})",
+                            )
+                        except Exception:
+                            pass
         opt = config.opt_path(name)
         if opt.is_symlink():
             target = Path(os.path.realpath(opt))

@@ -8,6 +8,7 @@ that execute the real Ruby interpreter are skipped when it is not installed.
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 import pytest
@@ -2994,4 +2995,246 @@ end
     formula.dependencies = [Dependency(name="dep-alias")]
     _install_keg(config, "dep-lib", output="dep-ok")
     result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_large_tap_dynamic_source_alias_without_literal(tmp_path: Path) -> None:
+    tap = tmp_path / "large-tap"
+    for index in range(501):
+        _write_tap_formula(tap, f"tool-{index:03d}", None)
+    _write_tap_formula(tap, "zz-alias-target", None, aliases=["late-dynamic-alias"])
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  ref = Formula[["late", "dynamic", "alias"].join("-")]
+  assert_equal "zz-alias-target", ref.name
+end
+""",
+        taps=[tap],
+    )
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_dependency_fork_timeout_kills_child(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(tap, "dep-lib", "  test do\n    sleep 5\n  end")
+    formula, config = _installed_formula(
+        tmp_path, 'do\n  Formula["dep-lib"].test\nend', taps=[tap]
+    )
+    formula.dependencies = [Dependency(name="dep-lib")]
+    _install_keg(config, "dep-lib", output="dep-ok")
+    started = time.monotonic()
+    with pytest.raises(FormulaTestError) as excinfo:
+        run_formula_test(
+            formula,
+            config,
+            ruby=_REAL_RUBY,
+            env={"PYBREW_DEPENDENCY_TIMEOUT": "0.3"},
+        )
+    elapsed = time.monotonic() - started
+    assert "timed out" in excinfo.value.stderr
+    assert elapsed < 3
+
+
+@requires_ruby
+def test_dependency_non_fork_fallback_runs_in_process(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(
+        tap,
+        "dep-lib",
+        '''  test do
+    File.write(File.join(ENV["PARENT_TESTPATH"], "fallback-marker"), "ok")
+  end''',
+    )
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  ENV["PARENT_TESTPATH"] = testpath.to_s
+  Formula["dep-lib"].test
+  assert_path_exists testpath/"fallback-marker"
+end
+""",
+        taps=[tap],
+    )
+    formula.dependencies = [Dependency(name="dep-lib")]
+    _install_keg(config, "dep-lib", output="dep-ok")
+    result = run_formula_test(
+        formula,
+        config,
+        ruby=_REAL_RUBY,
+        env={"PYBREW_TEST_ISOLATE_DEPENDENCIES": "0"},
+    )
+    assert result.success is True
+
+
+@requires_ruby
+def test_minitest_reflection_and_pattern_edge_forms(tmp_path: Path) -> None:
+    source = """do
+  assert_respond_to 1, :positive?
+  refute_respond_to 1, :no_such_assertion_method
+  assert_kind_of Comparable, 1
+  assert_kind_of Numeric, 1
+  assert_instance_of Integer, 1
+  refute_instance_of Numeric, 1
+  refute_kind_of String, 1
+  assert_operator 1, :>, 0
+  assert_operator 1, :positive?
+  refute_operator 0, :positive?
+  assert_send [[1, 2], :include?, 1]
+
+  no_block = begin
+    assert_pattern
+  rescue StandardError => error
+    error
+  end
+  assert_match(/requires a block/, no_block.message)
+  no_block_refute = begin
+    refute_pattern
+  rescue StandardError => error
+    error
+  end
+  assert_match(/requires a block/, no_block_refute.message)
+
+  other_error = begin
+    assert_pattern { raise RuntimeError, "not a pattern error" }
+  rescue RuntimeError => error
+    error
+  end
+  assert_equal "not a pattern error", other_error.message
+
+  other_refute_error = begin
+    refute_pattern { raise RuntimeError, "not a pattern error" }
+  rescue RuntimeError => error
+    error
+  end
+  assert_equal "not a pattern error", other_refute_error.message
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+    assert result.success is True
+
+
+@requires_ruby
+def test_macos_version_and_hardware_edge_behavior(tmp_path: Path) -> None:
+    source = """do
+  assert_equal :x86_64, Hardware::CPU.arch
+  assert_equal :intel, Hardware::CPU.type
+  assert_equal :intel, Hardware::CPU.family
+  assert_equal "Intel Test", Hardware::CPU.model
+  assert_equal 32, Hardware::CPU.bits
+  refute Hardware::CPU.is_64_bit?
+  assert Hardware::CPU.sse3?
+  assert Hardware::CPU.ssse3?
+  assert Hardware::CPU.sse4?
+  assert Hardware::CPU.sse4_1?
+  assert Hardware::CPU.sse4_2?
+  assert Hardware::CPU.avx?
+  assert Hardware::CPU.avx2?
+  refute Hardware::CPU.avx512?
+  refute Hardware::CPU.neon?
+  assert_equal 2, Hardware::CPU.cores
+  assert_equal 2, Hardware::CPU.physical_cores
+
+  sequoia = MacOS::Version.new("15.7.1")
+  assert_equal "15.7.1", sequoia.to_s
+  assert_equal "15", sequoia.strip_patch.to_s
+  assert_equal "Sequoia", sequoia.release_name
+  assert_equal "Sequoia", sequoia.pretty_name
+  assert_equal :sequoia, sequoia.to_sym
+  catalina = MacOS::Version.new("10.15.7")
+  assert_equal "10.15", catalina.strip_patch.to_s
+  assert_equal "Catalina", catalina.release_name
+  unknown = MacOS::Version.new("99.1")
+  assert_nil unknown.release_name
+  assert_equal "Dunno", unknown.pretty_name
+  assert_equal :dunno, unknown.to_sym
+  assert_equal "99", unknown.release_version
+  assert_nil(MacOS::Version.new("15") <=> :not_a_release)
+  assert(OS.mac? || OS.linux?)
+  refute(OS.mac? && OS.linux?)
+  refute_empty OS.kernel_version
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(
+        formula,
+        config,
+        ruby=_REAL_RUBY,
+        env={
+            "PYBREW_CPU_ARCH": "x86_64",
+            "PYBREW_CPU_MODEL": "Intel Test",
+            "PYBREW_CPU_BITS": "32",
+            "PYBREW_CPU_CORES": "2",
+            "PYBREW_CPU_PHYSICAL_CORES": "2",
+            "PYBREW_CPU_FLAGS": "sse3 pni ssse3 sse4_1 sse4_2 avx avx2",
+        },
+    )
+    assert result.success is True
+
+
+@requires_ruby
+def test_xcode_clt_not_installed_edges(tmp_path: Path) -> None:
+    source = """do
+  refute MacOS::CLT.installed?
+  refute MacOS::Xcode.installed?
+  assert_nil MacOS::CLT.version
+  assert_nil MacOS::Xcode.version
+  refute DevelopmentTools.xcode_installed?
+  assert DevelopmentTools.needs_clt?
+  assert_equal "/tmp/fallback-clang", DevelopmentTools.clang
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(
+        formula,
+        config,
+        ruby=_REAL_RUBY,
+        env={
+            "PYBREW_CLT_INSTALLED": "0",
+            "PYBREW_XCODE_INSTALLED": "0",
+            "PYBREW_CLANG": "/tmp/fallback-clang",
+        },
+    )
+    assert result.success is True
+
+
+@requires_ruby
+def test_dependency_fork_timeout_kills_spawned_descendants(tmp_path: Path) -> None:
+    tap = tmp_path / "sample-tap"
+    _write_tap_formula(
+        tap,
+        "dep-lib",
+        '''  test do
+    Process.spawn("sh", "-c", "sleep 1; touch #{ENV["ORPHAN_MARKER"]}")
+    sleep 5
+  end''',
+    )
+    formula, config = _installed_formula(
+        tmp_path,
+        """do
+  marker = testpath/"orphan-marker"
+  ENV["ORPHAN_MARKER"] = marker.to_s
+  begin
+    Formula["dep-lib"].test
+  rescue FormulaTestFailure => error
+    assert_match(/timed out/, error.message)
+  end
+  sleep 1.5
+  refute_path_exists marker
+end
+""",
+        taps=[tap],
+    )
+    formula.dependencies = [Dependency(name="dep-lib")]
+    _install_keg(config, "dep-lib", output="dep-ok")
+    result = run_formula_test(
+        formula,
+        config,
+        ruby=_REAL_RUBY,
+        env={"PYBREW_DEPENDENCY_TIMEOUT": "0.3"},
+    )
     assert result.success is True

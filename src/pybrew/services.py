@@ -38,7 +38,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Iterable, Optional, Sequence
+from typing import Any, Iterable, Mapping, Optional, Sequence
 
 from .errors import PybrewError
 from .models import Formula
@@ -76,6 +76,25 @@ SOCKET_TYPES = ("tcp", "udp")
 #: default (literal parser: pybrew, opt-in Ruby evaluator: homebrew).
 SERVICE_PATH_MODE_ENV = "PYBREW_SERVICE_PATH_MODE"
 
+#: Environment variable selecting the default launchd/systemd label style.
+#: ``canonical``/``brew``/``homebrew`` opts into Homebrew's ``sh.brew.<name>``
+#: labels; unset/``pybrew``/``legacy``/``mxcl`` keeps pybrew's historical
+#: ``homebrew.mxcl.<name>`` default.  Both styles remain resolvable as aliases
+#: so existing service files keep working after switching.
+SERVICE_NAME_STYLE_ENV = "PYBREW_SERVICE_NAME_STYLE"
+
+#: Environment variable restoring pybrew's historical synthetic log paths
+#: (``<prefix>/var/log/<name>.log``).  Homebrew only writes log paths that the
+#: formula declares, which is the default; set this to ``1`` for old behaviour.
+SERVICE_DEFAULT_LOGS_ENV = "PYBREW_SERVICE_DEFAULT_LOGS"
+
+#: Canonical Homebrew label prefix (``sh.brew.<name>``).
+CANONICAL_SERVICE_PREFIX = "sh.brew."
+#: pybrew's historical label prefix (also Homebrew's legacy launchd label).
+PYBREW_LEGACY_SERVICE_PREFIX = "homebrew.mxcl."
+#: Homebrew's legacy systemd label prefix (``homebrew.<name>``).
+HOMEBREW_LEGACY_SERVICE_PREFIX = "homebrew."
+
 #: Path helper names exposed to service blocks (literal parser and Ruby shim).
 SERVICE_PATH_KEYS = (
     "prefix",
@@ -106,6 +125,34 @@ def service_path_mode(default: str = "pybrew") -> str:
     if raw in ("pybrew", "literal", "legacy"):
         return "pybrew"
     return default
+
+
+def service_name_style(default: str = "pybrew") -> str:
+    """Return the default service label style (``canonical`` or ``pybrew``).
+
+    ``PYBREW_SERVICE_NAME_STYLE=canonical`` selects Homebrew's
+    ``sh.brew.<name>`` labels; unset/unknown values keep the caller's default
+    (pybrew's legacy ``homebrew.mxcl.<name>``).  Aliases are always resolvable
+    regardless of style, so switching does not strand existing service files.
+    """
+
+    raw = os.environ.get(SERVICE_NAME_STYLE_ENV, "").strip().lower()
+    if raw in ("canonical", "brew", "homebrew", "sh.brew"):
+        return "canonical"
+    if raw in ("pybrew", "legacy", "mxcl", "homebrew.mxcl"):
+        return "pybrew"
+    return default
+
+
+def service_default_logs_enabled() -> bool:
+    """Return whether pybrew's synthetic ``var/log/<name>.log`` default is on.
+
+    Homebrew only writes log paths declared by the formula, so that is the
+    default.  ``PYBREW_SERVICE_DEFAULT_LOGS=1`` restores pybrew's historical
+    behaviour for users who relied on ``brew services`` always producing logs.
+    """
+
+    return os.environ.get(SERVICE_DEFAULT_LOGS_ENV, "").strip() == "1"
 
 
 def _service_opt_prefix(formula: Formula, config: Any, prefix: Path) -> Path:
@@ -304,10 +351,20 @@ def _service_formula_name(formula: Any) -> str:
     return str(getattr(formula, "name", None) or "")
 
 
+def _append_warning_once(warnings: Optional[list[str]], message: str) -> None:
+    """Append a warning once (renderers re-read env files on every render)."""
+
+    if warnings is None:
+        return
+    if message not in warnings:
+        warnings.append(message)
+
+
 def read_user_service_env(
     formula: Any,
     user_config_home: Optional[Path] = None,
     euid: Optional[int] = None,
+    warnings: Optional[list[str]] = None,
 ) -> dict[str, str]:
     """Read Homebrew's ``services/<formula>.env`` user environment file.
 
@@ -319,6 +376,10 @@ def read_user_service_env(
     injects a directory for tests/callers; otherwise ``HOMEBREW_USER_CONFIG_HOME``
     is used and an unset value means "no overrides".  ``formula`` may be a
     Formula-like object or a bare name string.
+
+    ``warnings`` (when provided) receives Homebrew ``opoo``-style messages for
+    skipped files/lines so ``services info``/actions can surface them without
+    changing JSON payload shape.
     """
 
     base = resolve_user_config_home(user_config_home)
@@ -333,13 +394,6 @@ def read_user_service_env(
         or "\x00" in name
     ):
         return {}
-    try:
-        effective_uid = os.geteuid() if euid is None else euid
-    except AttributeError:  # pragma: no cover - non-POSIX hosts
-        effective_uid = -1
-    if effective_uid == 0:
-        # Homebrew refuses user env overrides for root services.
-        return {}
     path = base / "services" / f"{name}.env"
     try:
         if not path.is_file():
@@ -347,7 +401,26 @@ def read_user_service_env(
         mode = path.stat().st_mode
     except OSError:
         return {}
-    if mode & 0o002 or mode & 0o020:
+    try:
+        effective_uid = os.geteuid() if euid is None else euid
+    except AttributeError:  # pragma: no cover - non-POSIX hosts
+        effective_uid = -1
+    if effective_uid == 0:
+        # Homebrew refuses user env overrides for root services.
+        _append_warning_once(
+            warnings,
+            f"Skipping {path}: user env overrides are not supported for root services.",
+        )
+        return {}
+    if mode & 0o002:
+        _append_warning_once(
+            warnings, f"Skipping {path}: file is world-writable."
+        )
+        return {}
+    if mode & 0o020:
+        _append_warning_once(
+            warnings, f"Skipping {path}: file is group-writable."
+        )
         return {}
     try:
         text = path.read_text(encoding="utf-8", errors="replace")
@@ -359,10 +432,16 @@ def read_user_service_env(
         if not stripped or stripped.startswith("#"):
             continue
         if "=" not in stripped:
+            _append_warning_once(
+                warnings, f"Skipping invalid line in {path}: {stripped}"
+            )
             continue
         key, value = stripped.split("=", 1)
         key = key.strip()
         if not key:
+            _append_warning_once(
+                warnings, f"Skipping invalid line in {path}: {stripped}"
+            )
             continue
         overrides[key] = value.strip()
     return overrides
@@ -372,6 +451,7 @@ def resolve_render_user_environment(
     formula: Formula,
     spec: Optional["ServiceSpec"] = None,
     user_config_home: Optional[Path] = None,
+    warnings: Optional[list[str]] = None,
 ) -> Optional[dict[str, str]]:
     """Resolve user env overrides at render time when a context exists.
 
@@ -381,6 +461,9 @@ def resolve_render_user_environment(
     renderer should fall back to the spec's parse-time snapshot; an empty dict
     means a context exists but the file currently provides no overrides, which
     intentionally supersedes the stale snapshot.
+
+    ``warnings`` receives skip messages from :func:`read_user_service_env`
+    (renderers pass the spec warnings and de-duplicate repeated renders).
     """
 
     context: Optional[Path] = None
@@ -394,7 +477,7 @@ def resolve_render_user_environment(
             context = resolve_user_config_home(Path(str(stored)))
     if context is None:
         return None
-    return read_user_service_env(formula, context)
+    return read_user_service_env(formula, context, warnings=warnings)
 
 
 @dataclass
@@ -443,15 +526,189 @@ class ServiceSpec:
 
     @classmethod
     def from_hash(cls, data: dict[str, Any]) -> "ServiceSpec":
+        """Build a spec from a Homebrew-style service hash or ``to_hash()``.
+
+        Accepted shapes mirror Homebrew's ``Service.from_hash`` plus pybrew's
+        extension fields: ``name`` (macos/linux), ``run`` (string/array or a
+        ``{"macos": ..., "linux": ...}`` hash), ``cron`` string or mapping,
+        ``sockets`` string or mapping, ``environment_variables``, path fields,
+        booleans/integers and explicit ``plist_name``/``service_name``.
+
+        Semantics/limitations (also reflected in :meth:`to_hash`): unknown keys
+        are ignored, a ``run_type`` without ``run_type_explicit`` is treated as
+        an explicit Homebrew setting, user env overrides (``user_environment*``
+        and ``user_config_home``/``formula_name``), ``warnings`` and platform
+        ``run_params`` are local parse context and are *not* serialised.
+        """
+
+        if not isinstance(data, dict):
+            raise ServiceError("service hash must be a mapping")
         known = cls.__dataclass_fields__
-        values = {key: value for key, value in data.items() if key in known}
+        values: dict[str, Any] = {
+            key: value for key, value in data.items() if key in known
+        }
         if "run_type" in data and "run_type_explicit" not in values:
             # Serialised specs keep Homebrew's explicit-run_type semantics.
             values["run_type_explicit"] = True
         if "user_environment" in data and "user_environment_variables" not in values:
             # Accept Homebrew's shorter spelling as an alias in serialised data.
             values["user_environment_variables"] = data["user_environment"]
+
+        name = data.get("name")
+        if isinstance(name, Mapping):
+            if name.get("macos") is not None:
+                values.setdefault("plist_name", str(name["macos"]))
+            if name.get("linux") is not None:
+                values.setdefault("service_name", str(name["linux"]))
+
+        run = data.get("run")
+        if isinstance(run, Mapping):
+            platform = "macos" if service_platform() == "darwin" else "linux"
+            run = run.get(platform)
+        if isinstance(run, str):
+            values["run"] = [run]
+        elif isinstance(run, (list, tuple)):
+            values["run"] = [str(item) for item in run]
+        elif run is not None:
+            raise ServiceError(f"service run must be a string, array or hash, got {run!r}")
+
+        if "cron" in values:
+            cron = values["cron"]
+            if isinstance(cron, str):
+                values["cron"] = _parse_cron(cron)
+            elif isinstance(cron, Mapping):
+                values["cron"] = dict(cron)
+
+        sockets = data.get("sockets")
+        if isinstance(sockets, str):
+            values["sockets"] = {"listeners": _parse_socket(sockets)}
+        elif isinstance(sockets, Mapping):
+            values["sockets"] = {
+                str(key): _parse_socket(value)
+                for key, value in sockets.items()
+                if isinstance(value, str)
+            }
+
+        environment = data.get("environment_variables")
+        if isinstance(environment, Mapping):
+            values["environment_variables"] = {
+                str(key): "" if value is None else str(value)
+                for key, value in environment.items()
+            }
+
+        for key in (
+            "working_dir",
+            "log_path",
+            "error_log_path",
+            "root_dir",
+            "input_path",
+            "process_type",
+        ):
+            if key in values and values[key] is not None:
+                values[key] = str(values[key]).lstrip(":") if key == "process_type" else str(values[key])
+
+        for key in (
+            "interval",
+            "throttle_interval",
+            "restart_delay",
+            "stop_timeout",
+            "nice",
+        ):
+            if key in values and values[key] is not None:
+                try:
+                    values[key] = int(values[key])
+                except (TypeError, ValueError) as error:
+                    raise ServiceError(f"service {key} must be an integer") from error
+
+        if isinstance(values.get("run_type"), str):
+            values["run_type"] = values["run_type"].lstrip(":").lower()
+        if isinstance(values.get("process_type"), str):
+            values["process_type"] = values["process_type"].lstrip(":").lower()
+
         return cls(**values)
+
+    def to_hash(self) -> dict[str, Any]:
+        """Return a Homebrew-shaped service hash for persistence/API use.
+
+        The hash deliberately contains only service *options*.  It cannot
+        faithfully represent everything in a parsed spec:
+
+        * platform-conditional ``run macos:/linux:`` is already resolved to the
+          current platform's command (Homebrew keeps ``run_params``);
+        * user env overrides plus ``user_config_home``/``formula_name`` and
+          ``warnings`` are local parse/render context, not formula data;
+        * pybrew's ``run_type_explicit`` flag is emitted as an extra key so a
+          round-trip through :meth:`from_hash` preserves inferred schedules.
+        """
+
+        data: dict[str, Any] = {}
+        if self.run:
+            data["run"] = list(self.run)
+        data["run_type"] = self.run_type
+        data["run_type_explicit"] = bool(self.run_type_explicit)
+        if self.interval is not None:
+            data["interval"] = self.interval
+        if self.cron:
+            values = self.parse_cron()
+            data["cron"] = " ".join(
+                str(values.get(key, "*"))
+                for key in ("Minute", "Hour", "Day", "Month", "Weekday")
+            )
+        if self.keep_alive:
+            data["keep_alive"] = (
+                dict(self.keep_alive)
+                if isinstance(self.keep_alive, dict)
+                else bool(self.keep_alive)
+            )
+        data["run_at_load"] = bool(self.run_at_load)
+        if self.process_type:
+            data["process_type"] = self.process_type
+        if self.environment_variables:
+            data["environment_variables"] = {
+                str(key): str(value)
+                for key, value in self.environment_variables.items()
+            }
+        if self.require_root:
+            data["require_root"] = True
+        if self.throttle_interval is not None:
+            data["throttle_interval"] = self.throttle_interval
+        if self.launch_only_once:
+            data["launch_only_once"] = True
+        if self.macos_legacy_timers:
+            data["macos_legacy_timers"] = True
+        if self.nice is not None:
+            data["nice"] = self.nice
+        if self.restart_delay is not None:
+            data["restart_delay"] = self.restart_delay
+        if self.stop_timeout is not None:
+            data["stop_timeout"] = self.stop_timeout
+        for key in ("working_dir", "root_dir", "input_path", "log_path", "error_log_path"):
+            value = getattr(self, key)
+            if value is not None:
+                data[key] = str(value)
+        if self.sockets:
+            if set(self.sockets) == {"listeners"}:
+                info = self.sockets["listeners"]
+                data["sockets"] = (
+                    f"{info.get('type', 'tcp')}://{info.get('host', '')}:"
+                    f"{info.get('port', '')}"
+                )
+            else:
+                data["sockets"] = {
+                    str(name): (
+                        f"{info.get('type', 'tcp')}://{info.get('host', '')}:"
+                        f"{info.get('port', '')}"
+                    )
+                    for name, info in self.sockets.items()
+                }
+        name_params: dict[str, str] = {}
+        if self.plist_name:
+            name_params["macos"] = self.plist_name
+        if self.service_name:
+            name_params["linux"] = self.service_name
+        if name_params:
+            data["name"] = name_params
+        return data
 
     def command(self) -> list[str]:
         """Return the command with leading tildes expanded (Homebrew parity)."""
@@ -525,10 +782,76 @@ class ServiceSpec:
         return bool(self.nice) and bool(self.require_root)
 
     def default_service_name(self, formula_name: str) -> str:
-        return f"homebrew.mxcl.{formula_name}"
+        """Return pybrew's historical default label (``homebrew.mxcl.*``).
+
+        Kept for backward compatibility; Homebrew's canonical label is
+        :meth:`canonical_service_name` and :meth:`service_names` lists both.
+        """
+
+        return self.pybrew_legacy_service_name(formula_name)
 
     def default_plist_name(self, formula_name: str) -> str:
         return f"{self.default_service_name(formula_name)}.plist"
+
+    @staticmethod
+    def canonical_service_name(formula_name: str) -> str:
+        """Return Homebrew's canonical label (``sh.brew.<name>``)."""
+
+        return f"{CANONICAL_SERVICE_PREFIX}{formula_name}"
+
+    @classmethod
+    def canonical_plist_name(cls, formula_name: str) -> str:
+        return f"{cls.canonical_service_name(formula_name)}.plist"
+
+    @staticmethod
+    def legacy_service_name(formula_name: str) -> str:
+        """Return Homebrew's legacy systemd label (``homebrew.<name>``)."""
+
+        return f"{HOMEBREW_LEGACY_SERVICE_PREFIX}{formula_name}"
+
+    @staticmethod
+    def legacy_plist_name(formula_name: str) -> str:
+        """Return Homebrew's legacy launchd label (``homebrew.mxcl.<name>``)."""
+
+        return f"{PYBREW_LEGACY_SERVICE_PREFIX}{formula_name}"
+
+    @staticmethod
+    def pybrew_legacy_service_name(formula_name: str) -> str:
+        return f"{PYBREW_LEGACY_SERVICE_PREFIX}{formula_name}"
+
+    @classmethod
+    def pybrew_legacy_plist_name(cls, formula_name: str) -> str:
+        return f"{cls.pybrew_legacy_service_name(formula_name)}.plist"
+
+    def service_names(self, formula_name: str) -> list[str]:
+        """Return every systemd label a service may be known by.
+
+        Homebrew returns ``[service_name]`` for explicitly named services and
+        ``[service_name, canonical, legacy]`` otherwise.  pybrew additionally
+        keeps its own ``homebrew.mxcl.*`` label resolvable so old files are not
+        stranded.
+        """
+
+        if self.service_name:
+            return [self.service_name]
+        labels = [
+            self.canonical_service_name(formula_name),
+            self.legacy_service_name(formula_name),
+            self.pybrew_legacy_service_name(formula_name),
+        ]
+        return list(dict.fromkeys(labels))
+
+    def plist_names(self, formula_name: str) -> list[str]:
+        """Return every launchd label a service may be known by."""
+
+        if self.plist_name:
+            return [self.plist_name]
+        labels = [
+            self.canonical_service_name(formula_name),
+            self.pybrew_legacy_service_name(formula_name),
+            self.legacy_service_name(formula_name),
+        ]
+        return list(dict.fromkeys(labels))
 
     def path_dir(self, prefix: Path) -> Path:
         return Path(prefix) / "bin"
@@ -946,7 +1269,7 @@ def parse_service_block(
     # renderers.  Capture the context directory too so renderers can re-read the
     # file instead of trusting this snapshot.
     context = resolve_user_config_home(user_config_home)
-    overrides = read_user_service_env(formula, context)
+    overrides = read_user_service_env(formula, context, warnings=spec.warnings)
     if overrides:
         spec.user_environment_variables = overrides
     if context is not None:
@@ -1298,6 +1621,26 @@ def _expand_service_path(value: Optional[str]) -> Optional[str]:
     return os.path.expanduser(str(value))
 
 
+def _render_log_paths(
+    formula: Formula, spec: ServiceSpec, log_dir: Path
+) -> tuple[Optional[str], Optional[str]]:
+    """Return ``(stdout, stderr)`` log paths for a renderer.
+
+    Decision (documented in tests/test_services.py): parity with Homebrew means
+    only paths the formula declares are written; pybrew no longer synthesises
+    ``var/log/<formula>.log`` by default.  ``PYBREW_SERVICE_DEFAULT_LOGS=1``
+    restores the historical default for users who relied on it.
+    """
+
+    stdout_path = _expand_service_path(spec.log_path)
+    stderr_path = _expand_service_path(spec.error_log_path)
+    if service_default_logs_enabled():
+        default = str(log_dir / f"{formula.name}.log")
+        stdout_path = stdout_path or default
+        stderr_path = stderr_path or default
+    return stdout_path, stderr_path
+
+
 def _launchd_keep_alive(spec: ServiceSpec) -> Any:
     """Return the launchd ``KeepAlive`` value (``None`` means omit the key)."""
 
@@ -1396,12 +1739,18 @@ class ServiceManager:
         config: Config,
         runner: Any = None,
         user_config_home: Optional[Path] = None,
+        name_style: Optional[str] = None,
     ):
         self.config = config
         self.user_config_home = user_config_home
         self.backend = os.environ.get("PYBREW_SERVICE_BACKEND")
         if self.backend is None:
             self.backend = "systemd" if sys.platform.startswith("linux") else "launchd"
+        self.name_style = (
+            service_name_style("pybrew")
+            if name_style is None
+            else ("canonical" if name_style == "canonical" else "pybrew")
+        )
         if runner is not None:
             self.runner = runner
         elif self.backend == "systemd":
@@ -1419,14 +1768,90 @@ class ServiceManager:
             return user_config_home
         return self.user_config_home
 
-    # -- plist / unit generation ----------------------------------------
+    # -- naming ----------------------------------------------------------
     def label(self, formula: Formula, spec: Optional[ServiceSpec] = None) -> str:
+        """Return the label written by this manager.
+
+        Explicit ``name macos:/linux:`` stanzas always win.  Otherwise
+        ``sh.brew.<name>`` is used when ``PYBREW_SERVICE_NAME_STYLE=canonical``
+        (or ``name_style="canonical"``) and pybrew's historical
+        ``homebrew.mxcl.<name>`` stays the default for compatibility.
+        """
+
         if spec is not None:
             if self.backend == "systemd" and spec.service_name:
                 return spec.service_name
             if self.backend != "systemd" and spec.plist_name:
                 return spec.plist_name
-        return f"homebrew.mxcl.{formula.name}"
+        if self.name_style == "canonical":
+            return ServiceSpec.canonical_service_name(formula.name)
+        return ServiceSpec.pybrew_legacy_service_name(formula.name)
+
+    def labels(
+        self, formula: Formula, spec: Optional[ServiceSpec] = None
+    ) -> list[str]:
+        """Return the written label followed by every backward-compatible alias."""
+
+        primary = self.label(formula, spec)
+        if spec is not None and (
+            (self.backend == "systemd" and spec.service_name)
+            or (self.backend != "systemd" and spec.plist_name)
+        ):
+            return [primary]
+        if self.backend == "systemd":
+            aliases = (
+                spec.service_names(formula.name)
+                if spec is not None
+                else [primary]
+            )
+        else:
+            aliases = (
+                spec.plist_names(formula.name) if spec is not None else [primary]
+            )
+        return list(dict.fromkeys([primary, *aliases]))
+
+    def _label_paths(self, label: str, suffix: str) -> Path:
+        return self.directory / f"{label}{suffix}"
+
+    def plist_paths(
+        self, formula: Formula, spec: Optional[ServiceSpec] = None
+    ) -> list[Path]:
+        return [self._label_paths(label, ".plist") for label in self.labels(formula, spec)]
+
+    def unit_paths(
+        self, formula: Formula, spec: Optional[ServiceSpec] = None
+    ) -> list[Path]:
+        return [self._label_paths(label, ".service") for label in self.labels(formula, spec)]
+
+    def timer_paths(
+        self, formula: Formula, spec: Optional[ServiceSpec] = None
+    ) -> list[Path]:
+        return [self._label_paths(label, ".timer") for label in self.labels(formula, spec)]
+
+    def socket_paths(
+        self, formula: Formula, spec: Optional[ServiceSpec] = None
+    ) -> list[Path]:
+        return [self._label_paths(label, ".socket") for label in self.labels(formula, spec)]
+
+    def _main_paths(
+        self, formula: Formula, spec: Optional[ServiceSpec] = None
+    ) -> list[Path]:
+        return (
+            self.unit_paths(formula, spec)
+            if self.backend == "systemd"
+            else self.plist_paths(formula, spec)
+        )
+
+    def existing_main_path(
+        self, formula: Formula, spec: Optional[ServiceSpec] = None
+    ) -> Path:
+        """Return the first existing label path, or the primary path if none."""
+
+        paths = self._main_paths(formula, spec)
+        for path in paths:
+            if path.exists():
+                return path
+        return paths[0]
 
     def to_plist(
         self,
@@ -1472,12 +1897,7 @@ class ServiceManager:
     ) -> str:
         log_dir = self.config.prefix / "var" / "log"
         log_dir.mkdir(parents=True, exist_ok=True)
-        stdout_path = _expand_service_path(spec.log_path) or str(
-            log_dir / f"{formula.name}.log"
-        )
-        stderr_path = _expand_service_path(spec.error_log_path) or str(
-            log_dir / f"{formula.name}.log"
-        )
+        stdout_path, stderr_path = _render_log_paths(formula, spec, log_dir)
         working_dir = _expand_service_path(spec.working_dir)
         root_dir = _expand_service_path(spec.root_dir)
         input_path = _expand_service_path(spec.input_path)
@@ -1487,6 +1907,7 @@ class ServiceManager:
             formula,
             spec,
             self._render_user_config_home(user_config_home),
+            warnings=spec.warnings,
         )
         lines = [
             "[Unit]",
@@ -1507,10 +1928,12 @@ class ServiceManager:
             lines.append(f"RootDirectory={root_dir}")
         if input_path:
             lines.append(f"StandardInput=file:{input_path}")
-        lines += [
-            f"StandardOutput=append:{stdout_path}",
-            f"StandardError=append:{stderr_path}",
-        ]
+        # Homebrew only writes log paths the formula declares; the synthetic
+        # var/log default is opt-in via PYBREW_SERVICE_DEFAULT_LOGS=1.
+        if stdout_path:
+            lines.append(f"StandardOutput=append:{stdout_path}")
+        if stderr_path:
+            lines.append(f"StandardError=append:{stderr_path}")
         # Each service path maps to its own systemd key: ``root_dir`` is the
         # chroot (RootDirectory) and must not double as WorkingDirectory.
         if working_dir:
@@ -1615,12 +2038,7 @@ class ServiceManager:
         label = self.label(formula, spec)
         log_dir = self.config.prefix / "var" / "log"
         log_dir.mkdir(parents=True, exist_ok=True)
-        stdout_path = _expand_service_path(spec.log_path) or str(
-            log_dir / f"{formula.name}.log"
-        )
-        stderr_path = _expand_service_path(spec.error_log_path) or str(
-            log_dir / f"{formula.name}.log"
-        )
+        stdout_path, stderr_path = _render_log_paths(formula, spec, log_dir)
         working_dir = _expand_service_path(spec.working_dir)
         root_dir = _expand_service_path(spec.root_dir)
         input_path = _expand_service_path(spec.input_path)
@@ -1630,14 +2048,19 @@ class ServiceManager:
             formula,
             spec,
             self._render_user_config_home(user_config_home),
+            warnings=spec.warnings,
         )
         payload: dict[str, Any] = {
             "Label": label,
             "ProgramArguments": spec.run,
             "RunAtLoad": spec.run_at_load,
-            "StandardOutPath": stdout_path,
-            "StandardErrorPath": stderr_path,
         }
+        # Homebrew writes StandardOutPath/StandardErrorPath only for declared
+        # paths; see _render_log_paths for the documented parity decision.
+        if stdout_path:
+            payload["StandardOutPath"] = stdout_path
+        if stderr_path:
+            payload["StandardErrorPath"] = stderr_path
         if working_dir:
             payload["WorkingDirectory"] = working_dir
         # Homebrew emits RootDirectory for launchd as well; each service path
@@ -1764,24 +2187,26 @@ class ServiceManager:
 
     def stop(self, formula: Formula, spec: Optional[ServiceSpec] = None) -> Optional[Path]:
         spec = spec or self._spec_for_paths(formula)
-        path = (
-            self.unit_path(formula, spec)
+        labels = self.labels(formula, spec)
+        paths = (
+            self.unit_paths(formula, spec)
             if self.backend == "systemd"
-            else self.plist_path(formula, spec)
+            else self.plist_paths(formula, spec)
         )
-        if not path.exists():
+        existing = [path for path in paths if path.exists()]
+        if not existing:
             return None
-        if self.backend == "systemd":
-            timer = self.timer_path(formula, spec)
-            if timer.exists():
-                self.runner.stop(f"{self.label(formula, spec)}.timer")
-            socket = self.socket_path(formula, spec)
-            if socket.exists():
-                self.runner.stop(f"{self.label(formula, spec)}.socket")
-            self.runner.stop(f"{self.label(formula, spec)}.service")
-        else:
-            self.runner.stop(self.label(formula, spec), path)
-        return path
+        for label, path in zip(labels, paths):
+            if self.backend == "systemd":
+                if self._label_paths(label, ".timer").exists():
+                    self.runner.stop(f"{label}.timer")
+                if self._label_paths(label, ".socket").exists():
+                    self.runner.stop(f"{label}.socket")
+                if path.exists():
+                    self.runner.stop(f"{label}.service")
+            elif path.exists():
+                self.runner.stop(label, path)
+        return existing[0]
 
     def restart(self, formula: Formula, spec: Optional[ServiceSpec] = None) -> Path:
         self.stop(formula, spec)
@@ -1789,60 +2214,60 @@ class ServiceManager:
 
     def remove(self, formula: Formula) -> None:
         spec = self._spec_for_paths(formula)
-        path = (
-            self.unit_path(formula, spec)
-            if self.backend == "systemd"
-            else self.plist_path(formula, spec)
-        )
-        if path.exists():
+        labels = self.labels(formula, spec)
+        for label in labels:
             if self.backend == "systemd":
-                timer = self.timer_path(formula, spec)
+                main = self._label_paths(label, ".service")
+                timer = self._label_paths(label, ".timer")
+                socket = self._label_paths(label, ".socket")
+                if not (main.exists() or timer.exists() or socket.exists()):
+                    continue
                 if timer.exists():
-                    self.runner.stop(f"{self.label(formula, spec)}.timer")
-                socket = self.socket_path(formula, spec)
+                    self.runner.stop(f"{label}.timer")
                 if socket.exists():
-                    self.runner.stop(f"{self.label(formula, spec)}.socket")
-                self.runner.stop(f"{self.label(formula, spec)}.service")
+                    self.runner.stop(f"{label}.socket")
+                if main.exists():
+                    self.runner.stop(f"{label}.service")
+                for path in (main, timer, socket):
+                    if path.exists():
+                        path.unlink()
             else:
-                self.runner.stop(self.label(formula, spec), path)
-            path.unlink()
-            timer = self.timer_path(formula, spec)
-            if timer.exists():
-                timer.unlink()
-            socket = self.socket_path(formula, spec)
-            if socket.exists():
-                socket.unlink()
+                main = self._label_paths(label, ".plist")
+                if main.exists():
+                    self.runner.stop(label, main)
+                    main.unlink()
 
     def status(self, formula: Formula) -> str:
         spec = self._spec_for_paths(formula)
-        path = (
-            self.unit_path(formula, spec)
-            if self.backend == "systemd"
-            else self.plist_path(formula, spec)
-        )
-        if not path.exists():
+        labels = self.labels(formula, spec)
+        paths = self._main_paths(formula, spec)
+        if not any(path.exists() for path in paths):
             return "none"
-        label = (
-            f"{self.label(formula, spec)}.service"
-            if self.backend == "systemd"
-            else self.label(formula, spec)
-        )
-        return self.runner.status(label)
+        for label in labels:
+            label_arg = f"{label}.service" if self.backend == "systemd" else label
+            if self.runner.status(label_arg) == "started":
+                return "started"
+        return "stopped"
 
     def cleanup(self) -> list[Path]:
-        """Remove service files belonging to formulae that are no longer installed."""
+        """Remove service files belonging to formulae that are no longer installed.
+
+        Recognises both canonical ``sh.brew.*`` and pybrew's legacy
+        ``homebrew.mxcl.*`` file names.  Explicit custom labels cannot be
+        attributed back to a formula and are left alone (documented limitation).
+        """
 
         removed: list[Path] = []
         if not self.directory.is_dir():
             return removed
+        prefixes = (CANONICAL_SERVICE_PREFIX, PYBREW_LEGACY_SERVICE_PREFIX)
+        suffix_ok = (".plist", ".service", ".timer", ".socket")
         for path in sorted(self.directory.iterdir()):
             name = path.name
-            if not (
-                name.startswith("homebrew.mxcl.")
-                and name.endswith((".plist", ".service", ".timer", ".socket"))
-            ):
+            prefix = next((item for item in prefixes if name.startswith(item)), None)
+            if prefix is None or not name.endswith(suffix_ok):
                 continue
-            formula_name = name[len("homebrew.mxcl.") :].rsplit(".", 1)[0]
+            formula_name = name[len(prefix) :].rsplit(".", 1)[0]
             if self.config.opt_path(formula_name).is_dir():
                 continue
             try:
@@ -1873,11 +2298,7 @@ class ServiceManager:
                 {
                     "name": formula.name,
                     "status": self.status(formula),
-                    "file": str(
-                        self.unit_path(formula)
-                        if self.backend == "systemd"
-                        else self.plist_path(formula)
-                    ),
+                    "file": str(self.existing_main_path(formula, spec)),
                     "run": " ".join(spec.run),
                 }
             )

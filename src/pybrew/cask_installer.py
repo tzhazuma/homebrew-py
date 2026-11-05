@@ -3385,8 +3385,113 @@ class CaskInstaller:
         ):
             raise CaskError(f"refusing to zap path outside allowed roots: {path}")
 
+    #: Signals the bounded zap directive may send.
+    _ZAP_SIGNALS = frozenset(
+        {"HUP", "INT", "QUIT", "TERM", "KILL", "USR1", "USR2", "STOP", "CONT"}
+    )
+
+    def _zap_osascript(self, script: str) -> None:
+        """Run one best-effort AppleScript when osascript is available."""
+
+        override = os.environ.get("PYBREW_OSASCRIPT")
+        executable = override or shutil.which("osascript")
+        if not executable:
+            return
+        if sys.platform != "darwin" and not override:
+            return
+        try:
+            subprocess.run(
+                [executable, "-e", script],
+                text=True,
+                capture_output=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+
+    def _zap_quit(self, cask: Cask) -> None:
+        for bundle_id in cask.zap_directives.get("quit", []):
+            bundle = str(bundle_id).strip()
+            if not bundle:
+                continue
+            escaped = json.dumps(bundle)
+            self._zap_osascript(
+                f"tell application id {escaped} to quit"
+            )
+
+    def _zap_login_item(self, cask: Cask) -> None:
+        for item in cask.zap_directives.get("login_item", []):
+            if isinstance(item, dict):
+                if item.get("path") is not None:
+                    field, value = "path", str(item["path"])
+                elif item.get("name") is not None:
+                    field, value = "name", str(item["name"])
+                else:
+                    continue
+            else:
+                field, value = "name", str(item)
+            if not value.strip():
+                continue
+            quoted = json.dumps(value)
+            self._zap_osascript(
+                'tell application "System Events" to delete every login '
+                f"item whose {field} is {quoted}"
+            )
+
+    def _zap_signal(self, cask: Cask) -> None:
+        pgrep = os.environ.get("PYBREW_PGREP") or shutil.which("pgrep")
+        killer = os.environ.get("PYBREW_KILL") or shutil.which("kill")
+        if not pgrep or not killer:
+            return
+        for pair in cask.zap_directives.get("signal", []):
+            if not isinstance(pair, (list, tuple)) or len(pair) != 2:
+                raise CaskError(
+                    f"{cask.token}: each zap signal directive must be "
+                    "[signal, bundle_id]"
+                )
+            signal_name = str(pair[0]).lstrip("-").upper()
+            if signal_name not in self._ZAP_SIGNALS:
+                raise CaskError(
+                    f"{cask.token}: unsupported zap signal {pair[0]!r}"
+                )
+            bundle = str(pair[1]).strip()
+            if not bundle:
+                continue
+            try:
+                result = subprocess.run(
+                    [pgrep, "-f", bundle],
+                    text=True,
+                    capture_output=True,
+                    timeout=5,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            pids = [
+                int(part)
+                for part in result.stdout.split()
+                if part.isdigit()
+            ]
+            for pid in pids:
+                if pid in (os.getpid(), os.getppid()):
+                    continue
+                try:
+                    subprocess.run(
+                        [killer, f"-{signal_name}", str(pid)],
+                        text=True,
+                        capture_output=True,
+                        timeout=5,
+                    )
+                except (OSError, subprocess.TimeoutExpired):
+                    continue
+
     def zap(self, cask: Cask) -> list[Path]:
         removed: list[Path] = []
+        # Homebrew runs these directives before deleting paths; all are
+        # best-effort and can be stubbed with PYBREW_OSASCRIPT/PYBREW_PGREP/
+        # PYBREW_KILL in tests (no real processes are killed by the tests).
+        self._zap_quit(cask)
+        self._zap_signal(cask)
+        self._zap_login_item(cask)
         patterns = [*cask.zap, *cask.zap_directives.get("delete", [])]
         for pattern in patterns:
             expanded = os.path.expanduser(pattern)

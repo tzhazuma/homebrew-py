@@ -178,12 +178,17 @@ def evaluate_service_source(
         raise ServiceError("service source must be a string")
     source = _normalise_source(raw)
     context = resolve_user_config_home(user_config_home)
-    user_environment = _read_user_service_env(formula, context)
+    warnings: list[str] = []
+    user_environment = _read_user_service_env(
+        formula, context, warnings=warnings
+    )
     mode = service_path_mode("homebrew")
     paths = service_paths(formula, config, mode)
     std_env = std_service_path_env_value(config, mode)
     data = _evaluate(source, formula, paths, user_environment, std_env)
-    return _spec_from_result(data, formula, user_environment, context)
+    return _spec_from_result(
+        data, formula, user_environment, context, warnings=warnings
+    )
 
 
 def evaluate_service_block(
@@ -284,6 +289,7 @@ def _read_user_service_env(
     formula: Formula,
     user_config_home: Optional[Path] = None,
     euid: Optional[int] = None,
+    warnings: Optional[list[str]] = None,
 ) -> dict[str, str]:
     """Backward-compatible alias for the shared user env reader.
 
@@ -291,7 +297,7 @@ def _read_user_service_env(
     parser applies exactly the same bounded/security rules as this evaluator.
     """
 
-    return read_user_service_env(formula, user_config_home, euid)
+    return read_user_service_env(formula, user_config_home, euid, warnings=warnings)
 
 
 # ---------------------------------------------------------------------------
@@ -458,6 +464,7 @@ def _spec_from_result(
     formula: Formula,
     user_environment: Optional[dict[str, str]] = None,
     user_config_home: Optional[Path] = None,
+    warnings: Optional[list[str]] = None,
 ) -> ServiceSpec:
     """Convert the shim's JSON payload into a validated :class:`ServiceSpec`.
 
@@ -496,9 +503,11 @@ def _spec_from_result(
     if user_config_home is not None:
         spec.user_config_home = str(user_config_home)
     spec.formula_name = str(formula.name)
-    warnings = data.get("warnings")
-    if isinstance(warnings, list):
-        spec.warnings = [str(warning) for warning in warnings]
+    collected: list[str] = list(warnings or [])
+    shim_warnings = data.get("warnings")
+    if isinstance(shim_warnings, list):
+        collected.extend(str(warning) for warning in shim_warnings)
+    spec.warnings = collected
     return spec
 
 
@@ -794,12 +803,62 @@ class PybrewServiceDSL
     !@data["nice"].nil? && require_root
   end
 
-  def default_service_name
+  # Homebrew's canonical label is ``sh.brew.<name>``; pybrew keeps the legacy
+  # names resolvable for existing service files.
+  def canonical_service_name
+    "sh.brew.#{formula_name}"
+  end
+
+  def canonical_plist_name
+    "#{canonical_service_name}.plist"
+  end
+
+  def legacy_service_name
+    "homebrew.#{formula_name}"
+  end
+
+  def legacy_plist_name
+    "homebrew.mxcl.#{formula_name}.plist"
+  end
+
+  def pybrew_legacy_service_name
     "homebrew.mxcl.#{formula_name}"
   end
 
+  def default_service_name
+    canonical_service_name
+  end
+
   def default_plist_name
-    "#{default_service_name}.plist"
+    canonical_plist_name
+  end
+
+  def plist_name
+    @data["plist_name"] || canonical_service_name
+  end
+
+  def service_name
+    @data["service_name"] || canonical_service_name
+  end
+
+  def plist_names
+    return [@data["plist_name"]] if @data["plist_name"]
+
+    [
+      canonical_service_name,
+      pybrew_legacy_service_name,
+      legacy_service_name
+    ].uniq
+  end
+
+  def service_names
+    return [@data["service_name"]] if @data["service_name"]
+
+    [
+      canonical_service_name,
+      legacy_service_name,
+      pybrew_legacy_service_name
+    ].uniq
   end
 
   # Homebrew's Service#path_dir expands an absolute (or ``~``) path and
@@ -903,8 +962,58 @@ class PybrewServiceDSL
 
   def self.from_hash(hash)
     dsl = new
-    hash.each { |key, value| dsl.data[key.to_s] = value }
+    hash.each do |key, value|
+      key = key.to_s
+      case key
+      when "name"
+        next unless value.is_a?(Hash)
+        macos = value.key?("macos") ? value["macos"] : value[:macos]
+        linux = value.key?("linux") ? value["linux"] : value[:linux]
+        dsl.data["plist_name"] = macos unless macos.nil?
+        dsl.data["service_name"] = linux unless linux.nil?
+      when "run"
+        if value.is_a?(Hash)
+          platform = (PYBREW_SERVICE_CONFIG["platform"] || "").to_s
+          selected_key = platform == "darwin" ? :macos : :linux
+          value = value.key?(selected_key.to_s) ? value[selected_key.to_s] : value[selected_key]
+        end
+        dsl.data["run"] = PybrewServiceJSON.value(value)
+      when "cron"
+        dsl.data["cron"] = value.to_s
+      when "sockets"
+        dsl.data["sockets"] = PybrewServiceJSON.value(value)
+      else
+        dsl.data[key] = PybrewServiceJSON.value(value)
+      end
+    end
     dsl
+  end
+
+  # Homebrew-shaped service option hash for API/persistence parity.  Like the
+  # Python ServiceSpec.to_hash it is option-only: user env overrides and
+  # warnings are local render context, and the platform-conditional run hash
+  # has already been resolved to the current command.
+  def to_hash
+    data = {}
+    data["run"] = @data["run"] if !@data["run"].nil? && !@data["run"].empty?
+    data["run_type"] = @data["run_type"] || "immediate"
+    data["run_at_load"] = @data["run_at_load"] unless @data["run_at_load"].nil?
+    %w[interval keep_alive environment_variables require_root
+       throttle_interval launch_only_once macos_legacy_timers nice
+       restart_delay stop_timeout working_dir root_dir input_path
+       log_path error_log_path process_type sockets cron].each do |key|
+      value = @data[key]
+      next if value.nil?
+      next if value.respond_to?(:empty?) && value.empty?
+      next if value == false
+
+      data[key] = value
+    end
+    name = {}
+    name["macos"] = @data["plist_name"] if @data["plist_name"]
+    name["linux"] = @data["service_name"] if @data["service_name"]
+    data["name"] = name unless name.empty?
+    data
   end
 
   def to_plist

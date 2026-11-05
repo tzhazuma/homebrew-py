@@ -2139,3 +2139,108 @@ def test_evaluator_livecheck_strategy_block_with_url_kwargs(
         assert status["latest_version"] == "2.0"
     finally:
         monkeypatch.undo()
+
+
+@requires_ruby
+def test_evaluator_captures_zap_quit_signal_login_item(
+    allow_ruby: None,
+) -> None:
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  zap quit: ["com.example.one"],\n'
+            '      signal: [["TERM", "com.example.two"], ["HUP", "com.example.three"]],\n'
+            '      login_item: ["Login One"]\n'
+        )
+    )
+
+    assert cask.zap_directives["quit"] == ["com.example.one"]
+    assert cask.zap_directives["signal"] == [
+        ["TERM", "com.example.two"],
+        ["HUP", "com.example.three"],
+    ]
+    assert cask.zap_directives["login_item"] == ["Login One"]
+    unsupported = cask.extra.get("ruby_unsupported") or []
+    assert not any(
+        isinstance(entry, dict) and entry.get("name") == "zap"
+        for entry in unsupported
+    )
+
+
+@requires_ruby
+def test_script_body_extraction_handles_method_definitions(
+    allow_ruby: None,
+) -> None:
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  preflight do\n'
+            '    def helper(x)\n'
+            '      x\n'
+            '    end\n'
+            '    helper(1)\n'
+            '  end\n'
+        )
+    )
+
+    assert cask.preflight is not None
+    assert "def helper(x)" in cask.preflight
+    assert "helper(1)" in cask.preflight
+
+
+@requires_ruby
+def test_unbalanced_script_source_emits_deterministic_warning(
+    allow_ruby: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        "pybrew.cask_ruby._extract_stanza_source", lambda *a, **k: None
+    )
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  preflight do\n'
+            '    puts "x"\n'
+            '  end\n'
+        )
+    )
+
+    warnings = cask.extra.get("ruby_warnings") or []
+    assert any(
+        "preflight" in warning and "could not be recovered" in warning
+        for warning in warnings
+    )
+    assert not cask.preflight
+
+
+@requires_ruby
+def test_evaluator_captures_login_item_hash(allow_ruby: None) -> None:
+    cask = evaluate_cask_source(
+        _source(
+            '  version "1.0"\n'
+            '  zap login_item: [{ path: "/Applications/Login.app" }]\n'
+        )
+    )
+
+    assert cask.zap_directives["login_item"] == [
+        {"path": "/Applications/Login.app"}
+    ]
+
+
+@requires_ruby
+def test_literal_parser_livecheck_strategy_executes(allow_ruby: None) -> None:
+    cask = parse_cask_source(
+        'cask "literal-strategy" do\n'
+        '  version "2.0"\n'
+        '  livecheck do\n'
+        '    url "https://example.com/tool", header: "X-Live: yes"\n'
+        '    strategy :page_match do |page|\n'
+        '      page.scan(/tool-(\\d+(?:\\.\\d+)*)/).flatten\n'
+        '    end\n'
+        '  end\n'
+        'end\n'
+    )
+
+    result = cask.check_livecheck(page="tool-2.0")
+
+    assert result["executed"] is True
+    assert result["result"] == ["2.0"]

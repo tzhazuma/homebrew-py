@@ -111,8 +111,9 @@ class Cask:
     renames: list[tuple[str, str]] = field(default_factory=list)
     uninstall: dict[str, Any] = field(default_factory=dict)
     zap: list[str] = field(default_factory=list)
-    #: Non-trash zap directives: ``delete``/``rmdir``/``pkgutil``.
-    zap_directives: dict[str, list[str]] = field(default_factory=dict)
+    #: Non-trash zap directives (``delete``/``rmdir``/``pkgutil``/``quit``/
+    #: ``signal``/``login_item``).  Signal pairs are stored as ``[signal, id]``.
+    zap_directives: dict[str, list[Any]] = field(default_factory=dict)
     depends_on: dict[str, Any] = field(default_factory=dict)
     os: dict[str, Any] = field(default_factory=dict)
     conflicts_with: dict[str, Any] = field(default_factory=dict)
@@ -1380,7 +1381,22 @@ _SCRIPT_STANZAS = (
 
 # Keywords that open a nested Ruby block inside a cask script body.
 _BLOCK_KEYWORDS = frozenset(
-    {"do", "if", "unless", "case", "begin", "while", "until", "for"}
+    {
+        "do",
+        "if",
+        "unless",
+        "case",
+        "begin",
+        "while",
+        "until",
+        "for",
+        # Ruby method/class/module definitions are balanced blocks too; the
+        # extraction of best-effort script bodies must not stop at their
+        # inner ``end``.
+        "def",
+        "class",
+        "module",
+    }
 )
 
 _ARCH_NAMES = {
@@ -1578,12 +1594,88 @@ class CaskParser:
             elif name == "caveats" and block:
                 self.cask.caveats_source = self._consume_block_body(opener, capture=True)
             elif name == "livecheck" and block:
-                self.cask.livecheck_source = self._consume_block_body(opener, capture=True)
-                self.cask.livecheck_defined = True
+                self._parse_livecheck_block(opener)
             elif block:
                 self._skip_block_body(opener)
             else:
                 self._apply(name, args, kwargs)
+
+    def _parse_livecheck_block(self, opener: Token) -> None:
+        """Capture livecheck metadata with literal-parser parity.
+
+        The full raw body is kept in ``livecheck_source``; the inner ``url``
+        kwargs, ``regex``, ``strategy`` symbol/source, ``skip`` and ``throttle``
+        metadata mirror what the opt-in Ruby evaluator records.
+        """
+
+        cask = self.cask
+        cask.livecheck_defined = True
+        livecheck = cask.livecheck if isinstance(cask.livecheck, dict) else {}
+        cask.livecheck = livecheck
+        body_start = opener.end
+        brace_block = opener.kind == "punct"
+        while True:
+            self.skip_newlines()
+            token = self.peek()
+            if token.kind == "eof":
+                raise FormulaParseError("unterminated livecheck block")
+            closes = (
+                token.kind == "punct" and token.value == "}"
+                if brace_block
+                else token.kind == "kw" and token.value == "end"
+            )
+            if closes:
+                body_end = token.start
+                self.advance()
+                cask.livecheck_source = self.source[body_start:body_end]
+                return
+            if token.kind != "id":
+                self.advance()
+                continue
+            name = str(self.advance().value)
+            args, kwargs = self._parse_arguments()
+            save = self.pos
+            self.skip_newlines()
+            block_opener: Optional[Token] = None
+            if self.peek().kind == "kw" and self.peek().value == "do":
+                block_opener = self.advance()
+            elif self.peek().kind == "punct" and self.peek().value == "{":
+                block_opener = self.advance()
+            else:
+                self.pos = save
+            if name == "url":
+                if args:
+                    livecheck["url"] = str(args[0])
+                if kwargs:
+                    livecheck["url_options"] = {
+                        str(key).lstrip(":"): value
+                        for key, value in kwargs.items()
+                    }
+            elif name == "regex" and args:
+                pattern = str(args[0])
+                match = re.fullmatch(r"/(.*)/([imx]*)", pattern, re.DOTALL)
+                if match is not None:
+                    pattern = match.group(1)
+                livecheck["regex"] = pattern
+            elif name == "strategy":
+                if args:
+                    livecheck["strategy"] = ":" + str(args[0]).lstrip(":")
+                if block_opener is not None:
+                    livecheck["strategy_source"] = (
+                        self._consume_block_body(block_opener, capture=True).strip()
+                    )
+            elif name == "skip":
+                livecheck["skip"] = True
+                if args:
+                    livecheck["skip_msg"] = str(args[0])
+            elif name == "throttle":
+                if args:
+                    livecheck["throttle"] = args[0]
+                if kwargs.get("days") is not None:
+                    livecheck["throttle_days"] = kwargs["days"]
+            elif block_opener is not None:
+                self._skip_block_body(block_opener)
+        return None
 
     def _parse_language(
         self, args: list[Any], kwargs: dict[Any, Any], opener: Optional[Token] = None
@@ -1901,7 +1993,7 @@ class CaskParser:
                 cask.zap.extend(str(item) for item in trash)
             elif trash:
                 cask.zap.append(str(trash))
-            for directive in ("delete", "rmdir", "pkgutil"):
+            for directive in ("delete", "rmdir", "pkgutil", "quit"):
                 value = kwargs.get(directive) or kwargs.get(f":{directive}")
                 if value is None:
                     continue
@@ -1909,6 +2001,20 @@ class CaskParser:
                 cask.zap_directives.setdefault(directive, []).extend(
                     str(item) for item in values
                 )
+            signal = kwargs.get("signal") or kwargs.get(":signal")
+            if signal is not None:
+                flat: list[str] = []
+                for item in signal if isinstance(signal, list) else [signal]:
+                    if isinstance(item, (list, tuple)):
+                        flat.extend(str(part) for part in item)
+                    else:
+                        flat.append(str(item))
+                pairs = [flat[index : index + 2] for index in range(0, len(flat), 2)]
+                cask.zap_directives.setdefault("signal", []).extend(pairs)
+            login_item = kwargs.get("login_item") or kwargs.get(":login_item")
+            if login_item is not None:
+                values = login_item if isinstance(login_item, list) else [login_item]
+                cask.zap_directives.setdefault("login_item", []).extend(values)
         elif name == "os":
             for key, value in kwargs.items():
                 if key in ("macos", "linux"):

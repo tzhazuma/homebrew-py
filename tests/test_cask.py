@@ -910,8 +910,8 @@ def test_default_parser_marks_livecheck_defined() -> None:
     assert cask.livecheck_defined is True
     assert cask.livecheck_source is not None
     assert "regex" in cask.livecheck_source
-    # The literal parser does not evaluate livecheck metadata.
-    assert cask.livecheck == {}
+    # The literal parser captures inert livecheck metadata (no evaluation).
+    assert cask.livecheck["regex"] == "tiny"
     assert cask.autobump is True
 
     plain = parse_cask_source('cask "plain" do\n  version "1.0"\nend\n')
@@ -3970,3 +3970,58 @@ def test_installed_json_minimal_hash_falls_back(tmp_path: Path) -> None:
     cask = loader.load_from_installed_caskfile(path)
     assert cask.token == "minimal"
     assert cask.version == "2.0"
+
+
+# ---------------------------------------------------------------------------
+# Literal parser livecheck metadata parity with the evaluator
+# ---------------------------------------------------------------------------
+
+
+def test_literal_parser_livecheck_metadata_parity() -> None:
+    cask = parse_cask_source(
+        'cask "literal-livecheck" do\n'
+        '  version "1.2.3"\n'
+        '  livecheck do\n'
+        '    url "https://example.com/tiny", header: ["X-Live: yes"], '
+        'user_agent: "lc-agent"\n'
+        '    regex(/tool-(\\d+(?:\\.\\d+)*)/)\n'
+        '    strategy :page_match do |page|\n'
+        '      page.scan(/tool-(\\d+)/).flatten\n'
+        '    end\n'
+        '  end\n'
+        'end\n'
+    )
+
+    assert cask.livecheck_defined is True
+    assert cask.livecheck["url"] == "https://example.com/tiny"
+    assert cask.livecheck["url_options"] == {
+        "header": ["X-Live: yes"],
+        "user_agent": "lc-agent",
+    }
+    assert cask.livecheck["regex"] == r"tool-(\d+(?:\.\d+)*)"
+    assert cask.livecheck["strategy"] == ":page_match"
+    assert "page.scan" in cask.livecheck["strategy_source"]
+    assert cask.livecheck_source is not None
+    assert "url" in cask.livecheck_source
+
+    headers = cask._livecheck_headers()
+    assert headers["X-Live"] == "yes"
+    assert headers["User-Agent"] == "lc-agent"
+
+
+def test_literal_parser_livecheck_regex_status_offline() -> None:
+    cask = parse_cask_source(
+        'cask "literal-regex" do\n'
+        '  version "2.0"\n'
+        '  livecheck do\n'
+        '    url "https://example.com/tiny", header: "X-Live: yes"\n'
+        '    regex(/tool-(\\d+(?:\\.\\d+)*)/)\n'
+        '  end\n'
+        'end\n'
+    )
+
+    up_to_date = cask.livecheck_status(page="tool-2.0")
+    assert up_to_date["status"] == "up_to_date"
+    outdated = cask.livecheck_status(page="tool-3.0")
+    assert outdated["status"] == "outdated"
+    assert outdated["latest_version"] == "3.0"

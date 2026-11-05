@@ -956,14 +956,29 @@ def _cask_from_result(
         cask.zap.extend(str(item) for item in zap)
     zap_directives = data.get("zap_directives")
     if isinstance(zap_directives, dict):
-        for directive in ("delete", "rmdir", "pkgutil"):
+        for directive in (
+            "delete",
+            "rmdir",
+            "pkgutil",
+            "quit",
+            "login_item",
+        ):
             values = zap_directives.get(directive)
             if values is None:
                 continue
             values = values if isinstance(values, list) else [values]
             cask.zap_directives.setdefault(directive, []).extend(
-                str(item) for item in values
+                str(item) if not isinstance(item, dict) else dict(item)
+                for item in values
             )
+        signals = zap_directives.get("signal")
+        if signals is not None:
+            signals = signals if isinstance(signals, list) else [signals]
+            pairs: list[list[str]] = []
+            for pair in signals:
+                if isinstance(pair, (list, tuple)) and len(pair) >= 2:
+                    pairs.append([str(pair[0]), str(pair[1])])
+            cask.zap_directives["signal"] = pairs
 
     depends_on = data.get("depends_on") or {}
     if isinstance(depends_on, dict):
@@ -1824,8 +1839,8 @@ class PybrewCaskDSL
     @data["uninstall"]
   end
 
-  # Upstream zap keys available from the local cask DSL:
-  # trash (protected paths), delete, rmdir and pkgutil.
+  # Upstream zap keys available from the local cask DSL: trash (protected
+  # paths), delete, rmdir, pkgutil, quit, signal and login_item.
   ZAP_DIRECTIVES = %w[delete rmdir pkgutil].freeze
 
   def zap(*args)
@@ -1844,6 +1859,24 @@ class PybrewCaskDSL
       values = value.is_a?(Array) ? value : [value]
       @data["zap_directives"][directive] ||= []
       @data["zap_directives"][directive].concat(values.map(&:to_s))
+    end
+    quit = kwargs.delete("quit")
+    unless quit.nil?
+      values = quit.is_a?(Array) ? quit : [quit]
+      @data["zap_directives"]["quit"] ||= []
+      @data["zap_directives"]["quit"].concat(values.map(&:to_s))
+    end
+    signal = kwargs.delete("signal")
+    unless signal.nil?
+      pairs = Array(signal).flatten.each_slice(2).map { |pair| pair.map(&:to_s) }
+      @data["zap_directives"]["signal"] ||= []
+      @data["zap_directives"]["signal"].concat(pairs)
+    end
+    login_item = kwargs.delete("login_item")
+    unless login_item.nil?
+      values = login_item.is_a?(Array) ? login_item : [login_item]
+      @data["zap_directives"]["login_item"] ||= []
+      @data["zap_directives"]["login_item"].concat(values.map { |v| PybrewCaskJSON.value(v) })
     end
     unless kwargs.empty?
       record_unsupported(

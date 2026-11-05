@@ -256,3 +256,25 @@ def test_search_falls_back_to_homebrew_cask_index(run_cli, tmp_path: Path) -> No
     )
     assert proc.returncode == 0, proc.stderr
     assert "remote-cask: Remote Cask Cask fixture" in proc.stdout
+
+
+def test_online_search_index_is_cached(tmp_path: Path) -> None:
+    from pybrew.api import search_formulae_online
+
+    index = tmp_path / "formula.json"
+    index.write_text('[{"name":"cached-remote","desc":"Cached"}]')
+    cache = tmp_path / "cache" / "formula.json"
+    first = search_formulae_online("cached", api_url=index.as_uri(), cache_path=cache)
+    assert [formula.name for formula in first] == ["cached-remote"]
+    assert cache.is_file()
+    index.unlink()
+    second = search_formulae_online("cached", api_url=index.as_uri(), cache_path=cache)
+    assert [formula.name for formula in second] == ["cached-remote"]
+
+
+def test_doctor_reports_formula_deleted_from_tap(run_cli, sample) -> None:
+    assert run_cli("install", "hello", bottle_tag=sample.tag).returncode == 0
+    (sample.tap / "Formula" / "hello.rb").unlink()
+    proc = run_cli("doctor")
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "no longer in its tap" in proc.stdout

@@ -1023,7 +1023,7 @@ def test_user_service_env_overrides_formula_environment(
 ) -> None:
     config = _config(tmp_path, monkeypatch)
     user_home = tmp_path / "user-config"
-    _write_user_env(
+    env_path = _write_user_env(
         user_home,
         "svc",
         """
@@ -1069,8 +1069,11 @@ def test_user_service_env_overrides_formula_environment(
         "BAR": "value=with=equals",
         "SPACED": "trimmed",
     }
-    # Unknown directive warnings keep their usual surface.
-    assert spec.warnings == ["unsupported service directive `frobnicate`"]
+    # Env skip warnings precede the evaluator's unknown-directive warning.
+    assert spec.warnings == [
+        f"Skipping invalid line in {env_path}: NOT A PAIR",
+        "unsupported service directive `frobnicate`",
+    ]
 
 
 @requires_ruby
@@ -1574,13 +1577,13 @@ def test_service_object_compatibility_helpers(
     )
     spec = evaluate_service_source(source, _formula(), config)
     assert spec.run == [
-        "homebrew.mxcl.svc",
+        "sh.brew.svc",
         "svc",
         "1",
         "false",
         "*",
         "Mon",
-        "homebrew.mxcl.svc",
+        "sh.brew.svc",
         "x",
     ]
 
@@ -1683,3 +1686,109 @@ def test_service_object_cron_defaults_and_timed_helpers(
     spec = evaluate_service_source(source, formula, config)
     # The last `run` wins, matching Homebrew's DSL.
     assert spec.run == ["0", "0", "*", "true", "cron"]
+
+
+# ---------------------------------------------------------------------------
+# Canonical labels and option persistence in the Ruby Service object
+# ---------------------------------------------------------------------------
+
+
+@requires_ruby
+def test_service_object_canonical_names_with_legacy_aliases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allow_ruby: None
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    source = (
+        'run [canonical_service_name, default_service_name, canonical_plist_name, '
+        'legacy_service_name, legacy_plist_name, pybrew_legacy_service_name, '
+        'plist_names.join(","), service_names.join(","), to_plist["Label"]]\n'
+    )
+    spec = evaluate_service_source(source, _formula(), config)
+
+    assert spec.run == [
+        "sh.brew.svc",
+        "sh.brew.svc",
+        "sh.brew.svc.plist",
+        "homebrew.svc",
+        "homebrew.mxcl.svc.plist",
+        "homebrew.mxcl.svc",
+        "sh.brew.svc,homebrew.mxcl.svc,homebrew.svc",
+        "sh.brew.svc,homebrew.svc,homebrew.mxcl.svc",
+        "sh.brew.svc",
+    ]
+
+
+@requires_ruby
+def test_service_object_explicit_name_has_no_aliases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allow_ruby: None
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    source = (
+        'name macos: "com.example.svc", linux: "custom-svc"\n'
+        'run [plist_names.join(","), service_names.join(",")]\n'
+    )
+    spec = evaluate_service_source(source, _formula(), config)
+
+    assert spec.run == ["com.example.svc", "custom-svc"]
+
+
+@requires_ruby
+def test_service_object_to_hash_round_trip(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allow_ruby: None
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    source = (
+        'run ["/bin/svc", "--flag"]\n'
+        'run_type :interval\n'
+        'interval 30\n'
+        'keep_alive successful_exit: true\n'
+        'environment_variables FOO: "bar"\n'
+        'working_dir var/"lib/svc"\n'
+        'launch_only_once true\n'
+        'run [\n'
+        '  to_hash["run"].join("|"),\n'
+        '  to_hash["run_type"],\n'
+        '  to_hash["interval"].to_s,\n'
+        '  to_hash["keep_alive"]["successful_exit"].to_s,\n'
+        '  to_hash["environment_variables"]["FOO"],\n'
+        '  to_hash["working_dir"],\n'
+        '  to_hash["launch_only_once"].to_s,\n'
+        '  self.class.from_hash(to_hash).command.join(",")\n'
+        ']\n'
+    )
+    spec = evaluate_service_source(source, _formula(), config)
+
+    assert spec.run == [
+        "/bin/svc|--flag",
+        "interval",
+        "30",
+        "true",
+        "bar",
+        str(config.prefix / "var" / "lib" / "svc"),
+        "true",
+        "/bin/svc,--flag",
+    ]
+
+
+@requires_ruby
+def test_service_object_from_hash_platform_run_and_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, allow_ruby: None
+) -> None:
+    config = _config(tmp_path, monkeypatch)
+    monkeypatch.setenv("PYBREW_TARGET_OS", "linux")
+    source = (
+        'dsl = self.class.from_hash({"name" => {"macos" => "com.example.svc", '
+        '"linux" => "custom-svc"}, "run" => {"macos" => "/opt/mac", '
+        '"linux" => ["/opt/linux", "--flag"]}, "cron" => "0 6 * * 1"})\n'
+        'run [dsl.command.join("|"), dsl.plist_name, dsl.service_name, '
+        'dsl.parse_cron["Hour"].to_s, dsl.cron["Hour"].to_s]\n'
+    )
+    spec = evaluate_service_source(source, _formula(), config)
+
+    assert spec.run == [
+        "/opt/linux|--flag",
+        "com.example.svc",
+        "custom-svc",
+        "6",
+        "6",
+    ]
