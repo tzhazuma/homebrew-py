@@ -2349,6 +2349,9 @@ def test_script_body_capture_preserves_heredocs_and_rescue(
 def test_exact_script_capture_uses_ruby_ast_range(
     allow_ruby: None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    if sys.platform != "darwin":
+        pytest.skip("MRI AST block-range capture is verified on macOS Ruby")
+
     from pybrew.errors import FormulaParseError
 
     def broken_parser(*_args: object, **_kwargs: object) -> str:
