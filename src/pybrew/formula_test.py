@@ -1938,7 +1938,10 @@ class FormulaTestContext
     begin
       yield
     rescue NO_MATCHING_PATTERN_ERROR => error
-      raise_failure(error.message, nil)
+      # Native Ruby versions differ in the NoMatchingPatternError message
+      # (some expose only the inspected value).  Keep the assertion useful and
+      # host-independent by naming the failure kind explicitly.
+      raise_failure("Pattern does not match: #{error.message}", nil)
     end
   end
 

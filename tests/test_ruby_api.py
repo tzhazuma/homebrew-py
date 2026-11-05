@@ -9167,6 +9167,9 @@ def test_macos_broad_local_detection_with_fake_xcrun_clt_and_system_config(
 def test_macos_local_choice_without_version_overrides_and_rich_system_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    if not is_macos():
+        pytest.skip("macOS Xcode/CLT detection is macOS-only")
+
     monkeypatch.setenv(ALLOW_ENV, "1")
     app = tmp_path / "Xcode.app"
     developer = app / "Contents" / "Developer"
