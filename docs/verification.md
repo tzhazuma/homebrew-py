@@ -44,6 +44,7 @@ Closed the documented partial areas across all owners; full suite grew from
 - Superenv: remaining -Xlinker/-Xpreprocessor/-Xassembler/response-file forms,
   Xcode version matrix and SDK selection warnings.
 - Full suite: **1371 passed, 6 skipped**; real install verified.
+- Commits `12f03cd` + `20d0d43`; CI `41994420972` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Residual parity batch 2026-11-05 (round 7)
 
