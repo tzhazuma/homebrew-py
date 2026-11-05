@@ -28,6 +28,7 @@ Closed the documented partial areas across all owners; full suite grew from
   `cask.json`. `PYBREW_FORMULA_SEARCH_API`/`PYBREW_CASK_SEARCH_API` override the
   index (file:// fixtures work).
 - Real install verification: `REAL INSTALL VERIFIED`.
+- Commits `57d927e` + `54fa7c5`; CI `41973914882` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 - Inventory of the remaining 18 partial areas: `docs/parity-backlog.md`.
 
 
