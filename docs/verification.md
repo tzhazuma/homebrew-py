@@ -44,6 +44,7 @@ Closed the documented partial areas across all owners; full suite grew from
 - Full suite: **1399 passed, 6 skipped**; real install verified.
 - Open backlog: **0 areas / 0 bullets**. Bounded residuals are documented in
   `docs/parity-backlog.md` and are deliberate compatibility limits.
+- Commit `5ddae56`; CI `42066444820` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Residual parity batch 2026-11-05 (round 9)
 
