@@ -48,6 +48,7 @@ Closed the documented partial areas across all owners; full suite grew from
   pybrew's implemented command surface; noted as non-applicable rather than
   silently ignored.
 - Full suite: **1400 passed, 6 skipped**; real install verified.
+- Commit `67029eb`; CI `42205969095` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Residual parity batch 2026-11-06 (round 10)
 
