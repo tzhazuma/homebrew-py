@@ -585,9 +585,10 @@ module PybrewCaskSystem
   end
 end
 
-# Command helpers used by some cask scripts through ``Utils``.  They are
-# intentionally limited to non-interactive execution: no sudo helper is
-# provided and pybrew never prompts for a password.
+# Command helpers used by some cask scripts through ``Utils``.  ``sudo`` is
+# only supported through the explicit ``system_command sudo:`` path in the
+# generated shim (default-enabled, disable with ``PYBREW_ALLOW_CASK_SUDO=0``);
+# no implicit sudo helper is exposed.
 module Utils
   module_function
 
@@ -638,8 +639,8 @@ module Utils
   end
 
   # Write to a command's stdin and capture its output.  This is the safe,
-  # non-interactive subset of Homebrew's ``Utils.popen_write``: no sudo and no
-  # shell is involved.  With ``safe: true`` a non-zero exit raises.
+  # non-interactive subset of Homebrew's ``Utils.popen_write``: no implicit
+  # sudo and no shell is involved.  With ``safe: true`` a non-zero exit raises.
   def popen_write(*args, safe: false, **options, &block)
     environment, command, spawn_options =
       PybrewCaskSystem.normalize(args, options, "Utils.popen_write")
@@ -774,10 +775,12 @@ class PybrewCaskScriptContext
         "`sudo_as_root` cannot be set if sudo is false"
     end
     use_sudo = sudo || sudo_as_root
-    if use_sudo && ENV["PYBREW_ALLOW_CASK_SUDO"].to_s != "1"
+    # Cask root scripts are enabled by default.  Users who want the old
+    # fail-closed behavior can set PYBREW_ALLOW_CASK_SUDO=0 explicitly.
+    sudo_setting = ENV["PYBREW_ALLOW_CASK_SUDO"].to_s.downcase
+    if use_sudo && %w[0 false no off].include?(sudo_setting)
       raise ArgumentError,
-        "system_command: sudo is not supported by pybrew cask scripts " \
-        "(set PYBREW_ALLOW_CASK_SUDO=1 to opt in; sudo_as_root is also gated)"
+        "system_command: sudo is disabled by PYBREW_ALLOW_CASK_SUDO=0"
     end
     arguments = [command, *Array(args_option), *positional]
     environment, argv, spawn_options =

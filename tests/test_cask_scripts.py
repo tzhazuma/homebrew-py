@@ -632,15 +632,14 @@ def test_ruby_shim_exposes_pathname_cask_accessors() -> None:
     assert "@prefix = Pathname(prefix)" in _CASK_SCRIPT_SHIM
 
 
-def test_ruby_shim_has_no_sudo_execution_path() -> None:
+def test_ruby_shim_sudo_is_env_gated_default_on() -> None:
     from pybrew.cask_installer import _CASK_SCRIPT_SHIM
 
-    # No sudo helper and no code path that rewrites an argv to run sudo.
+    # There is no implicit sudo helper; the cask must request it explicitly.
     assert "def sudo" not in _CASK_SCRIPT_SHIM
-    assert "argv.unshift" not in _CASK_SCRIPT_SHIM
-    assert "Process.uid" not in _CASK_SCRIPT_SHIM
-    # Requesting sudo fails loudly rather than silently dropping the option.
-    assert "sudo is not supported" in _CASK_SCRIPT_SHIM
+    # Cask root scripts are enabled by default but can be disabled explicitly.
+    assert 'ENV["PYBREW_ALLOW_CASK_SUDO"]' in _CASK_SCRIPT_SHIM
+    assert "sudo is disabled" in _CASK_SCRIPT_SHIM
 
 
 def test_generated_shim_is_valid_ruby_syntax_without_running_a_body() -> None:
@@ -911,7 +910,7 @@ def test_uninstall_postflight_failure_reports_after_removal(
     ]
 
 
-def test_ruby_shim_exposes_cask_delegators_and_documents_no_sudo() -> None:
+def test_ruby_shim_exposes_cask_delegators_and_sudo_contract() -> None:
     from pybrew.cask_installer import _CASK_SCRIPT_SHIM
 
     for snippet in (
@@ -923,9 +922,9 @@ def test_ruby_shim_exposes_cask_delegators_and_documents_no_sudo() -> None:
     ):
         assert snippet in _CASK_SCRIPT_SHIM
 
-    # Non-interactive only: requesting sudo fails loudly and there is no sudo
-    # helper that could silently escalate.
-    assert "sudo is not supported" in _CASK_SCRIPT_SHIM
+    # Sudo must be requested explicitly; it is env-gated and default-enabled.
+    assert "PYBREW_ALLOW_CASK_SUDO" in _CASK_SCRIPT_SHIM
+    assert "sudo is disabled" in _CASK_SCRIPT_SHIM
     assert "def sudo" not in _CASK_SCRIPT_SHIM
 
 
@@ -1021,14 +1020,34 @@ def test_generated_shim_exposes_runtime_script_context_delegators(
     assert "outdated=true" in lines
 
 
-def test_generated_shim_rejects_sudo_at_runtime(tmp_path: Path) -> None:
+def test_generated_shim_default_allows_sudo(tmp_path: Path) -> None:
+    log = tmp_path / "sudo-default.log"
+    fake = tmp_path / "fake-sudo"
+    fake.write_text(
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" >> " + str(log) + "\n",
+        encoding="utf-8",
+    )
+    fake.chmod(0o755)
+
     proc = _run_shim_body(
         tmp_path,
         'system_command "/bin/echo", args: ["hi"], sudo: true',
+        env={"PYBREW_SUDO": str(fake)},
+    )
+
+    assert proc.returncode == 0, proc.stderr
+    assert log.read_text().splitlines() == ["-n", "-E", "--", "/bin/echo", "hi"]
+
+
+def test_generated_shim_can_disable_sudo(tmp_path: Path) -> None:
+    proc = _run_shim_body(
+        tmp_path,
+        'system_command "/bin/echo", args: ["hi"], sudo: true',
+        env={"PYBREW_ALLOW_CASK_SUDO": "0"},
     )
 
     assert proc.returncode != 0
-    assert "sudo is not supported" in proc.stderr
+    assert "sudo is disabled" in proc.stderr
 
 
 def test_generated_shim_rejects_sudo_as_root_at_runtime(

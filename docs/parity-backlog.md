@@ -28,7 +28,7 @@ unstarted checklist items. They are recorded below for transparency.
 - **Sandbox** — bwrap seccomp uses a caller-supplied compiled BPF; network is
   deny-all without per-host allow-lists; `sandbox-exec` has no seccomp/capability
   drop; Python declarative DSL writes use the in-process boundary.
-- **Cask script** — TTY sudo is opt-in and has no password lifecycle; exact
+- **Cask script** — sudo is enabled by default and TTY mode is opt-in; no password lifecycle; exact
   capture needs MRI AST or Ripper, with Python lexer fallback for exotic bodies.
 - **livecheck** — listing/API parsers are heuristic; skip labels use `skipped`;
   curl transport is bounded (no full TLS/proxy/retry parity).

@@ -645,7 +645,7 @@ def test_installer_skips_post_install_when_keg_already_exists(
 
     second = run_cli("install", "hello", bottle_tag=sample.tag, extra_env=env)
     assert second.returncode == 0, second.stderr + second.stdout
-    assert "Already installed" in second.stdout
+    assert "already installed" in second.stdout + second.stderr
     assert not record.exists()
 
 

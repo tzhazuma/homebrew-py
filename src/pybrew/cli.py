@@ -50,6 +50,7 @@ from .maintenance import (
     upgrade_formula,
 )
 from .models import Formula, candidate_bottle_tags
+from .output import ohai, oh1, ohai_error, opoo, print_keg
 from .paths import Config
 from .ruby_parser import parse_formula_file
 from .services import ServiceError, ServiceManager, ServiceSpec, installed_formulae
@@ -492,7 +493,7 @@ def cmd_info(args: argparse.Namespace) -> int:
             print(json.dumps({"casks": [cask.to_api_json() for cask in casks]}, indent=2))
             return 0
         for cask in casks:
-            print(f"{cask.token}: {cask.version}")
+            ohai(f"{cask.token}: {cask.version}")
             print(f"  {cask.name or ''}")
             print(f"  {cask.desc or ''}")
             print(f"  {cask.homepage or ''}")
@@ -511,7 +512,12 @@ def cmd_info(args: argparse.Namespace) -> int:
     for index, formula in enumerate(formulae):
         if index:
             print()
-        print(f"{formula.name}: stable {formula.version}")
+        headline = f"{formula.name}: stable {formula.version}"
+        if formula.bottle_tags():
+            headline += " (bottled)"
+        if getattr(formula, "head", None) and getattr(formula.head, "url", None):
+            headline += ", HEAD"
+        ohai(headline)
         if formula.desc:
             print(formula.desc)
         if formula.homepage:
@@ -678,6 +684,8 @@ def cmd_search(args: argparse.Namespace) -> int:
             except DownloadError as error:
                 print(f"Error: {error}", file=sys.stderr)
                 return 1
+        if casks:
+            oh1("Casks")
         for cask in casks:
             print(f"{cask.token}: {cask.name or ''} {cask.desc or ''}".strip())
         return 0 if casks else 1
@@ -694,6 +702,8 @@ def cmd_search(args: argparse.Namespace) -> int:
         except DownloadError as error:
             print(f"Error: {error}", file=sys.stderr)
             return 1
+    if results:
+        oh1("Formulae")
     for formula in results:
         print(f"{formula.name}: {formula.desc}" if formula.desc else formula.name)
     return 0 if results else 1
@@ -808,9 +818,10 @@ def cmd_install(args: argparse.Namespace) -> int:
                 exit_code = 1
                 continue
             if result.skipped:
-                print(f"Already installed: {result.token} {result.version}")
+                opoo(f"{result.token} {result.version} is already installed")
             else:
-                print(f"Installed cask: {result.token} {result.version} -> {result.room}")
+                ohai(f"Installing Cask {result.token} {result.version}")
+                print(f"🍺  {result.room}")
                 _record_analytics(config, "install", cask=result.token, version=result.version)
         return exit_code
     if getattr(args, "allow_arbitrary_ruby", False):
@@ -841,10 +852,19 @@ def cmd_install(args: argparse.Namespace) -> int:
             continue
         for result in results:
             if result.skipped:
-                action = "Would install" if args.dry_run else "Already installed"
+                if args.dry_run:
+                    print(f"Would install {result.name} {result.version}")
+                else:
+                    opoo(f"{result.name} {result.version} is already installed")
+                continue
+            if args.dry_run:
+                print(f"Would install {result.name} {result.version}")
+                continue
+            if result.from_bottle:
+                ohai(f"Pouring {result.name} {result.version}")
             else:
-                action = "Installed" if not result.from_bottle else "Poured from bottle"
-            print(f"{action}: {result.name} {result.version} ({result.keg})")
+                ohai(f"Installing {result.name} {result.version}")
+            print_keg(result.keg)
             if not args.dry_run and not result.skipped:
                 _record_analytics(
                     config,
@@ -886,6 +906,7 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
                 print(f"Error: {error}", file=sys.stderr)
                 exit_code = 1
                 continue
+            ohai(f"Uninstalling Cask {token}")
             print(f"Uninstalled cask: {token}")
             _record_analytics(config, "uninstall", cask=token)
         return exit_code
@@ -899,8 +920,10 @@ def cmd_uninstall(args: argparse.Namespace) -> int:
             print(f"Error: {error}", file=sys.stderr)
             exit_code = 1
             continue
+        if kegs:
+            ohai(f"Uninstalling {name}")
         for keg in kegs:
-            print(f"Uninstalled {name} ({keg})")
+            print(f"Uninstalled {keg}")
         _record_analytics(config, "uninstall", formula=name)
     return exit_code
 
@@ -999,6 +1022,8 @@ def cmd_bundle(args: argparse.Namespace) -> int:
 
 def cmd_update(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
+    if not args.quiet:
+        ohai("Updating Homebrew...")
     results = TapManager(config).update_all()
     if not results:
         if not args.quiet:
@@ -1117,6 +1142,7 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
                 if args.dry_run:
                     print(f"Would upgrade: {token} {cask.resolved_version()}")
                     continue
+                ohai(f"Upgrading {token}")
                 result = installer.upgrade(cask)
             except PybrewError as error:
                 print(f"Error: {error}", file=sys.stderr)
@@ -1152,6 +1178,8 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
             exit_code = 1
             continue
         for message in messages:
+            if not args.dry_run:
+                ohai(f"Upgrading {formula.name}")
             print(("Would upgrade: " if args.dry_run else "Upgraded: ") + message)
         if not args.dry_run:
             _record_analytics(config, "upgrade", formula=formula.name, version=formula.pkg_version)
@@ -1756,7 +1784,37 @@ _COMMANDS = {
 }
 
 
+_COMMAND_ALIASES = {
+    "ls": "list",
+    "rm": "uninstall",
+    "remove": "uninstall",
+    "up": "update",
+    "instal": "install",
+    "uninstal": "uninstall",
+    "dr": "doctor",
+    "abv": "info",
+    "homepage": "home",
+    "lc": "livecheck",
+}
+
+
+def _normalise_command_aliases(argv: list[str]) -> list[str]:
+    """Translate Homebrew's common command aliases before argparse."""
+
+    result = list(argv)
+    if "-S" in result:
+        result[result.index("-S")] = "search"
+        return result
+    command = _command_from_argv(result)
+    if command in _COMMAND_ALIASES:
+        result[result.index(command)] = _COMMAND_ALIASES[command]
+    return result
+
+
 def main(argv: Optional[list[str]] = None) -> int:
+    if argv is None:
+        argv = sys.argv[1:]
+    argv = _normalise_command_aliases(list(argv))
     parser = build_parser()
     build_options, filtered_argv = split_build_option_args(argv)
     args = parser.parse_args(filtered_argv)

@@ -6,7 +6,7 @@ claiming full parity with every file under `Library/Homebrew`.
 
 ## Current baseline
 
-- Full test suite: 1400 passed, 6 skipped (2026-11-06 batch after Homebrew `970da0cd77`)
+- Full test suite: 1403 passed, 6 skipped (2026-11-06 batch after Homebrew `970da0cd77`)
 - CI: Ubuntu 3.9 / 3.12 + macOS 3.12
 - Optional Ruby bridge remains opt-in; default parser behavior is unchanged.
 
@@ -26,7 +26,7 @@ claiming full parity with every file under `Library/Homebrew`.
 | --- | --- | --- |
 | livecheck strategy execution | Completed | `Cask#check_livecheck`/`livecheck_status` and `pybrew livecheck --page/--online/--header/--timeout`; opt-in HTTP transport has bounded redirects, per-origin header stripping, per-host token bucket, Retry-After/jitter/retry budget, gzip/deflate and optional brotli, 5 MiB caps. Upstream `throttle` rate/days mutual exclusion is enforced for source casks |
 | livecheck `url_options` | Completed | Header/user-agent/etc. captured best-effort |
-| Cask script shim | Completed | `sudo:` is implemented behind `PYBREW_ALLOW_CASK_SUDO=1` with non-interactive `-n`, askpass (`SUDO_ASKPASS`), and opt-in TTY (`PYBREW_SUDO_TTY=1`) modes; `arch`/caskroom/language delegators covered; exact script-body capture uses MRI AST then Ripper.lex with Python lexer fallback; zap supports `trash`/`delete`/`rmdir`/`pkgutil`; installed caskfile JSON fallback; livecheck blocks/strategy and URL kwargs supported. Bounded residuals documented in `parity-backlog.md` |
+| Cask script shim | Completed | `sudo:` is enabled by default with non-interactive `-n` (disable with `PYBREW_ALLOW_CASK_SUDO=0`), askpass (`SUDO_ASKPASS`), and opt-in TTY (`PYBREW_SUDO_TTY=1`) modes; `arch`/caskroom/language delegators covered; exact script-body capture uses MRI AST then Ripper.lex with Python lexer fallback; zap supports `trash`/`delete`/`rmdir`/`pkgutil`; installed caskfile JSON fallback; livecheck blocks/strategy and URL kwargs supported. Bounded residuals documented in `parity-backlog.md` |
 | Test DSL arbitrary formula lookup | Completed | Lightweight metadata for up to 10000 local-tap formulae; Alias/ symlinks, local API JSON and a lazy bounded source-alias scan resolve literal/qualified/dependency aliases; dynamic source-only aliases require a prior scan. Unknown aliases fail clearly |
 | Test DSL dependency test isolation | Completed | Dependency tests isolate testpath/cwd/HOME/TMPDIR/PATH/PYBREW_PREFIX, pin HOMEBREW_PREFIX/HOMEBREW_CELLAR env and hide inherited `PYBREW_*` markers while restoring parent state; Ruby constants and arbitrary non-PYBREW env remain process-global |
 | Test DSL version object / revision | Completed | Python `PkgVersion` and DSL `Version`/`PkgVersion` match a bounded Homebrew comparison table exactly (including non-transitive zero-skip equality), Token hierarchy, canonical/legacy hashes, revision-aware PkgVersion and legacy opt-out; `pypi_packages_info`/`follow_installed_alias`/`loaded_from_metadata?` shims added; Python Token hierarchy now exposes StringToken/CompositeToken/factory/predicates |

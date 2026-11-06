@@ -401,3 +401,24 @@ def test_formula_options_are_install_only(run_cli) -> None:
     proc = run_cli("info", "--with-ssl", "hello")
     assert proc.returncode == 2
     assert "unrecognized arguments" in proc.stderr
+
+
+def test_homebrew_style_install_output(run_cli, sample) -> None:
+    proc = run_cli("install", "hello", bottle_tag=sample.tag)
+    assert proc.returncode == 0, proc.stderr
+    assert "==> Pouring hello 1.0" in proc.stdout
+    assert "🍺" in proc.stdout
+    assert "files," in proc.stdout
+
+
+def test_homebrew_command_aliases(run_cli, sample) -> None:
+    assert run_cli("install", "hello", bottle_tag=sample.tag).returncode == 0
+    listed = run_cli("ls")
+    assert listed.returncode == 0, listed.stderr
+    assert "hello" in listed.stdout
+    info = run_cli("abv", "hello")
+    assert info.returncode == 0, info.stderr
+    assert "hello: stable 1.0" in info.stdout
+    searched = run_cli("-S", "hello")
+    assert searched.returncode == 0, searched.stderr
+    assert "hello" in searched.stdout

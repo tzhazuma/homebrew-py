@@ -965,6 +965,7 @@ def test_cask_script_shim_macos_and_command_helpers(
     monkeypatch.setenv("PYBREW_MACOS_VERSION", "14.5")
     monkeypatch.setenv("PYBREW_MACOS_SDK_PATH", str(sdk))
     monkeypatch.setenv("PYBREW_MACOS_LANGUAGE", "zh-Hans-CN")
+    monkeypatch.setenv("PYBREW_ALLOW_CASK_SUDO", "0")
     # Make the cask ``arch`` stanza selection deterministic on every host.
     monkeypatch.setattr("pybrew.cask.platform.machine", lambda: "arm64")
     monkeypatch.setattr(
@@ -1094,7 +1095,7 @@ def test_cask_script_shim_macos_and_command_helpers(
       system_command "/usr/bin/true", sudo: true
       raise "sudo should have been rejected"
     rescue ArgumentError => error
-      if !error.message.include?("sudo is not supported")
+      if !error.message.include?("sudo is disabled")
         raise "unexpected sudo error"
       end
     end
