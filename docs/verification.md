@@ -44,6 +44,7 @@ Closed the documented partial areas across all owners; full suite grew from
 - zsh: `~/.zshrc` defines `pybrew`, pins `PYBREW_ALLOW_CASK_SUDO` default 1,
   and was verified with `zsh -ic 'whence -w pybrew; pybrew --version'`.
 - Full suite: **1403 passed, 6 skipped**; real install verified.
+- Commit `b046b1f`; CI `42270261512` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Upstream sync 2026-11-06 (round 11)
 
