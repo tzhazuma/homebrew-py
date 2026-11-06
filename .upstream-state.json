@@ -1,10 +1,10 @@
 {
   "brew": {
     "default_branch": "main",
-    "head_date": "2026-11-04T23:43:21Z",
-    "head_message": "Merge pull request #24487 from Homebrew/rubocops-bottle-redundancy",
-    "head_sha": "de8798899ced6272919c5e83c917bd9186cce30d",
-    "head_url": "https://github.com/Homebrew/brew/commit/de8798899ced6272919c5e83c917bd9186cce30d",
+    "head_date": "2026-11-06T08:37:00Z",
+    "head_message": "Merge pull request #24500 from Homebrew/dependabot/github_actions/github-actions-8cf1ecc066",
+    "head_sha": "970da0cd771488410bb97d315e7ccb5435dfa97a",
+    "head_url": "https://github.com/Homebrew/brew/commit/970da0cd771488410bb97d315e7ccb5435dfa97a",
     "release": {
       "name": "7.0.12",
       "published_at": "2026-11-02T08:36:59Z",
@@ -13,13 +13,13 @@
     },
     "repo": "Homebrew/brew"
   },
-  "checked_at": "2026-11-05T01:00:06+00:00",
+  "checked_at": "2026-11-06T10:44:05+00:00",
   "core": {
     "default_branch": "main",
-    "head_date": "2026-11-05T00:27:57Z",
-    "head_message": "Merge pull request #323502 from Homebrew/remove-disabled-packages",
-    "head_sha": "ee8b2bc9784a3ee899498e516670e4b0f53538b3",
-    "head_url": "https://github.com/Homebrew/homebrew-core/commit/ee8b2bc9784a3ee899498e516670e4b0f53538b3",
+    "head_date": "2026-11-06T09:47:11Z",
+    "head_message": "Merge pull request #323802 from Homebrew/bump-poppler-26.11.0",
+    "head_sha": "0c9f6dcddcee70c389ab9ce8f1c332e03d822764",
+    "head_url": "https://github.com/Homebrew/homebrew-core/commit/0c9f6dcddcee70c389ab9ce8f1c332e03d822764",
     "release": null,
     "repo": "Homebrew/homebrew-core"
   }

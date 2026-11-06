@@ -3,7 +3,7 @@
 ## Full parity batch 2026-11-05
 
 Closed the documented partial areas across all owners; full suite grew from
-1156 to **1399 passed, 6 skipped**.
+1156 to **1400 passed, 6 skipped**.
 
 - **Cask**: evaluator `zap` now captures trash/delete/rmdir/pkgutil; livecheck
   URL kwargs merge into request headers; installed caskfile falls back to JSON;
@@ -31,6 +31,23 @@ Closed the documented partial areas across all owners; full suite grew from
 - Commits `57d927e` + `54fa7c5`; CI `41973914882` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
+
+## Upstream sync 2026-11-06 (round 11)
+
+- Upstream: Homebrew/brew `de8798899c` → `970da0cd77` (release 7.0.12,
+  2026-11-02); Homebrew/homebrew-core `ee8b2bc9` → `0c9f6dcddcee`.
+- Reviewed the 51 changed Ruby files. Formula/cask/service-relevant changes
+  implemented:
+  - livecheck `crate` strategy now uses the crates.io sparse index
+    (`index.crates.io/<prefix>/<package>`), parses NDJSON, uses `vers`, and
+    skips yanked releases;
+  - `autoremove` now excludes pinned formulae, matching Homebrew's safe-removal
+    behavior.
+- Other upstream changes were bundle-extension/CLI internals (cargo/flatpak/
+  winget/vscode, untap/update-report/commands/diagnostic/unpack) outside
+  pybrew's implemented command surface; noted as non-applicable rather than
+  silently ignored.
+- Full suite: **1400 passed, 6 skipped**; real install verified.
 
 ## Residual parity batch 2026-11-06 (round 10)
 

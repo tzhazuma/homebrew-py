@@ -4537,9 +4537,15 @@ def test_livecheck_listing_strategies(
         (
             "crate",
             "https://crates.io/crates/example",
-            "https://crates.io/api/v1/crates/example",
-            '{"crate": {"max_version": "1.2.3"}}',
-            ["1.2.3"],
+            "https://index.crates.io/ex/am/example",
+            '\n'.join(
+                [
+                    '{"name":"example","vers":"1.0.0","yanked":false}',
+                    '{"name":"example","vers":"2.1.0","yanked":false}',
+                    '{"name":"example","vers":"9.9.9","yanked":true}',
+                ]
+            ),
+            ["1.0.0", "2.1.0"],
         ),
         (
             "cpan",

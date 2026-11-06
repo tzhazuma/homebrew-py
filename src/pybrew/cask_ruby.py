@@ -81,6 +81,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -1017,6 +1018,79 @@ def _strategy_page_text_with_options(
     return _strategy_page_text(fetcher, url, page, using=using)
 
 
+def _strategy_crate_name(url: Optional[str]) -> Optional[str]:
+    """Return the crate name from a crates.io/static.crates.io URL."""
+
+    if not url:
+        return None
+    parsed = urllib.parse.urlsplit(url)
+    parts = [part for part in parsed.path.split("/") if part]
+    host = parsed.hostname or ""
+    if host in ("crates.io", "www.crates.io") and parts[:1] == ["crates"]:
+        if len(parts) >= 2:
+            return parts[1].lower()
+    if host in ("static.crates.io", "crates.io", "www.crates.io"):
+        basename = parts[-1] if parts else ""
+        match = re.match(r"^(.+?)-\d", basename)
+        if match:
+            return match.group(1).lower()
+    basename = parts[-1] if parts else ""
+    match = re.match(r"^(.+?)-\d", basename)
+    return match.group(1).lower() if match else None
+
+
+def _strategy_crate_index_url(crate: str) -> str:
+    """Build the crates.io sparse-index URL for ``crate``."""
+
+    package = crate.lower()
+    if len(package) < 3:
+        directory = str(len(package))
+    elif len(package) == 3:
+        directory = f"3/{package[0]}"
+    else:
+        directory = f"{package[:2]}/{package[2:4]}"
+    return f"https://index.crates.io/{directory}/{package}"
+
+
+def _strategy_crate_versions(page: str, regex: Optional[str]) -> list[str]:
+    """Parse crates.io sparse-index NDJSON, skipping yanked versions."""
+
+    import json as json_module
+
+    pattern = re.compile(regex) if regex else None
+    default = re.compile(r"(?<![0-9A-Za-z])(v?\d+(?:\.\d+)+(?:[-.][0-9A-Za-z]+)*)")
+    values: list[str] = []
+    for line in page.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json_module.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(entry, dict) or entry.get("yanked"):
+            continue
+        version = entry.get("vers")
+        if version is None:
+            continue
+        text = str(version)
+        match = pattern.search(text) if pattern else default.search(text)
+        if match is None:
+            continue
+        value = match.group(1) if match.groups() else match.group(0)
+        values.append(value)
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = value.strip()
+        if len(text) > 1 and text[0] in ("v", "V") and text[1].isdigit():
+            text = text[1:]
+        if text and text not in seen:
+            seen.add(text)
+            normalized.append(text)
+    return normalized
+
+
 def _strategy_remote_api(
     name: str, url: Optional[str]
 ) -> tuple[Optional[str], tuple[str, ...], bool]:
@@ -1052,21 +1126,10 @@ def _strategy_remote_api(
             )
         return url, ("name", "tag", "version"), True
     if name == "crate":
-        crate = None
-        if host in ("crates.io", "www.crates.io"):
-            if len(parts) >= 2 and parts[0] == "crates":
-                crate = parts[1]
+        crate = _strategy_crate_name(url)
         if crate is None:
-            basename = parts[-1] if parts else ""
-            match = re.match(r"^(.+?)-\d", basename)
-            crate = match.group(1) if match else None
-        if crate is None:
-            return None, ("num", "version"), True
-        return (
-            f"https://crates.io/api/v1/crates/{crate}",
-            ("max_version", "num", "newest_version"),
-            False,
-        )
+            return None, ("vers",), True
+        return _strategy_crate_index_url(crate), ("vers",), False
     if name == "npm":
         package = None
         if host in ("registry.npmjs.org", "www.npmjs.com", "npmjs.com"):
@@ -1461,10 +1524,20 @@ def _execute_python_livecheck_strategy(
             )
             page_size = len(page_text)
             candidates = _strategy_yaml_versions(page_text)
+        elif name == "crate":
+            target, _keys, _html_fallback = _strategy_remote_api(name, url)
+            if target is None:
+                raise CaskError("crate strategy could not derive an API URL")
+            _strategy_using(options)
+            _strategy_verify_url(options, url)
+            page_text = _strategy_page_text(
+                fetcher, target, page, using=_strategy_using(options)
+            )
+            page_size = len(page_text)
+            candidates = _strategy_crate_versions(page_text, regex_text)
         elif name in (
             "github_releases",
             "bitbucket",
-            "crate",
             "npm",
             "ruby_gems",
             "cpan",

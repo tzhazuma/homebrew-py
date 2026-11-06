@@ -147,3 +147,16 @@ def test_cleanup_keeps_newest_when_latest_formula_not_installed(run_cli, sample)
     assert proc.returncode == 0, proc.stderr
     assert not old.exists()
     assert (sample.prefix / "Cellar" / "hello" / "1.0").is_dir()
+
+
+def test_autoremove_skips_pinned_dependency(run_cli, sample) -> None:
+    assert run_cli("install", "hello-dep", bottle_tag=sample.tag).returncode == 0
+    assert run_cli("uninstall", "hello-dep").returncode == 0
+    assert run_cli("pin", "dep").returncode == 0
+    dry = run_cli("autoremove", "--dry-run")
+    assert dry.returncode == 0, dry.stderr
+    assert "dep" not in dry.stdout
+    real = run_cli("autoremove")
+    assert real.returncode == 0, real.stderr
+    assert (sample.prefix / "Cellar" / "dep" / "2.0").is_dir()
+    assert run_cli("unpin", "dep").returncode == 0

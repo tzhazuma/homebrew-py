@@ -195,7 +195,10 @@ def autoremove(config: Config, dry_run: bool = False) -> list[str]:
                 if dep in installed and dep not in needed:
                     needed.add(dep)
                     changed = True
-    removable = [name for name in installed if name not in needed]
+    pinned = pinned_names(config)
+    removable = [
+        name for name in installed if name not in needed and name not in pinned
+    ]
     removed: list[str] = []
     for name in removable:
         formula = Formula(name=name)
