@@ -46,6 +46,7 @@ Closed the documented partial areas across all owners; full suite grew from
   pybrew's bounded equivalents were reviewed and no applicable API changes
   required code changes this round.
 - Full suite: **1404 passed, 6 skipped**; real install verified.
+- Commit `13ebbe8`; CI `42392978728` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## CLI/cask compatibility 2026-11-07 (round 12)
 
