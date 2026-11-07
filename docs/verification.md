@@ -3,7 +3,7 @@
 ## Full parity batch 2026-11-05
 
 Closed the documented partial areas across all owners; full suite grew from
-1156 to **1403 passed, 6 skipped**.
+1156 to **1404 passed, 6 skipped**.
 
 - **Cask**: evaluator `zap` now captures trash/delete/rmdir/pkgutil; livecheck
   URL kwargs merge into request headers; installed caskfile falls back to JSON;
@@ -31,6 +31,21 @@ Closed the documented partial areas across all owners; full suite grew from
 - Commits `57d927e` + `54fa7c5`; CI `41973914882` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
+
+## Upstream sync 2026-11-07
+
+- Upstream: Homebrew/brew `970da0cd77` → `650524b3b2`; Homebrew/homebrew-core
+  `0c9f6dcddcee` → `77174ea4211d`.
+- Reviewed the changed Ruby files (vendor/bundle excluded). Formula/cask/service
+  relevant: `cmd/info` now resolves dependents through `Formula#possible_names`
+  (aliases/oldnames); `cask/upgrade` fails explicitly for named unupgradable
+  casks. Implemented alias/oldname-aware `Dependents:` in `pybrew info`; cask
+  upgrade already exits non-zero with an explicit error.
+- Other changes were FormulaInstaller dependency-expansion/bottle-compat
+  internals, diagnostic grouping, rubocops, dev commands and vendored gems;
+  pybrew's bounded equivalents were reviewed and no applicable API changes
+  required code changes this round.
+- Full suite: **1404 passed, 6 skipped**; real install verified.
 
 ## CLI/cask compatibility 2026-11-07 (round 12)
 

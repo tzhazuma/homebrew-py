@@ -422,3 +422,10 @@ def test_homebrew_command_aliases(run_cli, sample) -> None:
     searched = run_cli("-S", "hello")
     assert searched.returncode == 0, searched.stderr
     assert "hello" in searched.stdout
+
+
+def test_info_reports_installed_dependents(run_cli, sample) -> None:
+    assert run_cli("install", "hello-dep", bottle_tag=sample.tag).returncode == 0
+    proc = run_cli("info", "dep")
+    assert proc.returncode == 0, proc.stderr
+    assert "Dependents: hello-dep" in proc.stdout

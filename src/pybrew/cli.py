@@ -484,6 +484,27 @@ def _formula_json(formula: Formula, config: Config) -> dict[str, Any]:
 
 
 # -- command implementations --------------------------------------------
+def _installed_dependents(config: Config, formula: Formula) -> list[str]:
+    """Return installed formulae that depend on ``formula`` (aliases included)."""
+
+    possible = {formula.name}
+    if getattr(formula, "oldname", None):
+        possible.add(str(formula.oldname))
+    possible.update(str(alias) for alias in getattr(formula, "aliases", []) or [])
+    dependents: list[str] = []
+    installed = Cellar(config).installed()
+    for name in sorted(installed):
+        versions = installed.get(name) or []
+        if not versions:
+            continue
+        receipt = read_receipt(config.keg_path(name, versions[-1]))
+        for dependency in receipt.get("runtime_dependencies", []) or []:
+            if str(dependency).rsplit("/", 1)[-1] in possible:
+                dependents.append(name)
+                break
+    return dependents
+
+
 def cmd_info(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     if getattr(args, "cask", False):
@@ -538,6 +559,9 @@ def cmd_info(args: argparse.Namespace) -> int:
         print(f"Bottles: {len(tags)} tag(s)" + (f" ({', '.join(sorted(tags)[:4])})" if tags else ""))
         if formula.dependencies:
             print("Dependencies: " + ", ".join(sorted({dep.name for dep in formula.dependencies})))
+        dependents = _installed_dependents(config, formula) if installed else []
+        if dependents:
+            print("Dependents: " + ", ".join(dependents))
     return 0
 
 
