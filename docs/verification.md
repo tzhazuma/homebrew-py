@@ -43,8 +43,13 @@ Closed the documented partial areas across all owners; full suite grew from
     `possible_names` and the formula's tap when the canonical rack is absent.
 - Cask `sha256` `should_return` guard was reviewed; pybrew's bounded Ruby cask
   shim already keeps scalar/getter forms separate and needs no change.
+- Local `brew update` was run: repos updated (`/usr/local/Homebrew` stable HEAD
+  `bf464f5727`), but its automatic `pkgconf` reinstall failed because the
+  installed Command Line Tools do not support macOS 27. Repository updates
+  succeeded; the CLT/pkgconf step is an environment issue, not a pybrew one.
 - Full suite: **1404 passed, 6 skipped**; real install verified.
-- Commit `227a157`; CI `42432788169` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
+- Commits `227a157` + `2819258`; CI `42432788169` and `42491356583` green on
+  Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Upstream sync 2026-11-07
 
