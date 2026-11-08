@@ -44,6 +44,7 @@ Closed the documented partial areas across all owners; full suite grew from
 - Cask `sha256` `should_return` guard was reviewed; pybrew's bounded Ruby cask
   shim already keeps scalar/getter forms separate and needs no change.
 - Full suite: **1404 passed, 6 skipped**; real install verified.
+- Commit `227a157`; CI `42432788169` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Upstream sync 2026-11-07
 
