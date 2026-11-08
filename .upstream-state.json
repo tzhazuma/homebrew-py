@@ -13,13 +13,13 @@
     },
     "repo": "Homebrew/brew"
   },
-  "checked_at": "2026-11-08T01:00:05+00:00",
+  "checked_at": "2026-11-08T01:57:38+00:00",
   "core": {
     "default_branch": "main",
-    "head_date": "2026-11-07T21:56:14Z",
-    "head_message": "Merge pull request #324136 from Homebrew/bump-resterm-1.18.0",
-    "head_sha": "0320d5a7ac3d7470022ac0bd0a855f485adab24f",
-    "head_url": "https://github.com/Homebrew/homebrew-core/commit/0320d5a7ac3d7470022ac0bd0a855f485adab24f",
+    "head_date": "2026-11-08T01:44:54Z",
+    "head_message": "Merge pull request #324150 from Homebrew/bump-overturemaps-2.1.0",
+    "head_sha": "e729ec4747f868b8d13184dd9f5b3a0650c54f0d",
+    "head_url": "https://github.com/Homebrew/homebrew-core/commit/e729ec4747f868b8d13184dd9f5b3a0650c54f0d",
     "release": null,
     "repo": "Homebrew/homebrew-core"
   }

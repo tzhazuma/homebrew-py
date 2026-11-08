@@ -35,7 +35,7 @@ Closed the documented partial areas across all owners; full suite grew from
 ## Upstream sync 2026-11-08
 
 - Upstream: Homebrew/brew `650524b3b2` → `3ccfa1d071`; Homebrew/homebrew-core
-  `77174ea4211d` → `0320d5a7ac3d`.
+  `77174ea4211d` → `e729ec4747f8`.
 - Formula/cask-relevant changes implemented:
   - `Formula#installed_kegs`/`#installed_prefixes` now accept optional formula
     names (used for aliases/renames);
