@@ -6,7 +6,7 @@ claiming full parity with every file under `Library/Homebrew`.
 
 ## Current baseline
 
-- Full test suite: 1404 passed, 6 skipped (2026-11-08 batch after Homebrew `650524b3b2`)
+- Full test suite: 1404 passed, 6 skipped (2026-11-08 batch after Homebrew `3ccfa1d07143`)
 - CI: Ubuntu 3.9 / 3.12 + macOS 3.12
 - Optional Ruby bridge remains opt-in; default parser behavior is unchanged.
 

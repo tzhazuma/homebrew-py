@@ -2467,6 +2467,7 @@ def test_formula_installed_kegs_are_keg_objects(
             '    ref.latest_installed_keg.version.to_s,\n'
             '    ref.any_installed_keg.version.to_s,\n'
             '    ref.installed_prefixes.map { |path| path.basename.to_s }.join(","),\n'
+            '    ref.installed_kegs(["ruby-kegs-alias"]).map { |keg| keg.version }.join(","),\n'
             '    ref.tab.installed_on_request?.to_s\n'
             '  ].join("\\n")\n'
         ),
@@ -2474,6 +2475,7 @@ def test_formula_installed_kegs_are_keg_objects(
     config = _config(tmp_path)
     for version in ("1.0", "2.0"):
         (config.cellar / "ruby-kegs" / version).mkdir(parents=True)
+    (config.cellar / "ruby-kegs-alias" / "3.0").mkdir(parents=True)
     (config.cellar / "ruby-kegs" / "2.0" / "INSTALL_RECEIPT.json").write_text(
         json.dumps({"installed_on_request": False})
     )
@@ -2485,7 +2487,8 @@ def test_formula_installed_kegs_are_keg_objects(
     assert lines[3] == "2.0"
     assert lines[4] == "2.0"
     assert lines[5] == "1.0,2.0"
-    assert lines[6] == "false"
+    assert lines[6] == "3.0"
+    assert lines[7] == "false"
 
 
 def test_system_config_helpers(

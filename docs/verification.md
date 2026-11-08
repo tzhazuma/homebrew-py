@@ -32,6 +32,19 @@ Closed the documented partial areas across all owners; full suite grew from
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
 
+## Upstream sync 2026-11-08
+
+- Upstream: Homebrew/brew `650524b3b2` → `3ccfa1d071`; Homebrew/homebrew-core
+  `77174ea4211d` → `0320d5a7ac3d`.
+- Formula/cask-relevant changes implemented:
+  - `Formula#installed_kegs`/`#installed_prefixes` now accept optional formula
+    names (used for aliases/renames);
+  - `Formulary.to_rack` falls back to a unique installed rack matching
+    `possible_names` and the formula's tap when the canonical rack is absent.
+- Cask `sha256` `should_return` guard was reviewed; pybrew's bounded Ruby cask
+  shim already keeps scalar/getter forms separate and needs no change.
+- Full suite: **1404 passed, 6 skipped**; real install verified.
+
 ## Upstream sync 2026-11-07
 
 - Upstream: Homebrew/brew `970da0cd77` → `650524b3b2`; Homebrew/homebrew-core

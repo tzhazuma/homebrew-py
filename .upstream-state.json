@@ -1,10 +1,10 @@
 {
   "brew": {
     "default_branch": "main",
-    "head_date": "2026-11-06T23:35:21Z",
-    "head_message": "Merge pull request #24450 from Homebrew/bump-cooldown-throttle",
-    "head_sha": "650524b3b2817269b1fc7623da96b81c3dec0491",
-    "head_url": "https://github.com/Homebrew/brew/commit/650524b3b2817269b1fc7623da96b81c3dec0491",
+    "head_date": "2026-11-07T16:15:45Z",
+    "head_message": "Merge pull request #24523 from dduugg/audit-typed-options",
+    "head_sha": "3ccfa1d071435faf83990f0788d18920ab90d817",
+    "head_url": "https://github.com/Homebrew/brew/commit/3ccfa1d071435faf83990f0788d18920ab90d817",
     "release": {
       "name": "7.0.12",
       "published_at": "2026-11-02T08:36:59Z",
@@ -13,13 +13,13 @@
     },
     "repo": "Homebrew/brew"
   },
-  "checked_at": "2026-11-07T01:00:06+00:00",
+  "checked_at": "2026-11-08T01:00:05+00:00",
   "core": {
     "default_branch": "main",
-    "head_date": "2026-11-06T23:53:56Z",
-    "head_message": "Merge pull request #323964 from Homebrew/bump-awscli-2.39.6",
-    "head_sha": "77174ea4211d657e77259fe056484899525457b6",
-    "head_url": "https://github.com/Homebrew/homebrew-core/commit/77174ea4211d657e77259fe056484899525457b6",
+    "head_date": "2026-11-07T21:56:14Z",
+    "head_message": "Merge pull request #324136 from Homebrew/bump-resterm-1.18.0",
+    "head_sha": "0320d5a7ac3d7470022ac0bd0a855f485adab24f",
+    "head_url": "https://github.com/Homebrew/homebrew-core/commit/0320d5a7ac3d7470022ac0bd0a855f485adab24f",
     "release": null,
     "repo": "Homebrew/homebrew-core"
   }

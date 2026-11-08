@@ -5498,17 +5498,23 @@ class PybrewFormulaRef
     raw.nil? ? 0 : raw.to_i
   end
 
-  def installed_kegs
-    rack = Pathname.new(File.join(self.class.cellar, name))
-    return [] unless rack.directory?
+  def installed_kegs(formula_names = possible_names)
+    racks = Array(formula_names).map do |formula_name|
+      Pathname.new(File.join(self.class.cellar, formula_name.to_s))
+    end
+    kegs = racks.flat_map do |rack|
+      next [] unless rack.directory?
 
-    rack.children.select { |child| child.directory? }
-        .map { |child| Keg.new(child) }
+      rack.children.select { |child| child.directory? }
+          .map { |child| Keg.new(child) }
+    end
+    kegs.uniq { |keg| keg.to_s }
         .sort_by { |keg| self.class.version_key(keg.basename.to_s) }
   end
 
-  def installed_prefixes
-    installed_kegs.map { |keg| keg.prefix }.sort_by { |path| path.basename.to_s }
+  def installed_prefixes(formula_names = possible_names)
+    installed_kegs(formula_names).map { |keg| keg.prefix }
+                                 .sort_by { |path| path.basename.to_s }
   end
 
   def tab
@@ -12207,7 +12213,26 @@ module Formulary
 
     canonical = canonical_name(ref)
     candidate = HOMEBREW_CELLAR/canonical
-    candidate.directory? ? candidate.realpath : candidate
+    return candidate.realpath if candidate.directory?
+
+    # A renamed/aliased keg may live under an old rack name.  Prefer a unique
+    # installed rack matching the formula's possible names and tap.
+    possible_rack = begin
+      formula = factory(ref)
+      possible_names = formula.possible_names.reject do |possible_name|
+        (HOMEBREW_CELLAR/possible_name).symlink?
+      end
+      kegs = formula.installed_kegs(possible_names)
+      matching_racks = kegs.group_by(&:rack).filter_map do |installed_rack, group|
+        next if installed_rack.symlink? || group.any? { |keg| keg.tab.tap != formula.tap }
+
+        installed_rack
+      end
+      matching_racks.first if matching_racks.one?
+    rescue ScriptError, StandardError
+      nil
+    end
+    possible_rack || candidate
   rescue StandardError
     nil
   end
