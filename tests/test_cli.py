@@ -486,3 +486,41 @@ def test_list_cask_named(run_cli, sample) -> None:
     missing = run_cli("list", "--cask", "nope")
     assert missing.returncode == 1
     assert "not installed" in missing.stderr
+
+
+def test_top_level_brew_queries(run_cli, sample) -> None:
+    prefix = run_cli("--prefix")
+    assert prefix.returncode == 0, prefix.stderr
+    assert prefix.stdout.strip() == str(sample.prefix)
+    for flag, value in (
+        ("--cellar", sample.prefix / "Cellar"),
+        ("--cache", sample.cache),
+    ):
+        proc = run_cli(flag)
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.strip() == str(value)
+    taps = run_cli("--taps")
+    assert taps.returncode == 0
+    assert str(sample.tap) in taps.stdout
+    env = run_cli("--env")
+    assert env.returncode == 0
+    assert f'HOMEBREW_PREFIX="{sample.prefix}"' in env.stdout
+    casks = run_cli("install", "--cask", "testapp")
+    assert casks.returncode == 0, casks.stderr
+    listed = run_cli("casks")
+    assert listed.returncode == 0, listed.stderr
+    assert "testapp" in listed.stdout
+
+
+def test_common_brew_commands_casks_formulae_options_which(run_cli, sample) -> None:
+    assert run_cli("install", "hello", bottle_tag=sample.tag).returncode == 0
+    formulae = run_cli("formulae")
+    assert formulae.returncode == 0
+    assert "hello" in formulae.stdout.split()
+    which = run_cli("which-formula", "hello")
+    assert which.returncode == 0
+    assert "hello" in which.stdout
+    options = run_cli("options", "hello")
+    assert options.returncode == 0
+    casks = run_cli("casks")
+    assert casks.returncode == 0

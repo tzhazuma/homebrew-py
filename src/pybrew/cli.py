@@ -159,10 +159,12 @@ def build_parser() -> argparse.ArgumentParser:
     info.add_argument("formulae", nargs="+")
     info.add_argument("--json", action="store_true", help="emit brew-compatible JSON")
     info.add_argument("--api", action="store_true", help="fall back to formulae.brew.sh")
+    info.add_argument("--formula", action="store_true", help="treat arguments as formulae")
     info.add_argument("--cask", action="store_true", help="show cask information")
 
     search = subparsers.add_parser("search", parents=[common], help="search formulae or casks")
     search.add_argument("pattern")
+    search.add_argument("--formula", action="store_true", help="treat arguments as formulae")
     search.add_argument("--cask", action="store_true", help="search local cask taps")
 
     listing = subparsers.add_parser("list", parents=[common], help="list installed formulae")
@@ -232,6 +234,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     fetch_cmd = subparsers.add_parser("fetch", parents=[common], help="download formula/cask artifacts")
     fetch_cmd.add_argument("formulae", nargs="+")
+    fetch_cmd.add_argument("--formula", action="store_true", help="treat arguments as formulae")
     fetch_cmd.add_argument("--cask", action="store_true")
     fetch_cmd.add_argument("--api", action="store_true")
 
@@ -325,6 +328,14 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "commands", parents=[common], help="list built-in commands"
     )
+    subparsers.add_parser("casks", parents=[common], help="list installed casks")
+    subparsers.add_parser("formulae", parents=[common], help="list available formulae")
+    options_cmd = subparsers.add_parser("options", parents=[common], help="show formula options")
+    options_cmd.add_argument("formula")
+    which_cmd = subparsers.add_parser(
+        "which-formula", parents=[common], help="show which formula provides a command"
+    )
+    which_cmd.add_argument("executable")
 
     missing_cmd = subparsers.add_parser(
         "missing", parents=[common], help="check kegs and casks for missing dependencies"
@@ -344,6 +355,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     reinstall_cmd = subparsers.add_parser("reinstall", parents=[common], help="reinstall formulae")
     reinstall_cmd.add_argument("formulae", nargs="+")
+    reinstall_cmd.add_argument("--formula", action="store_true", help="treat arguments as formulae")
     reinstall_cmd.add_argument("--cask", action="store_true")
     reinstall_cmd.add_argument("--system-pkg", action="store_true")
     reinstall_cmd.add_argument("--run-scripts", action="store_true")
@@ -797,7 +809,11 @@ def cmd_list(args: argparse.Namespace) -> int:
             print(json.dumps({"casks": rows}, indent=2))
             return 0
         for row in rows:
-            print(f"{row['token']} {row['version']}")
+            print(
+                f"{row['token']} {row['version']}"
+                if args.versions
+                else row["token"]
+            )
         return 0
     cellar = Cellar(config)
     installed = cellar.installed()
@@ -819,6 +835,11 @@ def cmd_list(args: argparse.Namespace) -> int:
             print(f"{name} {' '.join(versions)}")
         else:
             print(name)
+    for row in CaskInstaller(config).list_installed():
+        if args.versions:
+            print(f"{row['token']} {row['version']}")
+        else:
+            print(row["token"])
     return 0
 
 
@@ -1260,6 +1281,46 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
         if not args.dry_run:
             _record_analytics(config, "upgrade", formula=formula.name, version=formula.pkg_version)
     return exit_code
+
+
+def cmd_casks(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    for row in CaskInstaller(config).list_installed():
+        print(row["token"])
+    return 0
+
+
+def cmd_formulae(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    for name in _loader(config).formula_names():
+        print(name)
+    return 0
+
+
+def cmd_options(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    formula = _load_formula(args.formula, _loader(config), use_api=False)
+    for option in getattr(formula, "options", []) or []:
+        print(option)
+    return 0
+
+
+def cmd_which_formula(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    wanted = args.executable
+    matches: list[str] = []
+    for name, versions in sorted(Cellar(config).installed().items()):
+        if not versions:
+            continue
+        keg = config.keg_path(name, versions[-1])
+        for directory in ("bin", "sbin"):
+            path = keg / directory / wanted
+            if path.exists():
+                matches.append(name)
+                break
+    for name in matches:
+        print(name)
+    return 0 if matches else 1
 
 
 def cmd_commands(args: argparse.Namespace) -> int:
@@ -1891,6 +1952,10 @@ _COMMANDS = {
     "leaves": cmd_leaves,
     "uses": cmd_uses,
     "commands": cmd_commands,
+    "casks": cmd_casks,
+    "formulae": cmd_formulae,
+    "options": cmd_options,
+    "which-formula": cmd_which_formula,
     "missing": cmd_missing,
     "autoremove": cmd_autoremove,
     "cleanup": cmd_cleanup,
@@ -1930,8 +1995,34 @@ def _normalise_command_aliases(argv: list[str]) -> list[str]:
         return result
     command = _command_from_argv(result)
     if command in _COMMAND_ALIASES:
-        result[result.index(command)] = _COMMAND_ALIASES[command]
+        replacement = _COMMAND_ALIASES[command]
+        index = result.index(command)
+        if isinstance(replacement, list):
+            result[index : index + 1] = replacement
+        else:
+            result[index] = replacement
     return result
+
+
+def _config_from_top_level_argv(argv: list[str]) -> Config:
+    prefix = None
+    cache = None
+    taps: list[str] = []
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token in ("--prefix", "--cache", "--tap") and index + 1 < len(argv):
+            value = argv[index + 1]
+            if token == "--prefix":
+                prefix = value
+            elif token == "--cache":
+                cache = value
+            else:
+                taps.append(value)
+            index += 2
+            continue
+        index += 1
+    return Config.default(prefix=prefix, cache=cache, taps=taps)
 
 
 def main(argv: Optional[list[str]] = None) -> int:
@@ -1959,7 +2050,36 @@ def main(argv: Optional[list[str]] = None) -> int:
     if _command_from_argv(argv) is None and not any(
         token in ("-h", "--help", "--version") for token in argv
     ):
-        parser.print_help()
+        query = (
+            argv[-1]
+            if argv and argv[-1] in {
+                "--prefix", "--cellar", "--repository", "--cache",
+                "--taps", "--caskroom", "--env",
+            }
+            else None
+        )
+        if query is None:
+            parser.print_help()
+            return 0
+        config = _config_from_top_level_argv(argv)
+        config.validate_prefix()
+        if query == "--prefix":
+            print(config.prefix)
+        elif query == "--cellar":
+            print(config.cellar)
+        elif query == "--repository":
+            print(Path(__file__).resolve().parents[2])
+        elif query == "--cache":
+            print(config.cache)
+        elif query == "--caskroom":
+            print(config.caskroom)
+        elif query == "--taps":
+            for tap in config.taps:
+                print(tap)
+        else:
+            print(f'export HOMEBREW_PREFIX="{config.prefix}"')
+            print(f'export HOMEBREW_CELLAR="{config.cellar}"')
+            print(f'export HOMEBREW_CACHE="{config.cache}"')
         return 0
     build_options, filtered_argv = split_build_option_args(argv)
     args = parser.parse_args(filtered_argv)

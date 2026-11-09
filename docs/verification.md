@@ -3,7 +3,7 @@
 ## Full parity batch 2026-11-05
 
 Closed the documented partial areas across all owners; full suite grew from
-1156 to **1410 passed, 6 skipped**.
+1156 to **1412 passed, 6 skipped**.
 
 - **Cask**: evaluator `zap` now captures trash/delete/rmdir/pkgutil; livecheck
   URL kwargs merge into request headers; installed caskfile falls back to JSON;
@@ -31,6 +31,21 @@ Closed the documented partial areas across all owners; full suite grew from
 - Commits `57d927e` + `54fa7c5`; CI `41973914882` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
+
+## CLI audit 2026-11-09
+
+- Compared the pybrew command list against `brew commands` (118 built-in/dev
+  commands). Common package-management commands are now present: `list
+  [formula|cask]`, `help [command]`, bare help, `commands`, `casks`, `formulae`,
+  `options`, `which-formula`, `missing`, plus `--prefix`/`--cellar`/
+  `--repository`/`--cache`/`--taps`/`--caskroom`/`--env` top-level queries.
+- `pybrew list <keg>` prints keg files; `list --versions` and cask listing are
+  supported; missing names report Homebrew-style errors.
+- `--formula` aliases and `--json=v2` normalization are accepted.
+- Upstream-only developer commands (bump/audit/style/rubocop/test-bot/etc.) are
+  intentionally not ported; they are not package-management operations and
+  would require Homebrew's development checkout.
+- Full suite: **1412 passed, 6 skipped**; real install verified.
 
 ## CLI compatibility 2026-11-09
 
