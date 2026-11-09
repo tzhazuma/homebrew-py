@@ -166,8 +166,10 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--cask", action="store_true", help="search local cask taps")
 
     listing = subparsers.add_parser("list", parents=[common], help="list installed formulae")
+    listing.add_argument("formulae", nargs="*", help="installed formula/cask to list files for")
     listing.add_argument("--versions", action="store_true", help="show all installed versions")
     listing.add_argument("--json", action="store_true")
+    listing.add_argument("--formula", action="store_true", help="treat arguments as formulae")
     listing.add_argument("--cask", action="store_true", help="list installed casks")
     listing.add_argument("--pinned", action="store_true", help="list pinned formulae")
 
@@ -186,6 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("--overwrite", action="store_true", help="overwrite link conflicts")
     install.add_argument("--dry-run", action="store_true")
     install.add_argument("--api", action="store_true", help="fall back to formulae.brew.sh")
+    install.add_argument("--formula", action="store_true", help="treat arguments as formulae")
     install.add_argument("--cask", action="store_true", help="install a cask instead of a formula")
     install.add_argument("--appdir", type=Path, help="cask application directory")
     install.add_argument("--pkg-root", type=Path, help="root for cask pkg payloads")
@@ -235,6 +238,7 @@ def build_parser() -> argparse.ArgumentParser:
     uninstall = subparsers.add_parser("uninstall", parents=[common], help="uninstall formulae")
     uninstall.add_argument("formulae", nargs="+")
     uninstall.add_argument("--force", action="store_true")
+    uninstall.add_argument("--formula", action="store_true", help="treat arguments as formulae")
     uninstall.add_argument("--cask", action="store_true", help="uninstall casks")
     uninstall.add_argument("--zap", action="store_true", help="also zap cask trash")
     uninstall.add_argument(
@@ -296,12 +300,14 @@ def build_parser() -> argparse.ArgumentParser:
     outdated = subparsers.add_parser("outdated", parents=[common], help="list outdated formulae or casks")
     outdated.add_argument("--json", action="store_true")
     outdated.add_argument("--api", action="store_true")
+    outdated.add_argument("--formula", action="store_true")
     outdated.add_argument("--cask", action="store_true")
 
     upgrade = subparsers.add_parser("upgrade", parents=[common], help="upgrade outdated formulae")
     upgrade.add_argument("formulae", nargs="*")
     upgrade.add_argument("--dry-run", action="store_true")
     upgrade.add_argument("--api", action="store_true")
+    upgrade.add_argument("--formula", action="store_true")
     upgrade.add_argument("--cask", action="store_true")
     upgrade.add_argument("--system-pkg", action="store_true")
     upgrade.add_argument("--run-scripts", action="store_true")
@@ -315,6 +321,10 @@ def build_parser() -> argparse.ArgumentParser:
     leaves = subparsers.add_parser("leaves", parents=[common], help="list explicitly installed formulae")
     uses = subparsers.add_parser("uses", parents=[common], help="show installed formulae depending on a formula")
     uses.add_argument("formula")
+
+    subparsers.add_parser(
+        "commands", parents=[common], help="list built-in commands"
+    )
 
     missing_cmd = subparsers.add_parser(
         "missing", parents=[common], help="check kegs and casks for missing dependencies"
@@ -743,6 +753,40 @@ def cmd_search(args: argparse.Namespace) -> int:
 
 def cmd_list(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
+    if getattr(args, "formulae", None) and getattr(args, "cask", False):
+        installer = CaskInstaller(config)
+        exit_code = 0
+        for token in args.formulae:
+            versions = installer.installed_versions(token)
+            if not versions:
+                print(f"Error: Cask {token!r} is not installed.", file=sys.stderr)
+                exit_code = 1
+                continue
+            if args.versions:
+                print(f"{token} {' '.join(versions)}")
+                continue
+            room = config.caskroom / token / versions[-1]
+            for path in sorted(room.rglob("*")):
+                if path.is_file() or path.is_symlink():
+                    print(path)
+        return exit_code
+    if getattr(args, "formulae", None):
+        installed = Cellar(config).installed()
+        exit_code = 0
+        for name in args.formulae:
+            versions = installed.get(name) or []
+            if not versions:
+                print(f"Error: No such keg: {name}", file=sys.stderr)
+                exit_code = 1
+                continue
+            if args.versions:
+                print(f"{name} {' '.join(versions)}")
+                continue
+            keg = config.keg_path(name, versions[-1])
+            for path in sorted(keg.rglob("*")):
+                if path.is_file() or path.is_symlink():
+                    print(path)
+        return exit_code
     if getattr(args, "pinned", False):
         for name in sorted(pinned_names(config)):
             print(name)
@@ -1216,6 +1260,12 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
         if not args.dry_run:
             _record_analytics(config, "upgrade", formula=formula.name, version=formula.pkg_version)
     return exit_code
+
+
+def cmd_commands(args: argparse.Namespace) -> int:
+    for name in sorted(set(_COMMANDS) | {"help"}):
+        print(name)
+    return 0
 
 
 def cmd_missing(args: argparse.Namespace) -> int:
@@ -1840,6 +1890,7 @@ _COMMANDS = {
     "upgrade": cmd_upgrade,
     "leaves": cmd_leaves,
     "uses": cmd_uses,
+    "commands": cmd_commands,
     "missing": cmd_missing,
     "autoremove": cmd_autoremove,
     "cleanup": cmd_cleanup,
@@ -1886,8 +1937,30 @@ def _normalise_command_aliases(argv: list[str]) -> list[str]:
 def main(argv: Optional[list[str]] = None) -> int:
     if argv is None:
         argv = sys.argv[1:]
+    argv = [
+        "--json" if token.startswith("--json=") else token for token in argv
+    ]
     argv = _normalise_command_aliases(list(argv))
     parser = build_parser()
+    if not argv:
+        parser.print_help()
+        return 0
+    if _command_from_argv(argv) == "help":
+        help_index = argv.index("help")
+        topic = argv[help_index + 1] if help_index + 1 < len(argv) else None
+        if topic is None:
+            parser.print_help()
+            return 0
+        try:
+            parser.parse_args([topic, "-h"])
+        except SystemExit as error:
+            return int(error.code or 0)
+        return 0
+    if _command_from_argv(argv) is None and not any(
+        token in ("-h", "--help", "--version") for token in argv
+    ):
+        parser.print_help()
+        return 0
     build_options, filtered_argv = split_build_option_args(argv)
     args = parser.parse_args(filtered_argv)
     args.build_options = tuple(build_options)

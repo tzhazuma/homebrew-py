@@ -443,3 +443,46 @@ def test_missing_reports_absent_runtime_dependency(run_cli, sample) -> None:
     assert "pybrew install dep" in proc.stderr
     hidden = run_cli("missing", "--hide", "dep")
     assert hidden.returncode == 0
+
+
+def test_list_named_formula_and_missing_formula(run_cli, sample) -> None:
+    assert run_cli("install", "hello", bottle_tag=sample.tag).returncode == 0
+    listed = run_cli("list", "hello")
+    assert listed.returncode == 0, listed.stderr
+    assert "Cellar/hello/1.0/INSTALL_RECEIPT.json" in listed.stdout
+    versions = run_cli("list", "--versions", "hello")
+    assert versions.returncode == 0
+    assert "hello 1.0" in versions.stdout
+    missing = run_cli("list", "gcc")
+    assert missing.returncode == 1
+    assert "No such keg" in missing.stderr
+
+
+def test_help_command(run_cli) -> None:
+    top = run_cli("help")
+    assert top.returncode == 0
+    assert "usage: pybrew" in top.stdout
+    sub = run_cli("help", "list")
+    assert sub.returncode == 0
+    assert "usage: pybrew list" in sub.stdout
+    bare = run_cli()
+    assert bare.returncode == 0
+    assert "usage: pybrew" in bare.stdout
+
+
+def test_commands_lists_help_and_list(run_cli) -> None:
+    proc = run_cli("commands")
+    assert proc.returncode == 0
+    assert "install" in proc.stdout
+    assert "list" in proc.stdout
+    assert "help" in proc.stdout
+
+
+def test_list_cask_named(run_cli, sample) -> None:
+    assert run_cli("install", "--cask", "testapp").returncode == 0
+    listed = run_cli("list", "--cask", "testapp")
+    assert listed.returncode == 0, listed.stderr
+    assert "Caskroom/testapp/1.0" in listed.stdout
+    missing = run_cli("list", "--cask", "nope")
+    assert missing.returncode == 1
+    assert "not installed" in missing.stderr
