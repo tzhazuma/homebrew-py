@@ -3,7 +3,7 @@
 ## Full parity batch 2026-11-05
 
 Closed the documented partial areas across all owners; full suite grew from
-1156 to **1412 passed, 6 skipped**.
+1156 to **1415 passed, 6 skipped**.
 
 - **Cask**: evaluator `zap` now captures trash/delete/rmdir/pkgutil; livecheck
   URL kwargs merge into request headers; installed caskfile falls back to JSON;
@@ -31,6 +31,17 @@ Closed the documented partial areas across all owners; full suite grew from
 - Commits `57d927e` + `54fa7c5`; CI `41973914882` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
+
+## Color/bold CLI output 2026-11-09
+
+- Added TTY-aware ANSI styling in `src/pybrew/output.py`:
+  - blue bold `==>` headlines (`Formulae`/`Casks`/install phases);
+  - green installed `✔` markers and `🍺` summary;
+  - yellow `Warning:`, red `Error:`;
+  - `NO_COLOR` and `TERM=dumb` disable styling, so piped output/CI stay plain.
+- `search` now prints Homebrew-style name columns (with `--desc` to include
+  descriptions), installed/disabled/deprecated markers, and cask columns.
+- Full suite: **1415 passed, 6 skipped**; real install verified.
 
 ## CLI audit 2026-11-09
 

@@ -31,7 +31,7 @@ def test_info_human(run_cli) -> None:
 def test_search(run_cli) -> None:
     proc = run_cli("search", "hello")
     assert proc.returncode == 0
-    assert "hello:" in proc.stdout
+    assert "hello" in proc.stdout
     assert "hello-dep" in proc.stdout
 
 
@@ -238,6 +238,7 @@ def test_search_falls_back_to_homebrew_formula_index(run_cli, tmp_path: Path) ->
     )
     proc = run_cli(
         "search",
+        "--desc",
         "remote-only",
         extra_env={"PYBREW_FORMULA_SEARCH_API": index.as_uri()},
     )
@@ -254,6 +255,7 @@ def test_search_falls_back_to_homebrew_cask_index(run_cli, tmp_path: Path) -> No
     proc = run_cli(
         "search",
         "--cask",
+        "--desc",
         "remote-cask",
         extra_env={"PYBREW_CASK_SEARCH_API": index.as_uri()},
     )

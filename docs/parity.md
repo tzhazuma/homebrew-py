@@ -52,7 +52,7 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 | Bundle | Yes | Brewfile install/check/list/dump, tap URL, link:false, args, mas/vscode, restart_service |
 | Analytics | Yes | Local-only opt-in event log; no upload |
 | Formula tests | `brew test` | `run_test` + test DSL; dependency test blocks, isolated dependency testpaths, skip/failure propagation |
-| Fetch / source inspection | `brew fetch`, `cat`, `home`, `edit` | `fetch` formula/cask; `cat`/`home`/`edit` formula/cask; `list <keg>` lists files; `help [cmd]` |
+| Fetch / source inspection | `brew fetch`, `cat`, `home`, `edit` | `fetch` formula/cask; `cat`/`home`/`edit` formula/cask; `list <keg>` lists files; `help [cmd]`; TTY blue/bold headings, green markers and colored warnings |
 | Self-update / doctor | Yes | `doctor` checks prefix, Cellar, cask artifacts, links and orphan services; `--json`; `shellenv` |
 
 ## Ruby API coverage

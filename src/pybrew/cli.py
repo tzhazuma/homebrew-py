@@ -50,7 +50,7 @@ from .maintenance import (
     upgrade_formula,
 )
 from .models import Formula, candidate_bottle_tags
-from .output import ohai, oh1, ohai_error, opoo, print_keg
+from .output import green, ohai, oh1, ohai_error, opoo, print_columns, print_keg, red, yellow
 from .paths import Config
 from .ruby_parser import parse_formula_file
 from .services import ServiceError, ServiceManager, ServiceSpec, installed_formulae
@@ -164,6 +164,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     search = subparsers.add_parser("search", parents=[common], help="search formulae or casks")
     search.add_argument("pattern")
+    search.add_argument("--desc", action="store_true", help="also show descriptions")
     search.add_argument("--formula", action="store_true", help="treat arguments as formulae")
     search.add_argument("--cask", action="store_true", help="search local cask taps")
 
@@ -724,6 +725,39 @@ def cmd_search(args: argparse.Namespace) -> int:
     cache_dir = Path(
         os.environ.get("PYBREW_SEARCH_CACHE_DIR", str(config.cache / "api"))
     )
+    installed_formulae = Cellar(config).installed()
+    installed_casks = {
+        str(row.get("token")) for row in CaskInstaller(config).list_installed()
+    }
+
+    def formula_item(formula: Formula) -> str:
+        name = formula.name
+        suffix = ""
+        if getattr(formula, "disabled", False):
+            suffix = red(" (disabled)")
+        elif getattr(formula, "deprecated", False):
+            suffix = yellow(" (deprecated)")
+        marker = green(" ✔") if name in installed_formulae else ""
+        if getattr(args, "desc", False) and formula.desc:
+            return f"{name}: {formula.desc}{suffix}{marker}"
+        return f"{name}{suffix}{marker}"
+
+    def cask_item(cask: Any) -> str:
+        token = cask.token
+        suffix = ""
+        if getattr(cask, "disabled", False):
+            suffix = red(" (disabled)")
+        elif getattr(cask, "deprecated", False):
+            suffix = yellow(" (deprecated)")
+        marker = green(" ✔") if token in installed_casks else ""
+        if getattr(args, "desc", False):
+            detail = " ".join(
+                str(part) for part in (cask.name, cask.desc) if part
+            )
+            if detail:
+                return f"{token}: {detail}{suffix}{marker}"
+        return f"{token}{suffix}{marker}"
+
     if getattr(args, "cask", False):
         cask_loader = _cask_loader(config)
         casks = cask_loader.search(args.pattern)
@@ -740,9 +774,9 @@ def cmd_search(args: argparse.Namespace) -> int:
                 return 1
         if casks:
             oh1("Casks")
-        for cask in casks:
-            print(f"{cask.token}: {cask.name or ''} {cask.desc or ''}".strip())
+            print_columns([cask_item(cask) for cask in casks])
         return 0 if casks else 1
+
     loader = _loader(config)
     results = loader.search(args.pattern)
     if not results:
@@ -758,10 +792,8 @@ def cmd_search(args: argparse.Namespace) -> int:
             return 1
     if results:
         oh1("Formulae")
-    for formula in results:
-        print(f"{formula.name}: {formula.desc}" if formula.desc else formula.name)
+        print_columns([formula_item(formula) for formula in results])
     return 0 if results else 1
-
 
 def cmd_list(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
