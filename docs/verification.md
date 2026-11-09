@@ -46,6 +46,7 @@ Closed the documented partial areas across all owners; full suite grew from
   separate formula/cask index files.
 - Added concurrency and formula-cache tests.
 - Full suite: **1418 passed, 6 skipped**; real install verified.
+- Commit `6d1462d`; CI `42609835792` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## API formula fallback 2026-11-09
 
