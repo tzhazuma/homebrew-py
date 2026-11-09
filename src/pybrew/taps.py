@@ -72,8 +72,9 @@ def discover_taps(paths: Iterable[Path]) -> list[Tap]:
 class FormulaLoader:
     """Load formulae by name from a list of taps."""
 
-    def __init__(self, taps: Iterable[Tap]):
+    def __init__(self, taps: Iterable[Tap], *, api_fallback: bool = False):
         self.taps = list(taps)
+        self.api_fallback = api_fallback
         self._path_cache: dict[str, tuple[Tap, Path]] = {}
 
     def tap_names(self) -> list[str]:
@@ -103,7 +104,14 @@ class FormulaLoader:
         raise FormulaNotFound(f"no formula named {name!r} in taps: {self.tap_names()}")
 
     def load(self, name: str) -> Formula:
-        tap, path = self._locate(name)
+        try:
+            tap, path = self._locate(name)
+        except FormulaNotFound:
+            if not self.api_fallback:
+                raise
+            from .api import fetch_formula
+
+            return fetch_formula(name)
         formula = parse_formula_file(path, tap=tap.name)
         return formula
 
@@ -112,6 +120,12 @@ class FormulaLoader:
             self._locate(name)
             return True
         except FormulaNotFound:
+            if not self.api_fallback:
+                return False
+        try:
+            self.load(name)
+            return True
+        except Exception:
             return False
 
     def search(self, pattern: str) -> list[Formula]:

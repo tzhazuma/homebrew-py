@@ -115,3 +115,32 @@ def test_update_command(run_cli, sample, tmp_path: Path) -> None:
     proc = run_cli("update")
     assert proc.returncode == 0, proc.stderr
     assert "updated: tzhazuma/demo" in proc.stdout
+
+
+def test_formula_loader_falls_back_to_api_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pybrew.api import formula_from_api
+    from pybrew.taps import FormulaLoader
+
+    called: list[str] = []
+
+    def fake_fetch(name: str):
+        called.append(name)
+        return formula_from_api(
+            {
+                "name": name,
+                "desc": "API fallback",
+                "homepage": "https://example.com",
+                "versions": {"stable": "1.0"},
+                "bottle": {"stable": {"files": {"arm64_sonoma": {"sha256": "a" * 64}}}},
+            }
+        )
+
+    monkeypatch.setattr("pybrew.api.fetch_formula", fake_fetch)
+    loader = FormulaLoader([], api_fallback=True)
+    formula = loader.load("gcc")
+    assert called == ["gcc"]
+    assert formula.name == "gcc"
+    assert formula.version == "1.0"
+    assert loader.exists("gcc") is True

@@ -3,7 +3,7 @@
 ## Full parity batch 2026-11-05
 
 Closed the documented partial areas across all owners; full suite grew from
-1156 to **1415 passed, 6 skipped**.
+1156 to **1416 passed, 6 skipped**.
 
 - **Cask**: evaluator `zap` now captures trash/delete/rmdir/pkgutil; livecheck
   URL kwargs merge into request headers; installed caskfile falls back to JSON;
@@ -31,6 +31,18 @@ Closed the documented partial areas across all owners; full suite grew from
 - Commits `57d927e` + `54fa7c5`; CI `41973914882` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
+
+## API formula fallback 2026-11-09
+
+- With no local taps configured, `FormulaLoader` now falls back to
+  formulae.brew.sh by default. `pybrew install gcc`, `pybrew info gcc`, and
+  dependency resolution work without `--api` or a checked-out homebrew-core tap.
+- Verified:
+  - `pybrew info gcc` -> stable 16.2.0, bottle tags/dependencies;
+  - `pybrew install --dry-run gcc` -> resolves gmp/isl/lz4/mpfr/libmpc/xz/zstd
+    then gcc.
+- Added an API-fallback loader unit test.
+- Full suite: **1416 passed, 6 skipped**; real install verified.
 
 ## Color/bold CLI output 2026-11-09
 
