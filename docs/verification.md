@@ -49,6 +49,7 @@ Closed the documented partial areas across all owners; full suite grew from
 - Upstream PR `Homebrew/brew#24362` is closed; maintainer replied
   "Not interested in this, sorry." No further PR activity will be attempted.
 - Full suite: **1406 passed, 6 skipped**; real install verified.
+- Commit `bbd182c`; CI `42543954271` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Upstream sync 2026-11-08
 
