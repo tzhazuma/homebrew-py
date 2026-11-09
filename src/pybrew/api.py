@@ -206,8 +206,32 @@ def search_casks_online(
     return sorted(results, key=lambda cask: cask.token)
 
 
-def fetch_formula(name: str, api_url: str = DEFAULT_API, timeout: int = 30) -> Formula:
+def fetch_formula(
+    name: str,
+    api_url: str = DEFAULT_API,
+    timeout: int = 30,
+    cache_path: Optional[Path] = None,
+    ttl: int = 3600,
+) -> Formula:
+    if cache_path is not None:
+        try:
+            import time
+
+            if time.time() - cache_path.stat().st_mtime < max(0, ttl):
+                return formula_from_api(
+                    json.loads(cache_path.read_text(encoding="utf-8"))
+                )
+        except (OSError, ValueError):
+            pass
     data = _request_json(f"{api_url.rstrip('/')}/{name}.json", timeout=timeout)
+    if cache_path is not None:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(
+                json.dumps(data, separators=(",", ":")), encoding="utf-8"
+            )
+        except OSError:
+            pass
     return formula_from_api(data)
 
 

@@ -72,9 +72,16 @@ def discover_taps(paths: Iterable[Path]) -> list[Tap]:
 class FormulaLoader:
     """Load formulae by name from a list of taps."""
 
-    def __init__(self, taps: Iterable[Tap], *, api_fallback: bool = False):
+    def __init__(
+        self,
+        taps: Iterable[Tap],
+        *,
+        api_fallback: bool = False,
+        api_cache_dir: Optional[Path] = None,
+    ):
         self.taps = list(taps)
         self.api_fallback = api_fallback
+        self.api_cache_dir = Path(api_cache_dir) if api_cache_dir else None
         self._path_cache: dict[str, tuple[Tap, Path]] = {}
 
     def tap_names(self) -> list[str]:
@@ -111,7 +118,12 @@ class FormulaLoader:
                 raise
             from .api import fetch_formula
 
-            return fetch_formula(name)
+            cache_path = (
+                self.api_cache_dir / f"{name}.json"
+                if self.api_cache_dir is not None
+                else None
+            )
+            return fetch_formula(name, cache_path=cache_path)
         formula = parse_formula_file(path, tap=tap.name)
         return formula
 

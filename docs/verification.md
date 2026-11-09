@@ -3,7 +3,7 @@
 ## Full parity batch 2026-11-05
 
 Closed the documented partial areas across all owners; full suite grew from
-1156 to **1416 passed, 6 skipped**.
+1156 to **1418 passed, 6 skipped**.
 
 - **Cask**: evaluator `zap` now captures trash/delete/rmdir/pkgutil; livecheck
   URL kwargs merge into request headers; installed caskfile falls back to JSON;
@@ -31,6 +31,21 @@ Closed the documented partial areas across all owners; full suite grew from
 - Commits `57d927e` + `54fa7c5`; CI `41973914882` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
+
+## Download/search efficiency 2026-11-09
+
+- Bottle downloads for dependency plans are now prefetched concurrently with a
+  bounded ThreadPoolExecutor. Default concurrency is 8; override with
+  `PYBREW_DOWNLOAD_CONCURRENCY` or `HOMEBREW_DOWNLOAD_CONCURRENCY`.
+  Failures fall back to the normal sequential fetch, which reports the precise
+  checksum/HTTP error.
+- Per-formula API JSON is cached under `<cache>/api/formula/<name>.json` with a
+  one-hour TTL, so repeated `info`/`install` resolution does not re-fetch the
+  same formula metadata.
+- Search index caching remains `PYBREW_SEARCH_CACHE_TTL` (default 86400s), with
+  separate formula/cask index files.
+- Added concurrency and formula-cache tests.
+- Full suite: **1418 passed, 6 skipped**; real install verified.
 
 ## API formula fallback 2026-11-09
 

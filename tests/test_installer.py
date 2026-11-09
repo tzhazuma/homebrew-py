@@ -1827,3 +1827,37 @@ def test_optional_and_recommended_dependency_selection(
         environment={"PYBREW_BUILD_OPTIONS": "--without-rec"},
     )
     assert not env_config.keg_path("rec", "2.0").exists()
+
+
+def test_dependency_bottles_are_prefetched_concurrently(
+    sample, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import threading
+    import time
+
+    config = Config.default(
+        prefix=sample.prefix, taps=[sample.tap], cache=sample.cache
+    )
+    loader = FormulaLoader(discover_taps([sample.tap]))
+    installer = Installer(config, loader)
+    active = 0
+    peak = 0
+    lock = threading.Lock()
+    original = installer.downloader.fetch
+
+    def slow_fetch(url, sha256, hint="download", **kwargs):
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        try:
+            time.sleep(0.1)
+            return original(url, sha256, hint=hint, **kwargs)
+        finally:
+            with lock:
+                active -= 1
+
+    monkeypatch.setenv("PYBREW_DOWNLOAD_CONCURRENCY", "4")
+    monkeypatch.setattr(installer.downloader, "fetch", slow_fetch)
+    installer.install(loader.load("hello-dep"), InstallOptions())
+    assert peak >= 2

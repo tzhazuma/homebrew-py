@@ -460,7 +460,11 @@ def _config_from_args(args: argparse.Namespace) -> Config:
 
 def _loader(config: Config) -> FormulaLoader:
     taps = discover_taps(config.taps)
-    return FormulaLoader(taps, api_fallback=not bool(taps))
+    return FormulaLoader(
+        taps,
+        api_fallback=not bool(taps),
+        api_cache_dir=config.cache / "api" / "formula",
+    )
 
 
 def _load_formula(name: str, loader: FormulaLoader, use_api: bool = False) -> Formula:

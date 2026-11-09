@@ -15,6 +15,7 @@ import sys
 import tarfile
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Mapping, Optional
@@ -1996,12 +1997,75 @@ class Installer:
         ]
 
     # -- install ---------------------------------------------------------
+    def _prefetch_downloads(
+        self, formula: Formula, plan: list[tuple[Formula, Any]], options: InstallOptions
+    ) -> None:
+        """Fetch independent bottle archives concurrently before installation."""
+
+        if options.dry_run:
+            return
+        tasks: list[tuple[str, str, str]] = []
+        for item, item_options in plan:
+            is_target = item.name == formula.name
+            if is_target and options.bottle_file is not None:
+                continue
+            if item_options.head or options.build_from_source:
+                continue
+            if self.config.keg_path(item.name, item.pkg_version).is_dir():
+                continue
+            bottle = item.bottle_for_tag(self.config.bottle_tag)
+            if bottle is None:
+                continue
+            tag, bottle_file = bottle
+            cached = self.downloader.find_cached(bottle_file.sha256)
+            if cached is not None and sha256_file(cached) == bottle_file.sha256:
+                continue
+            tasks.append(
+                (
+                    item.name,
+                    item.bottle_url(tag, bottle_file),
+                    bottle_file.sha256,
+                )
+            )
+        if not tasks:
+            return
+        try:
+            workers = int(
+                os.environ.get(
+                    "PYBREW_DOWNLOAD_CONCURRENCY",
+                    os.environ.get("HOMEBREW_DOWNLOAD_CONCURRENCY", "8"),
+                )
+            )
+        except ValueError:
+            workers = 8
+        workers = max(1, min(workers, len(tasks)))
+        if workers == 1:
+            return
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(
+                    self.downloader.fetch,
+                    url,
+                    sha256,
+                    hint=f"{name}--bottle",
+                ): name
+                for name, url, sha256 in tasks
+            }
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception:
+                    # The normal sequential install path will retry and report
+                    # a precise download/checksum error.
+                    pass
+
     def install(self, formula: Formula, options: InstallOptions) -> list[InstallResult]:
         with_dependencies = not options.ignore_dependencies
         target_options = self._build_options_for(formula, options)
         plan = self._resolve_plan(
             formula, with_dependencies, target_options
         )
+        self._prefetch_downloads(formula, plan, options)
         results: list[InstallResult] = []
         for item, item_options in plan:
             is_target = item.name == formula.name

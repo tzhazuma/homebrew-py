@@ -125,7 +125,7 @@ def test_formula_loader_falls_back_to_api_when_enabled(
 
     called: list[str] = []
 
-    def fake_fetch(name: str):
+    def fake_fetch(name: str, **_kwargs):
         called.append(name)
         return formula_from_api(
             {
@@ -144,3 +144,26 @@ def test_formula_loader_falls_back_to_api_when_enabled(
     assert formula.name == "gcc"
     assert formula.version == "1.0"
     assert loader.exists("gcc") is True
+
+
+def test_fetch_formula_uses_mtime_cache(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from pybrew import api
+
+    calls: list[str] = []
+    payload = {
+        "name": "cached-formula",
+        "desc": "cached",
+        "homepage": "https://example.com",
+        "versions": {"stable": "1.0"},
+    }
+
+    def fake_request(url: str, timeout: int = 30):
+        calls.append(url)
+        return payload
+
+    monkeypatch.setattr(api, "_request_json", fake_request)
+    cache = tmp_path / "formula.json"
+    first = api.fetch_formula("cached-formula", cache_path=cache)
+    second = api.fetch_formula("cached-formula", cache_path=cache)
+    assert first.version == second.version == "1.0"
+    assert len(calls) == 1
