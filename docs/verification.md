@@ -43,6 +43,7 @@ Closed the documented partial areas across all owners; full suite grew from
     then gcc.
 - Added an API-fallback loader unit test.
 - Full suite: **1416 passed, 6 skipped**; real install verified.
+- Commit `e103e52`; CI `42606129175` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Color/bold CLI output 2026-11-09
 
