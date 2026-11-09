@@ -41,6 +41,7 @@ Closed the documented partial areas across all owners; full suite grew from
 - `--formula` aliases accepted by list/install/uninstall/outdated/upgrade;
   `--json=v2` is normalized to JSON output.
 - Full suite: **1410 passed, 6 skipped**; real install verified.
+- Commit `a5364b0`; CI `42577938540` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Upstream sync 2026-11-09
 
