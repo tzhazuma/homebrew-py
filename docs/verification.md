@@ -46,6 +46,7 @@ Closed the documented partial areas across all owners; full suite grew from
   intentionally not ported; they are not package-management operations and
   would require Homebrew's development checkout.
 - Full suite: **1412 passed, 6 skipped**; real install verified.
+- Commit `e380345`; CI `42586040146` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## CLI compatibility 2026-11-09
 
