@@ -1,8 +1,7 @@
 # Parity with Ruby Homebrew
 
-Tested against **Homebrew 7.0.11** (`59604a815c`) on macOS 27.2 (arm64 hardware,
-brew running as x86_64 Rosetta), Python 3.12.7, 2026-11-02. The formula corpus
-was last confirmed against `Homebrew/homebrew-core@992feb273e`.
+Tested against **Homebrew 7.0.12** (`bc63375ac3`) on macOS 27.2 (arm64 hardware), Python 3.12.7, 2026-11-02. The formula corpus
+was last confirmed against `Homebrew/homebrew-core@89b96a131a`.
 
 ## Real formula corpus
 
@@ -18,10 +17,10 @@ field below matched `brew info --json=v2` exactly.
 | bash | 5.3.20 | 3 | 0 | – | 5 |
 | cmake | 4.4.4 | 0 | 0 | ncurses | 5 |
 | curl | 8.23.0 | 8 | 1 | krb5, openldap | 5 |
-| git | 2.56.0 | 2 | 2 | curl, expat | 5 |
+| git | 2.56.0 | 3 | 2 | expat | 5 |
 | hello | 2.12.3 | 0 | 0 | – | 6 |
 | jq | 1.8.2 | 1 | 0 | – | 7 |
-| libslirp | 4.9.6 | 1 | 3 | – | 5 |
+| libslirp | 4.9.7 | 1 | 3 | – | 5 |
 | openssl@3 | 3.5.9 | 1 | 0 | – | 5 |
 | python@3.12 | 3.12.16 | 4 | 1 | 6 | 5 |
 | sqlite | 3.54.1 | 1 | 0 | – | 5 |
@@ -49,7 +48,7 @@ PYBREW_TARGET_OS=darwin PYBREW_TARGET_ARCH=x86_64 \
 | Casks | Yes | zip/dmg + 13 Library artifact kinds, stage_only, upgrade cleanup; pkg payload or opt-in system pkg + tracked uninstall/upgrade rollback; opt-in preflight/postflight shim; API; outdated/upgrade/reinstall |
 | Tap management | `brew tap` | `tap`/`untap`/list/`--update`/`update` with GitHub or local git URLs |
 | Services | Yes | macOS launchd + Linux systemd user units; start/stop/restart/list/info/run |
-| Outdated / upgrade / auto-remove / leaves / uses / cleanup / reinstall / pin | Yes | outdated; upgrade installs/relinks/removes old kegs; autoremove; cleanup; reinstall; pin |
+| Outdated / upgrade / auto-remove / leaves / uses / cleanup / reinstall / pin / missing | Yes | outdated (skips disabled); upgrade installs/relinks/removes old kegs; autoremove; cleanup; reinstall; pin; missing reports absent runtime deps |
 | Bundle | Yes | Brewfile install/check/list/dump, tap URL, link:false, args, mas/vscode, restart_service |
 | Analytics | Yes | Local-only opt-in event log; no upload |
 | Formula tests | `brew test` | `run_test` + test DSL; dependency test blocks, isolated dependency testpaths, skip/failure propagation |

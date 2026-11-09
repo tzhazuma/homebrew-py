@@ -429,3 +429,17 @@ def test_info_reports_installed_dependents(run_cli, sample) -> None:
     proc = run_cli("info", "dep")
     assert proc.returncode == 0, proc.stderr
     assert "Dependents: hello-dep" in proc.stdout
+
+
+def test_missing_reports_absent_runtime_dependency(run_cli, sample) -> None:
+    assert run_cli("install", "hello-dep", bottle_tag=sample.tag).returncode == 0
+    # Remove only the dependency's keg, leaving hello-dep's receipt behind.
+    dep = sample.prefix / "Cellar" / "dep"
+    import shutil
+    shutil.rmtree(dep)
+    proc = run_cli("missing")
+    assert proc.returncode == 1
+    assert "dep" in proc.stdout.split()
+    assert "pybrew install dep" in proc.stderr
+    hidden = run_cli("missing", "--hide", "dep")
+    assert hidden.returncode == 0

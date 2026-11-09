@@ -58,6 +58,9 @@ def find_outdated(config: Config, loader: FormulaLoader) -> list[OutdatedFormula
             formula = loader.load(name)
         except Exception:
             continue
+        if getattr(formula, "disabled", False):
+            # Disabled formulae cannot be upgraded, matching Homebrew.
+            continue
         latest = versions[-1]
         if formula.pkg_version != latest:
             result.append(OutdatedFormula(name, latest, formula.pkg_version))

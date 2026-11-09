@@ -116,7 +116,7 @@
       "zstd"
     ],
     "desc": "Get a file from an HTTP, HTTPS or FTP server",
-    "homebrew_api_sha256": "0d69822fa0db39c5730b76f619da1f1e0162e21a70a3477ea6730ee2b7ded0aa",
+    "homebrew_api_sha256": "33e932ab597435e4b7013abdcea8c1737e12db3fe77e4cf475d15fc831a1cf9a",
     "homepage": "https://curl.se",
     "keg_only": true,
     "license": "curl",
@@ -139,20 +139,20 @@
       "pkgconf"
     ],
     "dependencies": [
-      "pcre2",
-      "gettext"
+      "curl",
+      "gettext",
+      "pcre2"
     ],
     "desc": "Distributed revision control system",
-    "homebrew_api_sha256": "df39658f97fd2bb62ab681628d14c7e41b6c2dfbe220778c3d3b2712ff16b0a4",
+    "homebrew_api_sha256": "5884e345d5e79ae925821bc8b753a7c1a56ffef130aa479e64940a6888af0092",
     "homepage": "https://git-scm.com",
     "keg_only": false,
     "license": "GPL-2.0-only AND GPL-2.0-or-later AND LGPL-2.1-or-later AND BSD-3-Clause AND MIT",
     "name": "git",
-    "revision": 1,
-    "ruby_source_sha256": "df39658f97fd2bb62ab681628d14c7e41b6c2dfbe220778c3d3b2712ff16b0a4",
+    "revision": 2,
+    "ruby_source_sha256": "5884e345d5e79ae925821bc8b753a7c1a56ffef130aa479e64940a6888af0092",
     "test_dependencies": [],
     "uses_from_macos": [
-      "curl",
       "expat"
     ],
     "version": "2.56.0"
@@ -202,16 +202,16 @@
       "glib"
     ],
     "desc": "General purpose TCP-IP emulator",
-    "homebrew_api_sha256": "1a7a8773e583777d2b4b63e4d3616d66c68ee9cac2864ba060af0907efa75b3b",
+    "homebrew_api_sha256": "0744c35da64e6cb8ab694c3b3c77e157fe5a95c35117da31bde8786f0d6fac92",
     "homepage": "https://gitlab.freedesktop.org/slirp/libslirp",
     "keg_only": false,
     "license": "BSD-3-Clause",
     "name": "libslirp",
     "revision": 0,
-    "ruby_source_sha256": "1a7a8773e583777d2b4b63e4d3616d66c68ee9cac2864ba060af0907efa75b3b",
+    "ruby_source_sha256": "0744c35da64e6cb8ab694c3b3c77e157fe5a95c35117da31bde8786f0d6fac92",
     "test_dependencies": [],
     "uses_from_macos": [],
-    "version": "4.9.6"
+    "version": "4.9.7"
   },
   "openssl@3": {
     "bottle_tags_in_source": null,

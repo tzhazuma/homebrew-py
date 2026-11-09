@@ -316,6 +316,14 @@ def build_parser() -> argparse.ArgumentParser:
     uses = subparsers.add_parser("uses", parents=[common], help="show installed formulae depending on a formula")
     uses.add_argument("formula")
 
+    missing_cmd = subparsers.add_parser(
+        "missing", parents=[common], help="check kegs and casks for missing dependencies"
+    )
+    missing_cmd.add_argument("names", nargs="*")
+    missing_cmd.add_argument(
+        "--hide", default="", help="comma-separated formulae/casks to treat as installed"
+    )
+
     autoremove = subparsers.add_parser("autoremove", parents=[common], help="remove unused dependencies")
     autoremove.add_argument("--dry-run", action="store_true")
 
@@ -1210,6 +1218,45 @@ def cmd_upgrade(args: argparse.Namespace) -> int:
     return exit_code
 
 
+def cmd_missing(args: argparse.Namespace) -> int:
+    config = _config_from_args(args)
+    installed = Cellar(config).installed()
+    hidden = {
+        part.strip() for part in str(getattr(args, "hide", "") or "").split(",") if part.strip()
+    }
+    selected = set(args.names or installed)
+    missing: dict[str, list[str]] = {}
+    for name in sorted(installed):
+        if name not in selected:
+            continue
+        versions = installed.get(name) or []
+        if not versions:
+            continue
+        receipt = read_receipt(config.keg_path(name, versions[-1]))
+        deps = sorted(
+            {
+                str(dep).rsplit("/", 1)[-1]
+                for dep in receipt.get("runtime_dependencies", []) or []
+                if str(dep).rsplit("/", 1)[-1] not in installed
+                and str(dep).rsplit("/", 1)[-1] not in hidden
+            }
+        )
+        if deps:
+            missing[name] = deps
+    if not missing:
+        return 0
+    show_name = len(missing) > 1
+    for name, deps in missing.items():
+        print(f"{name}: {' '.join(deps)}" if show_name else " ".join(deps))
+    all_missing = sorted({dep for deps in missing.values() for dep in deps})
+    print(
+        "Warning: You should `pybrew install` the missing dependencies:",
+        file=sys.stderr,
+    )
+    print(f"  pybrew install {' '.join(all_missing)}", file=sys.stderr)
+    return 1
+
+
 def cmd_autoremove(args: argparse.Namespace) -> int:
     config = _config_from_args(args)
     removed = autoremove(config, dry_run=args.dry_run)
@@ -1793,6 +1840,7 @@ _COMMANDS = {
     "upgrade": cmd_upgrade,
     "leaves": cmd_leaves,
     "uses": cmd_uses,
+    "missing": cmd_missing,
     "autoremove": cmd_autoremove,
     "cleanup": cmd_cleanup,
     "reinstall": cmd_reinstall,

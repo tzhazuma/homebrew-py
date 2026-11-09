@@ -3,7 +3,7 @@
 ## Full parity batch 2026-11-05
 
 Closed the documented partial areas across all owners; full suite grew from
-1156 to **1404 passed, 6 skipped**.
+1156 to **1406 passed, 6 skipped**.
 
 - **Cask**: evaluator `zap` now captures trash/delete/rmdir/pkgutil; livecheck
   URL kwargs merge into request headers; installed caskfile falls back to JSON;
@@ -31,6 +31,24 @@ Closed the documented partial areas across all owners; full suite grew from
 - Commits `57d927e` + `54fa7c5`; CI `41973914882` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
+
+## Upstream sync 2026-11-09
+
+- Upstream: Homebrew/brew `3ccfa1d071` → `bc63375ac3`; Homebrew/homebrew-core
+  `e729ec4747f8` → `89b96a131a`.
+- Implemented:
+  - new `pybrew missing [names] [--hide]` command: reports installed formulae
+    whose receipt runtime dependencies are absent, exits 1, and prints the
+    install hint; hidden names are treated as installed;
+  - `outdated` now skips disabled formulae and disabled casks, matching
+    Homebrew's "disabled cannot be upgraded" rule.
+- Weekly corpus refresh: updated hello/git/curl/openssl@3/python@3.12/libslirp
+  formula sources from homebrew-core `89b96a131a`; expected hashes refreshed,
+  git revision/deps and libslirp version updated. `tests/test_real_formulas.py`
+  passes.
+- Upstream PR `Homebrew/brew#24362` is closed; maintainer replied
+  "Not interested in this, sorry." No further PR activity will be attempted.
+- Full suite: **1406 passed, 6 skipped**; real install verified.
 
 ## Upstream sync 2026-11-08
 

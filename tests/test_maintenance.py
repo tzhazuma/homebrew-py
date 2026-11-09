@@ -160,3 +160,15 @@ def test_autoremove_skips_pinned_dependency(run_cli, sample) -> None:
     assert real.returncode == 0, real.stderr
     assert (sample.prefix / "Cellar" / "dep" / "2.0").is_dir()
     assert run_cli("unpin", "dep").returncode == 0
+
+
+def test_outdated_skips_disabled_formula_and_cask(run_cli, sample) -> None:
+    assert run_cli("install", "hello", bottle_tag=sample.tag).returncode == 0
+    _bump_formula(sample)
+    text = sample.formula.read_text().replace(
+        '  license "MIT"', '  license "MIT"\n  disable! date: "2026-01-01", because: "test"'
+    )
+    sample.formula.write_text(text)
+    proc = run_cli("outdated")
+    assert proc.returncode == 0, proc.stderr
+    assert "hello" not in proc.stdout

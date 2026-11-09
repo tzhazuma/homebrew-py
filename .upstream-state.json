@@ -1,10 +1,10 @@
 {
   "brew": {
     "default_branch": "main",
-    "head_date": "2026-11-07T16:15:45Z",
-    "head_message": "Merge pull request #24523 from dduugg/audit-typed-options",
-    "head_sha": "3ccfa1d071435faf83990f0788d18920ab90d817",
-    "head_url": "https://github.com/Homebrew/brew/commit/3ccfa1d071435faf83990f0788d18920ab90d817",
+    "head_date": "2026-11-08T22:43:05Z",
+    "head_message": "Merge pull request #24543 from dduugg/livecheck-typed-options",
+    "head_sha": "bc63375ac3a4d6debb1ceb441ae6e22854f0909a",
+    "head_url": "https://github.com/Homebrew/brew/commit/bc63375ac3a4d6debb1ceb441ae6e22854f0909a",
     "release": {
       "name": "7.0.12",
       "published_at": "2026-11-02T08:36:59Z",
@@ -13,13 +13,13 @@
     },
     "repo": "Homebrew/brew"
   },
-  "checked_at": "2026-11-08T01:57:38+00:00",
+  "checked_at": "2026-11-09T01:00:08+00:00",
   "core": {
     "default_branch": "main",
-    "head_date": "2026-11-08T01:44:54Z",
-    "head_message": "Merge pull request #324150 from Homebrew/bump-overturemaps-2.1.0",
-    "head_sha": "e729ec4747f868b8d13184dd9f5b3a0650c54f0d",
-    "head_url": "https://github.com/Homebrew/homebrew-core/commit/e729ec4747f868b8d13184dd9f5b3a0650c54f0d",
+    "head_date": "2026-11-09T00:35:39Z",
+    "head_message": "Merge pull request #324267 from Homebrew/a-restrict-network-access-2",
+    "head_sha": "89b96a131a493ce3407d3c82c6c13889b92b900a",
+    "head_url": "https://github.com/Homebrew/homebrew-core/commit/89b96a131a493ce3407d3c82c6c13889b92b900a",
     "release": null,
     "repo": "Homebrew/homebrew-core"
   }

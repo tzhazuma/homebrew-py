@@ -2880,6 +2880,9 @@ class CaskInstaller:
                 cask = loader.load(token)
             except Exception:
                 continue
+            if getattr(cask, "disabled", False):
+                # Disabled casks cannot be upgraded, matching Homebrew.
+                continue
             current = cask.resolved_version()
             versions = self.installed_versions(token)
             latest = versions[-1] if versions else installed["version"]
