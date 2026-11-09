@@ -42,6 +42,7 @@ Closed the documented partial areas across all owners; full suite grew from
 - `search` now prints Homebrew-style name columns (with `--desc` to include
   descriptions), installed/disabled/deprecated markers, and cask columns.
 - Full suite: **1415 passed, 6 skipped**; real install verified.
+- Commit `e8357a9`; CI `42603308967` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## CLI audit 2026-11-09
 
