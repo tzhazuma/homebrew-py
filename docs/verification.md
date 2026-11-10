@@ -3,7 +3,7 @@
 ## Full parity batch 2026-11-05
 
 Closed the documented partial areas across all owners; full suite grew from
-1156 to **1423 passed, 6 skipped**.
+1156 to **1425 passed, 6 skipped**.
 
 - **Cask**: evaluator `zap` now captures trash/delete/rmdir/pkgutil; livecheck
   URL kwargs merge into request headers; installed caskfile falls back to JSON;
@@ -31,6 +31,43 @@ Closed the documented partial areas across all owners; full suite grew from
 - Commits `57d927e` + `54fa7c5`; CI `41973914882` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
+
+## Install performance/profile 2026-11-10
+
+Profiled a clean `pybrew install node` (fresh prefix, warm bottle cache):
+
+| step | before | after |
+| --- | --- | --- |
+| full node + 24 dependencies | 83.8s | **19.9s** |
+| node bottle only | 22.3s | **3.1s** |
+| abseil (96 dylibs) | 14.1s | **~5.0s** |
+
+Root causes and fixes:
+
+1. Mach-O relocation launched `otool -L`, `otool -D` and
+   `install_name_tool` separately for each binary/dylib. Relocation now parses
+   Mach-O load commands in-process, batches every `-change`/`-id` into one
+   `install_name_tool` call per file, and processes files with a bounded
+   (default 8) ThreadPoolExecutor.
+2. `Linker._stale_links` walked every prefix link directory for every formula,
+   even on first install. It now returns immediately unless another keg of the
+   same formula exists.
+3. Install was silent for the long dependency phase. Added Homebrew-style
+   progress: `==> Fetching downloads for:`, `==> Installing dependencies for:`,
+   `==> Installing dependency ...`, `==> Pouring ...`, per-keg `🍺`, and
+   `==> Caveats`. API formulae render their plain-text caveats directly.
+4. Existing speed work remains: parallel dependency bottle prefetch, 5-minute
+   ghcr token cache, 1-hour per-formula API cache, 24-hour search index cache.
+
+Comparison on this machine (`node` bottle cached):
+
+- `brew reinstall node` with installed-dependent check disabled: 14.3s for the
+  node keg alone (dependencies already installed).
+- pybrew node keg alone: 3.1s; full node + 24 dependency install: 19.9s.
+- A plain `brew reinstall node` took 146s because of its dependent/API checks;
+  pybrew does not perform those extra network checks.
+
+Full suite: **1425 passed, 6 skipped**; real install verified.
 
 ## Python install and download speed 2026-11-10
 

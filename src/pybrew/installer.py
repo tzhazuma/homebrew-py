@@ -18,7 +18,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any, Iterable, Mapping, Optional
+from typing import Any, Callable, Iterable, Mapping, Optional
 
 from .cellar import Cellar, Linker, read_receipt, receipt_path, write_receipt
 from .download import Downloader, sha256_file
@@ -630,73 +630,79 @@ def _relocate_macho(path: Path, replacements: dict[bytes, bytes]) -> bool:
     tools are unavailable.
     """
 
-    if shutil.which("otool") is None or shutil.which("install_name_tool") is None:
+    if shutil.which("install_name_tool") is None:
         return False
     try:
-        listing = subprocess.run(
-            ["otool", "-L", str(path)], text=True, capture_output=True, timeout=30
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    if listing.returncode != 0:
+        data = path.read_bytes()
+        images, _problems = _macho_images(data)
+    except (OSError, _LinkageParseError):
         return False
     old_paths: list[str] = []
-    for line in listing.stdout.splitlines()[1:]:
-        stripped = line.strip()
-        if not stripped:
-            continue
-        old = stripped.partition(" (compatibility version")[0].strip()
-        if any(placeholder.decode(errors="ignore") in old for placeholder in replacements):
-            old_paths.append(old)
+    for image in images:
+        for old, _weak in image.loads:
+            if any(
+                placeholder.decode(errors="ignore") in old
+                for placeholder in replacements
+            ) and old not in old_paths:
+                old_paths.append(old)
 
-    changed = False
+    changes: list[tuple[str, str]] = []
+    for old in old_paths:
+        new = old
+        for placeholder, replacement in replacements.items():
+            new = new.replace(
+                placeholder.decode(errors="ignore"),
+                replacement.decode(errors="ignore"),
+            )
+        if new != old:
+            changes.append((old, new))
+
+    id_change: Optional[str] = None
+    for image in images:
+        for old in image.ids:
+            new = old
+            for placeholder, replacement in replacements.items():
+                new = new.replace(
+                    placeholder.decode(errors="ignore"),
+                    replacement.decode(errors="ignore"),
+                )
+            if new != old:
+                id_change = new
+                break
+        if id_change is not None:
+            break
+
+    if not changes and id_change is None:
+        return False
+
+    command = ["install_name_tool"]
+    for old, new in changes:
+        command.extend(["-change", old, new])
+    if id_change is not None:
+        command.extend(["-id", id_change])
+    command.append(str(path))
+
     mode = path.stat().st_mode
     os.chmod(path, mode | 0o200)
     try:
-        for old in old_paths:
-            new = old
-            for placeholder, replacement in replacements.items():
-                new = new.replace(placeholder.decode(errors="ignore"), replacement.decode(errors="ignore"))
-            if new == old:
-                continue
-            result = subprocess.run(
-                ["install_name_tool", "-change", old, new, str(path)],
-                text=True,
-                capture_output=True,
-                timeout=30,
-            )
-            if result.returncode != 0:
-                return False
-            changed = True
-        id_result = subprocess.run(
-            ["otool", "-D", str(path)], text=True, capture_output=True, timeout=30
+        result = subprocess.run(
+            command,
+            text=True,
+            capture_output=True,
+            timeout=120,
         )
-        if id_result.returncode == 0:
-            id_lines = [line.strip() for line in id_result.stdout.splitlines()[1:] if line.strip()]
-            for old in id_lines:
-                new = old
-                for placeholder, replacement in replacements.items():
-                    new = new.replace(placeholder.decode(errors="ignore"), replacement.decode(errors="ignore"))
-                if new != old:
-                    result = subprocess.run(
-                        ["install_name_tool", "-id", new, str(path)],
-                        text=True,
-                        capture_output=True,
-                        timeout=30,
-                    )
-                    if result.returncode != 0:
-                        return False
-                    changed = True
+        if result.returncode != 0:
+            return False
     finally:
         os.chmod(path, mode)
-    if changed and shutil.which("codesign"):
+    if (changes or id_change is not None) and shutil.which("codesign"):
         subprocess.run(
             ["codesign", "--force", "--sign", "-", str(path)],
             text=True,
             capture_output=True,
             timeout=30,
         )
-    return changed
+    return bool(changes or id_change is not None)
 
 
 def _find_patchelf() -> Optional[str]:
@@ -818,6 +824,55 @@ def _relocate_elf(path: Path, replacements: dict[bytes, bytes]) -> bool:
             pass
 
 
+def _relocate_file(path: Path, replacements: dict[bytes, bytes]) -> Optional[str]:
+    """Relocate one file; return ``binary``/``text``/``skipped`` or None."""
+
+    if path.is_symlink() or not path.is_file():
+        return None
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    if not any(placeholder in data for placeholder in replacements):
+        return None
+    is_binary = b"\0" in data[:4096]
+    if is_binary and sys.platform == "darwin":
+        try:
+            if _relocate_macho(path, replacements):
+                return "binary"
+        except OSError:
+            pass
+    if data.startswith(ELF_MAGIC):
+        try:
+            if _relocate_elf(path, replacements):
+                return "binary"
+        except OSError:
+            pass
+    new_data = data
+    if is_binary:
+        for placeholder, replacement in replacements.items():
+            if placeholder not in new_data:
+                continue
+            replaced = _replace_binary_placeholder(new_data, placeholder, replacement)
+            if replaced is None:
+                return "skipped"
+            new_data = replaced
+    else:
+        for placeholder, replacement in replacements.items():
+            new_data = new_data.replace(placeholder, replacement)
+    if new_data != data:
+        original_mode = path.stat().st_mode
+        import stat as stat_module
+
+        os.chmod(path, original_mode | stat_module.S_IWUSR)
+        try:
+            path.write_bytes(new_data)
+        finally:
+            os.chmod(path, original_mode)
+        return "binary" if is_binary else "text"
+    return None
+
+
 def relocate_tree(keg: Path, config: Config) -> RelocationReport:
     """Replace Homebrew's bottle placeholders in a freshly unpacked keg."""
 
@@ -825,62 +880,33 @@ def relocate_tree(keg: Path, config: Config) -> RelocationReport:
     replacements = {
         placeholder: factory(config) for placeholder, factory in PLACEHOLDERS.items()
     }
-    for root, _dirs, files in os.walk(keg, followlinks=False):
-        root_path = Path(root)
-        for name in files:
-            path = root_path / name
-            if path.is_symlink() or not path.is_file():
-                continue
-            try:
-                data = path.read_bytes()
-            except OSError:
-                continue
-            if not any(placeholder in data for placeholder in replacements):
-                continue
-            is_binary = b"\0" in data[:4096]
-            if is_binary and sys.platform == "darwin":
-                try:
-                    if _relocate_macho(path, replacements):
-                        report.binary_files += 1
-                        continue
-                except OSError:
-                    pass
-            if data.startswith(ELF_MAGIC):
-                try:
-                    if _relocate_elf(path, replacements):
-                        report.binary_files += 1
-                        continue
-                except OSError:
-                    pass
-            new_data = data
-            if is_binary:
-                for placeholder, replacement in replacements.items():
-                    if placeholder not in new_data:
-                        continue
-                    replaced = _replace_binary_placeholder(new_data, placeholder, replacement)
-                    if replaced is None:
-                        report.skipped_binaries += 1
-                        new_data = None
-                        break
-                    new_data = replaced
-                if new_data is None:
-                    continue
-            else:
-                for placeholder, replacement in replacements.items():
-                    new_data = new_data.replace(placeholder, replacement)
-            if new_data != data:
-                original_mode = path.stat().st_mode
-                import stat as stat_module
-
-                os.chmod(path, original_mode | stat_module.S_IWUSR)
-                try:
-                    path.write_bytes(new_data)
-                finally:
-                    os.chmod(path, original_mode)
-                if is_binary:
-                    report.binary_files += 1
-                else:
-                    report.text_files += 1
+    paths = [
+        Path(root) / name
+        for root, _dirs, files in os.walk(keg, followlinks=False)
+        for name in files
+    ]
+    try:
+        workers = int(
+            os.environ.get(
+                "PYBREW_RELOCATE_CONCURRENCY",
+                os.environ.get("HOMEBREW_RELOCATE_CONCURRENCY", "8"),
+            )
+        )
+    except ValueError:
+        workers = 8
+    workers = max(1, min(workers, len(paths) or 1))
+    if workers == 1:
+        results = [_relocate_file(path, replacements) for path in paths]
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(lambda path: _relocate_file(path, replacements), paths))
+    for result in results:
+        if result == "binary":
+            report.binary_files += 1
+        elif result == "text":
+            report.text_files += 1
+        elif result == "skipped":
+            report.skipped_binaries += 1
     return report
 
 
@@ -906,6 +932,7 @@ _FAT_MAGICS: dict[bytes, tuple[str, bool]] = {
 }
 _MACHO_FAT_ARCH_MAX = 32
 
+_LC_ID_DYLIB = 0xD
 _LC_LOAD_DYLIB = 0xC
 _LC_LOAD_WEAK_DYLIB = 0x80000018
 _LC_REEXPORT_DYLIB = 0x8000001F
@@ -1098,6 +1125,7 @@ class LinkageReport:
 class _MachoImage:
     loads: tuple[tuple[str, bool], ...]
     rpaths: tuple[str, ...]
+    ids: tuple[str, ...] = ()
 
 
 def _parse_macho_thin(data: bytes) -> _MachoImage:
@@ -1120,6 +1148,7 @@ def _parse_macho_thin(data: bytes) -> _MachoImage:
     offset = header_size
     loads: list[tuple[str, bool]] = []
     rpaths: list[str] = []
+    ids: list[str] = []
     for _ in range(ncmds):
         if offset + 8 > len(data):
             raise _LinkageParseError("corrupt", "truncated Mach-O load command")
@@ -1128,7 +1157,21 @@ def _parse_macho_thin(data: bytes) -> _MachoImage:
             raise _LinkageParseError(
                 "corrupt", f"invalid Mach-O load command size {cmdsize}"
             )
-        if command in _MACHO_DYLIB_COMMANDS:
+        if command == _LC_ID_DYLIB:
+            if cmdsize < 24:
+                raise _LinkageParseError(
+                    "corrupt", "truncated Mach-O dylib id command"
+                )
+            name_offset = struct.unpack_from(endian + "I", data, offset + 8)[0]
+            if not 8 <= name_offset < cmdsize:
+                raise _LinkageParseError(
+                    "corrupt", "invalid Mach-O dylib id offset"
+                )
+            raw = data[offset + name_offset : offset + cmdsize]
+            name = raw.split(b"\0", 1)[0].decode("utf-8", "replace")
+            if name:
+                ids.append(name)
+        elif command in _MACHO_DYLIB_COMMANDS:
             if cmdsize < 24:
                 raise _LinkageParseError(
                     "corrupt", "truncated Mach-O dylib command"
@@ -1157,7 +1200,7 @@ def _parse_macho_thin(data: bytes) -> _MachoImage:
             if name:
                 rpaths.append(name)
         offset += cmdsize
-    return _MachoImage(loads=tuple(loads), rpaths=tuple(rpaths))
+    return _MachoImage(loads=tuple(loads), rpaths=tuple(rpaths), ids=tuple(ids))
 
 
 def _macho_images(data: bytes) -> tuple[list[_MachoImage], list[str]]:
@@ -2046,13 +2089,18 @@ class Installer:
 
     # -- install ---------------------------------------------------------
     def _prefetch_downloads(
-        self, formula: Formula, plan: list[tuple[Formula, Any]], options: InstallOptions
+        self,
+        formula: Formula,
+        plan: list[tuple[Formula, Any]],
+        options: InstallOptions,
+        progress: Optional[Callable[[str, Any], None]] = None,
     ) -> None:
         """Fetch independent bottle archives concurrently before installation."""
 
         if options.dry_run:
             return
         tasks: list[tuple[str, str, str]] = []
+        planned: list[str] = []
         for item, item_options in plan:
             is_target = item.name == formula.name
             if is_target and options.bottle_file is not None:
@@ -2065,6 +2113,7 @@ class Installer:
             if bottle is None:
                 continue
             tag, bottle_file = bottle
+            planned.append(item.name)
             cached = self.downloader.find_cached(bottle_file.sha256)
             if cached is not None and sha256_file(cached) == bottle_file.sha256:
                 continue
@@ -2075,6 +2124,8 @@ class Installer:
                     bottle_file.sha256,
                 )
             )
+        if progress is not None and planned:
+            progress("fetch", planned)
         if not tasks:
             return
         try:
@@ -2107,16 +2158,38 @@ class Installer:
                     # a precise download/checksum error.
                     pass
 
-    def install(self, formula: Formula, options: InstallOptions) -> list[InstallResult]:
+    def install(
+        self,
+        formula: Formula,
+        options: InstallOptions,
+        progress: Optional[Callable[[str, Any], None]] = None,
+    ) -> list[InstallResult]:
         with_dependencies = not options.ignore_dependencies
         target_options = self._build_options_for(formula, options)
         plan = self._resolve_plan(
             formula, with_dependencies, target_options
         )
-        self._prefetch_downloads(formula, plan, options)
+        dependencies = [
+            item.name
+            for item, _item_options in plan
+            if item.name != formula.name
+            and not self.config.keg_path(item.name, item.pkg_version).is_dir()
+        ]
+        if progress is not None and dependencies:
+            progress("dependencies", dependencies)
+        self._prefetch_downloads(formula, plan, options, progress=progress)
         results: list[InstallResult] = []
         for item, item_options in plan:
             is_target = item.name == formula.name
+            if (
+                progress is not None
+                and not options.dry_run
+                and not self.config.keg_path(item.name, item.pkg_version).is_dir()
+            ):
+                from_bottle = not (
+                    item_options.head or options.build_from_source
+                ) and item.bottle_for_tag(self.config.bottle_tag) is not None
+                progress("install", (item, from_bottle, is_target))
             result = self.install_one(
                 item,
                 options,
@@ -2125,6 +2198,8 @@ class Installer:
                 build_options=item_options,
             )
             results.append(result)
+            if progress is not None and not result.skipped and not options.dry_run:
+                progress("installed", result)
         return results
 
     def install_one(

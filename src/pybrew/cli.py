@@ -30,7 +30,7 @@ from .api import (
 )
 from .cask import CaskError
 from .bundle import bundle_check, bundle_dump, bundle_install, bundle_list, parse_brewfile
-from .caveats import CaveatsError, run_cask_caveats, run_caveats
+from .caveats import CaveatsError, has_caveats, run_cask_caveats, run_caveats
 from .cask_installer import CaskInstaller, CaskLoader, CaskNotFound
 from .cellar import Cellar, Linker, read_receipt
 from .doctor import diagnose, diagnose_issues
@@ -981,7 +981,25 @@ def cmd_install(args: argparse.Namespace) -> int:
     for name in args.formulae:
         try:
             formula = _load_formula(name, loader, use_api=args.api)
-            results = installer.install(formula, options)
+
+            def progress(kind: str, payload: Any, formula: Formula = formula) -> None:
+                if kind == "fetch":
+                    ohai(f"Fetching downloads for: {', '.join(payload)}")
+                elif kind == "dependencies":
+                    ohai(
+                        f"Installing dependencies for {formula.name}: "
+                        f"{', '.join(payload)}"
+                    )
+                elif kind == "install":
+                    item, from_bottle, is_target = payload
+                    action = "Pouring" if from_bottle else "Installing"
+                    if not is_target:
+                        action = "Installing dependency"
+                    ohai(f"{action} {item.name} {item.pkg_version}")
+                elif kind == "installed":
+                    print_keg(payload.keg)
+
+            results = installer.install(formula, options, progress=progress)
         except PybrewError as error:
             print(f"Error: {error}", file=sys.stderr)
             exit_code = 1
@@ -990,17 +1008,12 @@ def cmd_install(args: argparse.Namespace) -> int:
             if result.skipped:
                 if args.dry_run:
                     print(f"Would install {result.name} {result.version}")
-                else:
+                elif result.name == formula.name:
                     opoo(f"{result.name} {result.version} is already installed")
                 continue
             if args.dry_run:
                 print(f"Would install {result.name} {result.version}")
                 continue
-            if result.from_bottle:
-                ohai(f"Pouring {result.name} {result.version}")
-            else:
-                ohai(f"Installing {result.name} {result.version}")
-            print_keg(result.keg)
             if not args.dry_run and not result.skipped:
                 _record_analytics(
                     config,
@@ -1009,6 +1022,18 @@ def cmd_install(args: argparse.Namespace) -> int:
                     version=result.version,
                     bottle=result.from_bottle,
                 )
+            if result.name == formula.name and has_caveats(formula):
+                if formula.path is None:
+                    output = formula.caveats
+                else:
+                    try:
+                        output = run_caveats(formula, config)
+                    except CaveatsError as error:
+                        opoo(str(error))
+                        output = ""
+                if output:
+                    ohai("Caveats")
+                    print(output, end="" if output.endswith("\n") else "\n")
     return exit_code
 
 
@@ -1948,6 +1973,11 @@ def cmd_caveats(args: argparse.Namespace) -> int:
         return 0
     loader = _loader(config)
     formula = _load_formula(args.formula, loader)
+    if formula.path is None:
+        output = formula.caveats
+        if output:
+            print(output, end="" if output.endswith("\n") else "\n")
+        return 0
     try:
         output = run_caveats(formula, config)
     except CaveatsError as error:

@@ -8,7 +8,7 @@ Formula 解析、依赖解析、Cellar、bottle 安装、链接/卸载和 receip
 
 > **状态：v0.1 原型（可运行、可测试）**
 >
-> - 1423 个测试通过（另有 6 个 opt-in 测试跳过；`pytest -q`）
+> - 1425 个测试通过（另有 6 个 opt-in 测试跳过；`pytest -q`）
 > - 对齐上游 Homebrew **7.0.13**（brew `60555dbc9b`，homebrew-core `2b230cf49d`）
 > - 15 个真实 homebrew-core 公式（bash、git、curl、openssl@3、python@3.12 等）与
 >   `brew info --json=v2` 的元数据逐项对比通过
@@ -103,14 +103,14 @@ Installer(config, loader).install(formula, InstallOptions())
 | Formula DSL 解析 | ✅ | 只解析字面量 DSL，不执行 Ruby；支持 `url/sha256/version`、`license any_of/all_of/with`、`bottle` 块、`depends_on` 标签、`head`/`stable`/`resource`、`on_macos`/`on_linux`/`on_arm`/`on_intel`、cask `preflight`/`postflight` 原文捕获、`def install/test/caveats` 原文捕获 |
 | Tap 发现 | ✅ | `Formula/**/*.rb`、多个 tap、tap-qualified 名称 |
 | 依赖解析 | ✅ | 递归依赖、拓扑排序、环检测、build/test/optional/recommended 分类、`uses_from_macos`（Linux 安装）|
-| Bottle 安装 | ✅ | 标签选择与降级、ghcr.io OCI 匿名拉取、本地缓存/SHA 校验、安全解包、`@@HOMEBREW_*@@` 重定位（Mach-O `install_name_tool`、ELF `patchelf` RPATH）、receipt；支持 `:all` bottle、依赖 bottle 并行预取（默认 8，`PYBREW_DOWNLOAD_CONCURRENCY` 可调）、ghcr token 5 分钟缓存、formula API 1 小时缓存 |
+| Bottle 安装 | ✅ | 标签选择与降级、ghcr.io OCI 匿名拉取、本地缓存/SHA 校验、安全解包、`@@HOMEBREW_*@@` 重定位（Mach-O `install_name_tool`、ELF `patchelf` RPATH）、receipt；支持 `:all` bottle、依赖 bottle 并行预取、Mach-O 批量/并行重定位与 stale-link 快速路径（默认 8，`PYBREW_DOWNLOAD_CONCURRENCY` 可调）、ghcr token 5 分钟缓存、formula API 1 小时缓存 |
 | Cellar / 链接 | ✅ | `Cellar/<name>/<version>`、`opt` 链接、bin/lib/share/... 相对符号链接、冲突检测、`--overwrite`、卸载清理 |
 | Source 安装 | ✅ 常用子集 | `system`（含 `std_configure_args`/`std_cmake_args`/`std_meson_args`/`std_cargo_args`）、`inreplace`、`ENV`、`bin.install`/`prefix.install`、`resource(...).stage`、`--HEAD` 源码安装、`on_macos`/`on_linux`/`on_arm`/`on_intel`、`Hardware::CPU`/`build.with?`/`args.include?` 条件、`ENV["X"]` 读取；新增 opt-in 任意 Ruby 桥 `PYBREW_ALLOW_ARBITRARY_RUBY=1` / `install --allow-arbitrary-ruby`（Ruby shim 扩展到 Pathname/Utils/Hardware/OS/MacOS/ENV/Formula[]/resource/patch；有 downloader 时只下载 install body 引用的 resource 并安全解压；支持 patch 应用（url/`file`/`:DATA`）与 post_install）；autotools/cmake/cargo 有真实构建测试，meson 也已完成真实项目手工构建验证 |
 | Tap 管理 | ✅ | `tap`/`untap`/`tap --list`/`tap --update`/`update`，支持 GitHub 与本地 git URL，自动发现 Formula/Casks |
 | Cask | ✅ zip/dmg/pkg 子集 | app/binary/suite 安装、receipt、uninstall、`--zap`；`pkg` 可展开 payload 到 `--pkg-root`；支持 `--api`、`outdated`/`upgrade`/`reinstall`（含 `--cask` 别名）、`search --cask`、`uninstall quit/delete/pkgutil`；新增 font/colorpicker/prefpane/qlplugin/mdimporter/screen_saver/service/audio_unit/vst/vst3/dictionary/input_method/keyboard_layout 等 Library artifact，以及 bash/zsh/fish completion、manpage、appimage artifact、`rename` 预安装重命名、`container type:` 解析与 7z/rar 解压（需外部工具）、uninstall `launchctl`/`signal`/`login_item` 动作、`deprecate!` 原因、`disable!` 拒绝安装、`os`/`depends_on arch/macos/formula/cask:`（含 macOS 版本） 与 `conflicts_with` 校验、`stage_only`、`--library-root`；支持 opt-in `--system-pkg`（root + macOS installer）、系统 pkg 卸载与升级回滚；新增 opt-in `--run-scripts` 执行 cask preflight/postflight/uninstall_preflight/uninstall_postflight；cask caveats 支持 block/literal 渲染（`caveats --cask`）；新增 opt-in `PYBREW_ALLOW_CASK_RUBY=1` / `--ruby-cask` 任意 Ruby cask DSL 求值（变量/循环/条件/平台分支；合并默认 parser 捕获的 scripts）；默认 cask parser 修复逗号换行 kwargs 丢失；升级会清理被移除的旧 artifact；cask 脚本 `sudo:` 默认开启（`PYBREW_ALLOW_CASK_SUDO=0` 可关闭），默认非交互 `-n`，支持 askpass 与 opt-in TTY |
 | Services | ✅ launchd + systemd | macOS 生成 launchd plist；Linux 生成 systemd user unit；start/stop/restart/list/info |
 | Cask/Services/Tap 命令 | ✅ | 集成到 `pybrew` CLI |
-| CLI 兼容 | ✅ | brew 常用别名（`ls`/`rm`/`up`/`abv`/`-S` 等）、`help [cmd]`/`commands`、`list <formula>`/`--versions`/`--cask`、`--prefix`/`--cellar`/`--repository`/`--cache`/`--taps`/`--env` 查询、TTY 蓝色粗体 `==>`、绿色 `✔`/`🍺`、黄色 warning/红色 error、`search` 多列布局 |
+| CLI 兼容 | ✅ | brew 常用别名（`ls`/`rm`/`up`/`abv`/`-S` 等）、`help [cmd]`/`commands`、`list <formula>`/`--versions`/`--cask`、`--prefix`/`--cellar`/`--repository`/`--cache`/`--taps`/`--env` 查询、TTY 蓝色粗体 `==>`、绿色 `✔`/`🍺`、黄色 warning/红色 error、`search` 多列布局；install 显示 Fetching/Installing dependency/Pouring/Caveats 阶段 |
 | 下载/源码查看 | ✅ | `fetch` formula bottle/source 或 `fetch --cask` artifact、`cat`/`home`/`edit` formula 与 cask |
 | 维护命令 | ✅ | `missing`、`leaves`、`uses`、`autoremove`、`outdated`、`upgrade`（安装新版本并清理旧 keg，含 `--dry-run`）、`cleanup`（含 `--prune-cache`）、`reinstall`、`doctor --json`、`pin`/`unpin`、`services cleanup`、`tap --update`、`shellenv`；install `--no-link` |
 | Formula DSL | ✅ 基础 | `patch do ... end` / `patch :DATA` 解析与 `patch -pN` 应用；`post_install` 在安装后执行；source 构建前应用 patch |
@@ -159,7 +159,7 @@ Installer(config, loader).install(formula, InstallOptions())
 
 ```bash
 pytest -q
-# 1423 passed, 6 skipped
+# 1425 passed, 6 skipped
 ```
 
 测试覆盖：

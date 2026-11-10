@@ -539,3 +539,11 @@ def test_missing_falls_back_when_receipt_has_no_dependency_list(run_cli, sample)
     proc = run_cli("missing")
     assert proc.returncode == 1
     assert "dep" in proc.stdout.split()
+
+
+def test_install_prints_fetch_and_pour_progress(run_cli, sample) -> None:
+    proc = run_cli("install", "hello", bottle_tag=sample.tag)
+    assert proc.returncode == 0, proc.stderr
+    assert "==> Fetching downloads for: hello" in proc.stdout
+    assert "==> Pouring hello 1.0" in proc.stdout
+    assert proc.stdout.index("==> Pouring hello 1.0") < proc.stdout.index("🍺")

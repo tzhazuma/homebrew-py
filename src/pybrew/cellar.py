@@ -76,6 +76,19 @@ class Linker:
 
         rack = self.config.rack_path(formula.name)
         current = keg.resolve()
+        try:
+            other_kegs = [
+                path
+                for path in rack.iterdir()
+                if path.is_dir()
+                and not path.is_symlink()
+                and path.resolve() != current
+            ]
+        except OSError:
+            other_kegs = []
+        if not other_kegs:
+            # First install/current keg only: no previous keg can own stale links.
+            return []
         stale: list[Path] = []
         for directory in LINK_DIRS:
             root = self.config.prefix / directory

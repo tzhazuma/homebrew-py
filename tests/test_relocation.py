@@ -267,3 +267,42 @@ def test_elf_patchelf_failure_restores_file_and_skips(tmp_path: Path, monkeypatc
     assert binary.read_bytes() == original
     assert report.skipped_binaries == 1
     assert report.binary_files == 0
+
+
+def test_macho_relocation_batches_install_name_tool(tmp_path: Path, monkeypatch) -> None:
+    from pybrew import installer as inst
+
+    binary = tmp_path / "libnode.dylib"
+    binary.write_bytes(b"\xcf\xfa\xed\xfe fake")
+    fake_image = inst._MachoImage(
+        loads=(
+            ("@@HOMEBREW_PREFIX@@/lib/liba.dylib", False),
+            ("@@HOMEBREW_PREFIX@@/lib/libb.dylib", False),
+        ),
+        rpaths=(),
+        ids=("@@HOMEBREW_PREFIX@@/lib/libnode.dylib",),
+    )
+    monkeypatch.setattr(inst, "_macho_images", lambda data: ([fake_image], []))
+    monkeypatch.setattr(
+        inst.shutil,
+        "which",
+        lambda name: "/usr/bin/true" if name == "install_name_tool" else None,
+    )
+    calls = []
+
+    class Result:
+        returncode = 0
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        return Result()
+
+    monkeypatch.setattr(inst.subprocess, "run", fake_run)
+    changed = inst._relocate_macho(
+        binary, {b"@@HOMEBREW_PREFIX@@": b"/opt/hb"}
+    )
+    assert changed is True
+    assert len(calls) == 1
+    command = calls[0]
+    assert command.count("-change") == 2
+    assert "-id" in command
