@@ -48,6 +48,7 @@ Closed the documented partial areas across all owners; full suite grew from
 - Other changes are cask UI/tap-trust/CLI internals or deprecations of APIs
   pybrew does not expose; no additional code needed this round.
 - Full suite: **1419 passed, 6 skipped**; real install verified.
+- Commit `b1ef1e2`; CI `42750574706` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Download/search efficiency 2026-11-09
 
