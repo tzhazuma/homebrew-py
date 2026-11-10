@@ -68,6 +68,7 @@ Comparison on this machine (`node` bottle cached):
   pybrew does not perform those extra network checks.
 
 Full suite: **1425 passed, 6 skipped**; real install verified.
+- Commit `5813698`; CI `42778945461` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Python install and download speed 2026-11-10
 
