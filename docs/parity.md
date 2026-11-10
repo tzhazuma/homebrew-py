@@ -1,7 +1,7 @@
 # Parity with Ruby Homebrew
 
-Tested against **Homebrew 7.0.12** (`bc63375ac3`) on macOS 27.2 (arm64 hardware), Python 3.12.7, 2026-11-02. The formula corpus
-was last confirmed against `Homebrew/homebrew-core@89b96a131a`.
+Tested against **Homebrew 7.0.13** (`60555dbc9b`) on macOS 27.2 (arm64 hardware), Python 3.12.7, 2026-11-10. The formula corpus
+was last confirmed against `Homebrew/homebrew-core@2b230cf49d`.
 
 ## Real formula corpus
 

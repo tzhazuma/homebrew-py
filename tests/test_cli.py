@@ -526,3 +526,16 @@ def test_common_brew_commands_casks_formulae_options_which(run_cli, sample) -> N
     assert options.returncode == 0
     casks = run_cli("casks")
     assert casks.returncode == 0
+
+
+def test_missing_falls_back_when_receipt_has_no_dependency_list(run_cli, sample) -> None:
+    assert run_cli("install", "hello-dep", bottle_tag=sample.tag).returncode == 0
+    import shutil
+    receipt = sample.prefix / "Cellar" / "hello-dep" / "1.0" / "INSTALL_RECEIPT.json"
+    payload = json.loads(receipt.read_text())
+    payload.pop("runtime_dependencies", None)
+    receipt.write_text(json.dumps(payload))
+    shutil.rmtree(sample.prefix / "Cellar" / "dep")
+    proc = run_cli("missing")
+    assert proc.returncode == 1
+    assert "dep" in proc.stdout.split()

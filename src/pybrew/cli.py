@@ -1383,10 +1383,21 @@ def cmd_missing(args: argparse.Namespace) -> int:
         if not versions:
             continue
         receipt = read_receipt(config.keg_path(name, versions[-1]))
+        if "runtime_dependencies" in receipt:
+            declared = receipt.get("runtime_dependencies") or []
+        else:
+            # Older receipts without dependency data fall back to the formula
+            # definition, matching Homebrew's missing_dependencies semantics.
+            try:
+                declared = [
+                    dep.name for dep in _loader(config).load(name).runtime_dependencies()
+                ]
+            except Exception:
+                declared = []
         deps = sorted(
             {
                 str(dep).rsplit("/", 1)[-1]
-                for dep in receipt.get("runtime_dependencies", []) or []
+                for dep in declared
                 if str(dep).rsplit("/", 1)[-1] not in installed
                 and str(dep).rsplit("/", 1)[-1] not in hidden
             }

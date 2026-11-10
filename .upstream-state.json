@@ -1,25 +1,25 @@
 {
   "brew": {
     "default_branch": "main",
-    "head_date": "2026-11-08T22:43:05Z",
-    "head_message": "Merge pull request #24543 from dduugg/livecheck-typed-options",
-    "head_sha": "bc63375ac3a4d6debb1ceb441ae6e22854f0909a",
-    "head_url": "https://github.com/Homebrew/brew/commit/bc63375ac3a4d6debb1ceb441ae6e22854f0909a",
+    "head_date": "2026-11-09T21:07:07Z",
+    "head_message": "Merge pull request #24550 from dduugg/bundle-typed-options",
+    "head_sha": "60555dbc9b4a861c19f8b229211941675b8433df",
+    "head_url": "https://github.com/Homebrew/brew/commit/60555dbc9b4a861c19f8b229211941675b8433df",
     "release": {
-      "name": "7.0.12",
-      "published_at": "2026-11-02T08:36:59Z",
-      "tag": "7.0.12",
-      "url": "https://github.com/Homebrew/brew/releases/tag/7.0.12"
+      "name": "7.0.13",
+      "published_at": "2026-11-09T08:34:38Z",
+      "tag": "7.0.13",
+      "url": "https://github.com/Homebrew/brew/releases/tag/7.0.13"
     },
     "repo": "Homebrew/brew"
   },
-  "checked_at": "2026-11-09T07:43:32+00:00",
+  "checked_at": "2026-11-10T03:29:15+00:00",
   "core": {
     "default_branch": "main",
-    "head_date": "2026-11-09T06:34:27Z",
-    "head_message": "Merge pull request #324302 from Homebrew/bump-dbmate-2.38.0",
-    "head_sha": "01230b75466364ee6ab9ce78de0748be2e62e466",
-    "head_url": "https://github.com/Homebrew/homebrew-core/commit/01230b75466364ee6ab9ce78de0748be2e62e466",
+    "head_date": "2026-11-10T03:07:17Z",
+    "head_message": "Merge pull request #324508 from Homebrew/bump-pup-2.4.3",
+    "head_sha": "2b230cf49da095c13d07f5ad90030f12023a3947",
+    "head_url": "https://github.com/Homebrew/homebrew-core/commit/2b230cf49da095c13d07f5ad90030f12023a3947",
     "release": null,
     "repo": "Homebrew/homebrew-core"
   }

@@ -3,7 +3,7 @@
 ## Full parity batch 2026-11-05
 
 Closed the documented partial areas across all owners; full suite grew from
-1156 to **1418 passed, 6 skipped**.
+1156 to **1419 passed, 6 skipped**.
 
 - **Cask**: evaluator `zap` now captures trash/delete/rmdir/pkgutil; livecheck
   URL kwargs merge into request headers; installed caskfile falls back to JSON;
@@ -31,6 +31,23 @@ Closed the documented partial areas across all owners; full suite grew from
 - Commits `57d927e` + `54fa7c5`; CI `41973914882` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
+
+## Upstream sync 2026-11-10
+
+- Upstream: Homebrew/brew `bc63375ac3` → `60555dbc9b` (release **7.0.13**);
+  Homebrew/homebrew-core `01230b7546` → `2b230cf49d`.
+- Reviewed the 39 changed Ruby files (vendor/sorbet excluded). Relevant changes:
+  - cask/formula loader refactor and old `try_new`/path loaders deprecated or
+    removed;
+  - formula `runtime_dependencies(keg:)` and `missing_dependencies` fall back to
+    declared dependencies when a receipt has no dependency list;
+  - info resolves casks via `:resolve_cask` and uses runtime dependents.
+- Implemented the missing-dependency fallback in `pybrew missing`: receipts with
+  no `runtime_dependencies` key now use the formula definition; existing empty
+  lists remain authoritative. Added a regression test.
+- Other changes are cask UI/tap-trust/CLI internals or deprecations of APIs
+  pybrew does not expose; no additional code needed this round.
+- Full suite: **1419 passed, 6 skipped**; real install verified.
 
 ## Download/search efficiency 2026-11-09
 
