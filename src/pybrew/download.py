@@ -8,6 +8,8 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -41,7 +43,17 @@ class _SafeRedirectHandler(urllib.request.HTTPRedirectHandler):
         return new
 
 
+_GHCR_TOKEN_CACHE: dict[str, tuple[str, float]] = {}
+_GHCR_TOKEN_LOCK = threading.Lock()
+_GHCR_TOKEN_TTL = 300.0
+
+
 def _ghcr_token(repo: str) -> Optional[str]:
+    now = time.monotonic()
+    with _GHCR_TOKEN_LOCK:
+        cached = _GHCR_TOKEN_CACHE.get(repo)
+    if cached is not None and cached[1] > now:
+        return cached[0]
     url = "https://ghcr.io/token?" + urllib.parse.urlencode(
         {"service": "ghcr.io", "scope": f"repository:{repo}:pull"}
     )
@@ -52,7 +64,11 @@ def _ghcr_token(repo: str) -> Optional[str]:
 
             payload = json.loads(response.read().decode("utf-8"))
             token = payload.get("token") or payload.get("access_token")
-            return str(token) if token else None
+            if token:
+                with _GHCR_TOKEN_LOCK:
+                    _GHCR_TOKEN_CACHE[repo] = (str(token), now + _GHCR_TOKEN_TTL)
+                return str(token)
+            return None
     except (urllib.error.URLError, OSError, ValueError):
         return None
 

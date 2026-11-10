@@ -139,3 +139,17 @@ def test_absolute_symlinks_are_rejected(tmp_path: Path) -> None:
         tar.addfile(info)
     with pytest.raises(BottleError):
         safe_extract_tar(archive, tmp_path / "extract2")
+
+
+def test_all_bottle_tag_is_used_as_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    from pybrew.models import BottleFile, BottleSpec, Formula
+
+    formula = Formula(name="ca-certificates")
+    formula.bottle = BottleSpec(
+        files={"all": BottleFile("all", "a" * 64, None)},
+    )
+    monkeypatch.setenv("PYBREW_BOTTLE_TAG", "arm64_golden_gate")
+    selected = formula.bottle_for_tag()
+    assert selected is not None
+    assert selected[0] == "all"
+    assert formula.bottle_url(*selected).endswith("a" * 64)

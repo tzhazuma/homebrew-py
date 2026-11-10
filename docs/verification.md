@@ -3,7 +3,7 @@
 ## Full parity batch 2026-11-05
 
 Closed the documented partial areas across all owners; full suite grew from
-1156 to **1419 passed, 6 skipped**.
+1156 to **1421 passed, 6 skipped**.
 
 - **Cask**: evaluator `zap` now captures trash/delete/rmdir/pkgutil; livecheck
   URL kwargs merge into request headers; installed caskfile falls back to JSON;
@@ -31,6 +31,20 @@ Closed the documented partial areas across all owners; full suite grew from
 - Commits `57d927e` + `54fa7c5`; CI `41973914882` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
+
+## Python install and download speed 2026-11-10
+
+- Root cause of the `python@3.15` failure: `ca-certificates` only publishes an
+  `:all` bottle; `Formula#bottle_for_tag` only tried host tags, so it fell back
+  to source install and treated the PEM download as a tarball. Added `all` as
+  the final bottle-tag fallback.
+- Verified `pybrew fetch ca-certificates` downloads the real
+  `...all.bottle.tar.gz` from ghcr.io.
+- Speed: dependency bottles are prefetched concurrently, ghcr.io bearer tokens
+  are cached per repository for 5 minutes, and per-formula API metadata is
+  cached for one hour. `pybrew install --dry-run python@3.15` resolves the
+  eight-formula plan without source fallback.
+- Full suite: **1421 passed, 6 skipped**; real install verified.
 
 ## Upstream sync 2026-11-10
 

@@ -342,7 +342,7 @@ class Formula:
 
         env_tag = os.environ.get("PYBREW_BOTTLE_TAG") or os.environ.get("HOMEBREW_BOTTLE_TAG")
         tags = [explicit] if explicit else ([env_tag] if env_tag else candidate_bottle_tags())
-        for candidate in tags:
+        for candidate in [*tags, "all"]:
             if candidate in self.bottle.files:
                 return candidate, self.bottle.files[candidate]
         return None

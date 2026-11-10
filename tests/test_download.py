@@ -180,3 +180,33 @@ def test_fetch_homebrew_curl_strategy_alias(tmp_path: Path) -> None:
         source.as_uri(), digest, hint="alias", using=":homebrew_curl"
     )
     assert archive.read_bytes() == payload
+
+
+def test_ghcr_token_is_cached(monkeypatch: pytest.MonkeyPatch) -> None:
+    import json
+
+    calls: list[str] = []
+
+    class _Response:
+        def __init__(self, payload: bytes):
+            self.payload = payload
+
+        def read(self) -> bytes:
+            return self.payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    def fake_urlopen(request, timeout=60):
+        calls.append(request.full_url)
+        return _Response(json.dumps({"token": "cached-token"}).encode())
+
+    download_module._GHCR_TOKEN_CACHE.clear()
+    monkeypatch.setattr(download_module.urllib.request, "urlopen", fake_urlopen)
+    assert download_module._ghcr_token("homebrew/core/python") == "cached-token"
+    assert download_module._ghcr_token("homebrew/core/python") == "cached-token"
+    assert len(calls) == 1
+    download_module._GHCR_TOKEN_CACHE.clear()

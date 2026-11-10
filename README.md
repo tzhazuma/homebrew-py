@@ -8,7 +8,7 @@ Formula 解析、依赖解析、Cellar、bottle 安装、链接/卸载和 receip
 
 > **状态：v0.1 原型（可运行、可测试）**
 >
-> - 1419 个测试通过（另有 6 个 opt-in 测试跳过；`pytest -q`）
+> - 1421 个测试通过（另有 6 个 opt-in 测试跳过；`pytest -q`）
 > - 对齐上游 Homebrew **7.0.13**（brew `60555dbc9b`，homebrew-core `2b230cf49d`）
 > - 15 个真实 homebrew-core 公式（bash、git、curl、openssl@3、python@3.12 等）与
 >   `brew info --json=v2` 的元数据逐项对比通过
@@ -103,7 +103,7 @@ Installer(config, loader).install(formula, InstallOptions())
 | Formula DSL 解析 | ✅ | 只解析字面量 DSL，不执行 Ruby；支持 `url/sha256/version`、`license any_of/all_of/with`、`bottle` 块、`depends_on` 标签、`head`/`stable`/`resource`、`on_macos`/`on_linux`/`on_arm`/`on_intel`、cask `preflight`/`postflight` 原文捕获、`def install/test/caveats` 原文捕获 |
 | Tap 发现 | ✅ | `Formula/**/*.rb`、多个 tap、tap-qualified 名称 |
 | 依赖解析 | ✅ | 递归依赖、拓扑排序、环检测、build/test/optional/recommended 分类、`uses_from_macos`（Linux 安装）|
-| Bottle 安装 | ✅ | 标签选择与降级、ghcr.io OCI 匿名拉取、本地缓存/SHA 校验、安全解包、`@@HOMEBREW_*@@` 重定位（Mach-O `install_name_tool`、ELF `patchelf` RPATH）、receipt；依赖 bottle 并行预取（默认 8，`PYBREW_DOWNLOAD_CONCURRENCY` 可调） |
+| Bottle 安装 | ✅ | 标签选择与降级、ghcr.io OCI 匿名拉取、本地缓存/SHA 校验、安全解包、`@@HOMEBREW_*@@` 重定位（Mach-O `install_name_tool`、ELF `patchelf` RPATH）、receipt；支持 `:all` bottle、依赖 bottle 并行预取（默认 8，`PYBREW_DOWNLOAD_CONCURRENCY` 可调）、ghcr token 5 分钟缓存、formula API 1 小时缓存 |
 | Cellar / 链接 | ✅ | `Cellar/<name>/<version>`、`opt` 链接、bin/lib/share/... 相对符号链接、冲突检测、`--overwrite`、卸载清理 |
 | Source 安装 | ✅ 常用子集 | `system`（含 `std_configure_args`/`std_cmake_args`/`std_meson_args`/`std_cargo_args`）、`inreplace`、`ENV`、`bin.install`/`prefix.install`、`resource(...).stage`、`--HEAD` 源码安装、`on_macos`/`on_linux`/`on_arm`/`on_intel`、`Hardware::CPU`/`build.with?`/`args.include?` 条件、`ENV["X"]` 读取；新增 opt-in 任意 Ruby 桥 `PYBREW_ALLOW_ARBITRARY_RUBY=1` / `install --allow-arbitrary-ruby`（Ruby shim 扩展到 Pathname/Utils/Hardware/OS/MacOS/ENV/Formula[]/resource/patch；有 downloader 时只下载 install body 引用的 resource 并安全解压；支持 patch 应用（url/`file`/`:DATA`）与 post_install）；autotools/cmake/cargo 有真实构建测试，meson 也已完成真实项目手工构建验证 |
 | Tap 管理 | ✅ | `tap`/`untap`/`tap --list`/`tap --update`/`update`，支持 GitHub 与本地 git URL，自动发现 Formula/Casks |
@@ -159,7 +159,7 @@ Installer(config, loader).install(formula, InstallOptions())
 
 ```bash
 pytest -q
-# 1419 passed, 6 skipped
+# 1421 passed, 6 skipped
 ```
 
 测试覆盖：
