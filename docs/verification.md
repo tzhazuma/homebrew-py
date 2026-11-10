@@ -50,6 +50,7 @@ Closed the documented partial areas across all owners; full suite grew from
   are cached per repository for 5 minutes, and per-formula API metadata is
   cached for one hour.
 - Full suite: **1423 passed, 6 skipped**; real install verified.
+- Commit `28b5ce7`; CI `42760655518` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Upstream sync 2026-11-10
 
