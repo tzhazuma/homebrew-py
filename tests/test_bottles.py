@@ -153,3 +153,42 @@ def test_all_bottle_tag_is_used_as_fallback(monkeypatch: pytest.MonkeyPatch) -> 
     assert selected is not None
     assert selected[0] == "all"
     assert formula.bottle_url(*selected).endswith("a" * 64)
+
+
+def test_symlink_into_prefix_etc_is_allowed(tmp_path: Path) -> None:
+    import tarfile
+
+    archive = tmp_path / "certlink.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        info = tarfile.TarInfo("pkg/1.0/lib/cacert.pem")
+        info.type = tarfile.SYMTYPE
+        info.linkname = "../../../../etc/ca-certificates/cert.pem"
+        tar.addfile(info)
+    prefix = tmp_path / "prefix"
+    safe_extract_tar(
+        archive,
+        tmp_path / "extract",
+        symlink_final_root=prefix / "Cellar",
+        symlink_roots=(prefix / "etc", prefix / "var"),
+    )
+    link = tmp_path / "extract" / "pkg" / "1.0" / "lib" / "cacert.pem"
+    assert link.is_symlink()
+
+
+def test_symlink_outside_prefix_is_still_rejected(tmp_path: Path) -> None:
+    import tarfile
+
+    archive = tmp_path / "evil-rel-link.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        info = tarfile.TarInfo("pkg/1.0/lib/passwd")
+        info.type = tarfile.SYMTYPE
+        info.linkname = "../../../../outside/passwd"
+        tar.addfile(info)
+    prefix = tmp_path / "prefix"
+    with pytest.raises(BottleError):
+        safe_extract_tar(
+            archive,
+            tmp_path / "extract",
+            symlink_final_root=prefix / "Cellar",
+            symlink_roots=(prefix / "etc", prefix / "var"),
+        )

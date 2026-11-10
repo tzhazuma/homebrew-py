@@ -8,7 +8,7 @@ Formula 解析、依赖解析、Cellar、bottle 安装、链接/卸载和 receip
 
 > **状态：v0.1 原型（可运行、可测试）**
 >
-> - 1421 个测试通过（另有 6 个 opt-in 测试跳过；`pytest -q`）
+> - 1423 个测试通过（另有 6 个 opt-in 测试跳过；`pytest -q`）
 > - 对齐上游 Homebrew **7.0.13**（brew `60555dbc9b`，homebrew-core `2b230cf49d`）
 > - 15 个真实 homebrew-core 公式（bash、git、curl、openssl@3、python@3.12 等）与
 >   `brew info --json=v2` 的元数据逐项对比通过
@@ -159,7 +159,7 @@ Installer(config, loader).install(formula, InstallOptions())
 
 ```bash
 pytest -q
-# 1421 passed, 6 skipped
+# 1423 passed, 6 skipped
 ```
 
 测试覆盖：

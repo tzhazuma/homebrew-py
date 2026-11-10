@@ -3,7 +3,7 @@
 ## Full parity batch 2026-11-05
 
 Closed the documented partial areas across all owners; full suite grew from
-1156 to **1421 passed, 6 skipped**.
+1156 to **1423 passed, 6 skipped**.
 
 - **Cask**: evaluator `zap` now captures trash/delete/rmdir/pkgutil; livecheck
   URL kwargs merge into request headers; installed caskfile falls back to JSON;
@@ -40,11 +40,16 @@ Closed the documented partial areas across all owners; full suite grew from
   the final bottle-tag fallback.
 - Verified `pybrew fetch ca-certificates` downloads the real
   `...all.bottle.tar.gz` from ghcr.io.
+- Python bottles also contain a relative symlink from
+  `certifi/cacert.pem` into the final `HOMEBREW_PREFIX/etc`; bottle manifest
+  and extraction validation now permit only prefix `etc`/`var` targets for
+  such links (outside-prefix escapes remain rejected).
+- Actual `pybrew install python@3.15` completed:
+  `🍺 /Users/azuma/.pybrew/Cellar/python@3.15/3.15.2: 3997 files, 77.2MB`.
 - Speed: dependency bottles are prefetched concurrently, ghcr.io bearer tokens
   are cached per repository for 5 minutes, and per-formula API metadata is
-  cached for one hour. `pybrew install --dry-run python@3.15` resolves the
-  eight-formula plan without source fallback.
-- Full suite: **1421 passed, 6 skipped**; real install verified.
+  cached for one hour.
+- Full suite: **1423 passed, 6 skipped**; real install verified.
 
 ## Upstream sync 2026-11-10
 

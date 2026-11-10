@@ -112,8 +112,20 @@ def _record_post_install(keg: Path, sbom: Optional[Mapping[str, Any]] = None) ->
     )
 
 
-def safe_extract_tar(archive: Path, destination: Path) -> None:
-    """Extract a bottle/source tarball without allowing path escapes."""
+def safe_extract_tar(
+    archive: Path,
+    destination: Path,
+    *,
+    symlink_final_root: Optional[Path] = None,
+    symlink_roots: Iterable[Path] = (),
+) -> None:
+    """Extract a bottle/source tarball without allowing path escapes.
+
+    Bottles may contain relative symlinks that intentionally point into the
+    final HOMEBREW_PREFIX (e.g. ``prefix/etc/ca-certificates/cert.pem``) even
+    though they escape the temporary extraction root.  Such links are allowed
+    only when the final path is under one of ``symlink_roots``.
+    """
 
     destination.mkdir(parents=True, exist_ok=True)
     pending_hardlinks: list[tuple[str, str, int]] = []
@@ -137,7 +149,20 @@ def safe_extract_tar(archive: Path, destination: Path) -> None:
                 if not linkname or linkname.startswith("/"):
                     raise BottleError(f"refusing absolute symlink in archive: {name!r}")
                 resolved = (target.parent / linkname).resolve()
-                if destination.resolve() not in (resolved, *resolved.parents):
+                allowed = destination.resolve() in (resolved, *resolved.parents)
+                if not allowed and symlink_final_root is not None:
+                    try:
+                        relative = target.relative_to(destination)
+                    except ValueError:
+                        relative = Path(name)
+                    final_resolved = (
+                        symlink_final_root / relative.parent / linkname
+                    ).resolve()
+                    allowed = any(
+                        root.resolve() in (final_resolved, *final_resolved.parents)
+                        for root in symlink_roots
+                    )
+                if not allowed:
                     raise BottleError(f"symlink escapes archive root: {name!r} -> {linkname!r}")
                 if target.exists() or target.is_symlink():
                     target.unlink()
@@ -291,13 +316,29 @@ def _validated_member_path(name: str) -> str:
     return "" if normalised == "." else normalised
 
 
-def _validated_symlink_target(name: str, linkname: str) -> str:
+def _validated_symlink_target(
+    name: str,
+    linkname: str,
+    *,
+    symlink_final_root: Optional[Path] = None,
+    symlink_roots: Iterable[Path] = (),
+) -> str:
     if not linkname or PurePosixPath(linkname).is_absolute():
         raise BottleError(f"refusing absolute symlink in archive: {name!r}")
     parent = PurePosixPath(name).parent
     resolved = posixpath.normpath(str(parent / linkname))
     if resolved == ".." or resolved.startswith("../") or resolved.startswith("/"):
-        raise BottleError(f"symlink escapes archive root: {name!r} -> {linkname!r}")
+        allowed = False
+        if symlink_final_root is not None:
+            final_resolved = (
+                symlink_final_root / Path(str(parent)) / linkname
+            ).resolve()
+            allowed = any(
+                root.resolve() in (final_resolved, *final_resolved.parents)
+                for root in symlink_roots
+            )
+        if not allowed:
+            raise BottleError(f"symlink escapes archive root: {name!r} -> {linkname!r}")
     return linkname
 
 
@@ -306,6 +347,8 @@ def read_bottle_manifest(
     expected_sha256: Optional[str] = None,
     *,
     checksum_verified: bool = False,
+    symlink_final_root: Optional[Path] = None,
+    symlink_roots: Iterable[Path] = (),
 ) -> BottleManifest:
     """List the members of a local bottle tarball and validate it.
 
@@ -356,7 +399,12 @@ def read_bottle_manifest(
                     ):
                         receipt = name
                 elif member.issym():
-                    target = _validated_symlink_target(name, member.linkname)
+                    target = _validated_symlink_target(
+                        name,
+                        member.linkname,
+                        symlink_final_root=symlink_final_root,
+                        symlink_roots=symlink_roots,
+                    )
                     entries.append(BottleManifestEntry(name, "symlink", 0, target))
                 elif member.islnk():
                     target = _validated_member_path(member.linkname)
@@ -2253,10 +2301,23 @@ class Installer:
             archive,
             expected_sha256=bottle_file.sha256,
             checksum_verified=True,
+            symlink_final_root=self.config.cellar,
+            symlink_roots=(
+                self.config.prefix / "etc",
+                self.config.prefix / "var",
+            ),
         )
         with tempfile.TemporaryDirectory(prefix="pybrew-bottle-") as temporary:
             extract_root = Path(temporary)
-            safe_extract_tar(archive, extract_root)
+            safe_extract_tar(
+                archive,
+                extract_root,
+                symlink_final_root=self.config.cellar,
+                symlink_roots=(
+                    self.config.prefix / "etc",
+                    self.config.prefix / "var",
+                ),
+            )
             staging = find_keg_root(extract_root, formula)
             relocate_tree(staging, self.config)
             if _linkage_check_requested(options):
