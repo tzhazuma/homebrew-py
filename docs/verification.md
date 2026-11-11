@@ -32,6 +32,18 @@ Closed the documented partial areas across all owners; full suite grew from
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
 
+## Upstream sync 2026-11-11
+
+- Upstream: Homebrew/brew `60555dbc9b` → `95d4938386`;
+  Homebrew/homebrew-core `2b230cf49d` → `a0e8147618`.
+- Reviewed the changed Ruby files. Relevant change is the `curl_output` API
+  signatures in the download strategies (`user_agent`/`secrets`/timeouts as
+  explicit keywords). The pybrew Ruby shim's `Utils::Curl.curl_output` already
+  accepts `**_options` and delegates to the host curl, so no code change was
+  needed. The rest is cask audit/update metadata and dev command changes.
+- No fixture changes required this round.
+- Full suite: **1425 passed, 6 skipped**; real install verified.
+
 ## Install performance/profile 2026-11-10
 
 Profiled a clean `pybrew install node` (fresh prefix, warm bottle cache):
