@@ -43,6 +43,7 @@ Closed the documented partial areas across all owners; full suite grew from
   needed. The rest is cask audit/update metadata and dev command changes.
 - No fixture changes required this round.
 - Full suite: **1425 passed, 6 skipped**; real install verified.
+- Commit `8b85769`; CI `42936282165` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Install performance/profile 2026-11-10
 
