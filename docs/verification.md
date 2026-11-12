@@ -52,6 +52,7 @@ Closed the documented partial areas across all owners; full suite grew from
 - `Utils::InfoDisplay` is CLI presentation only; pybrew's Python `info` output
   already owns that path.
 - Full suite: **1425 passed, 6 skipped**; real install verified.
+- Commit `14ce22e`; CI `43150192501` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Upstream sync 2026-11-11
 
