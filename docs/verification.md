@@ -32,6 +32,27 @@ Closed the documented partial areas across all owners; full suite grew from
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
 
+## Upstream sync 2026-11-12
+
+- Upstream: Homebrew/brew `95d4938386` → `8679d30f15`;
+  Homebrew/homebrew-core `a0e8147618` → `653239ba3f`.
+- Relevant API changes:
+  - `Formula#runtime_dependencies`, `#declared_runtime_dependencies`,
+    `#runtime_formula_dependencies` and `#undeclared_runtime_dependencies` gained
+    `stop_at_untrusted:` keywords;
+  - `Dependency#untrusted?` and `#formula_loaders` were added;
+  - formula/cask `info` presentation moved into the new `Utils::InfoDisplay`.
+- pybrew changes:
+  - Ruby shim runtime-dependency methods now accept the new keywords (and keep
+    the existing receipt/declaration behavior);
+  - `PybrewDependencyRef` exposes `untrusted? => false` and
+    `formula_loaders => []`;
+  - extended the formula-object shim test with keyword calls and
+    dependency-trust probes.
+- `Utils::InfoDisplay` is CLI presentation only; pybrew's Python `info` output
+  already owns that path.
+- Full suite: **1425 passed, 6 skipped**; real install verified.
+
 ## Upstream sync 2026-11-11
 
 - Upstream: Homebrew/brew `60555dbc9b` → `95d4938386`;

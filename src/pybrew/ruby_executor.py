@@ -3374,6 +3374,14 @@ class PybrewDependencyRef
     @tags.include?("no_linkage")
   end
 
+  def untrusted?
+    false
+  end
+
+  def formula_loaders
+    []
+  end
+
   def to_s
     @name
   end
@@ -5709,7 +5717,7 @@ class PybrewFormulaRef
     Array(@info["link_overwrite"])
   end
 
-  def runtime_dependencies(*_args)
+  def runtime_dependencies(*_args, **_kwargs)
     names = @info["runtime_dependencies"]
     return deps.select { |dependency| dependency.runtime? } if names.nil?
 
@@ -6641,11 +6649,11 @@ class PybrewFormulaRef
     []
   end
 
-  def declared_runtime_dependencies
+  def declared_runtime_dependencies(*_args, **_kwargs)
     runtime_dependencies
   end
 
-  def runtime_formula_dependencies
+  def runtime_formula_dependencies(*_args, **_kwargs)
     runtime_dependencies
   end
 
@@ -7004,7 +7012,7 @@ class PybrewFormulaRef
     path
   end
 
-  def undeclared_runtime_dependencies
+  def undeclared_runtime_dependencies(*_args, **_kwargs)
     []
   end
 

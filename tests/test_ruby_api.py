@@ -815,6 +815,13 @@ def test_formula_object_metadata_paths_and_dependencies(
   (prefix/"formula-runtime").write(
     ref.runtime_dependencies.map { |dep| dep.name }.join(",")
   )
+  (prefix/"formula-runtime-kw").write(
+    ref.runtime_dependencies(stop_at_untrusted: true).map { |dep| dep.name }.join(",")
+  )
+  (prefix/"formula-runtime-formula").write(
+    ref.runtime_formula_dependencies(stop_at_untrusted: true).map { |dep| dep.name }.join(",")
+  )
+  (prefix/"formula-dep-untrusted").write ref.deps.first.untrusted?.to_s
   (prefix/"formula-recursive").write(
     ref.recursive_dependencies.map { |dep| dep.name }.join(",")
   )
@@ -864,6 +871,9 @@ def test_formula_object_metadata_paths_and_dependencies(
         "dep-runtime,dep-build,dep-test,dep-optional"
     )
     assert (keg / "formula-runtime").read_text() == "dep-runtime"
+    assert (keg / "formula-runtime-kw").read_text() == "dep-runtime"
+    assert (keg / "formula-runtime-formula").read_text() == "dep-runtime"
+    assert (keg / "formula-dep-untrusted").read_text() == "false"
     assert (keg / "formula-recursive").read_text() == (
         "dep-runtime,dep-build,dep-test,dep-optional"
     )

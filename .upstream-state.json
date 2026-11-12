@@ -1,10 +1,10 @@
 {
   "brew": {
     "default_branch": "main",
-    "head_date": "2026-11-10T14:44:14Z",
-    "head_message": "Merge pull request #24559 from hyuraku/analytics-api-stale-todo",
-    "head_sha": "95d4938386e5b1536b3b961baa9d0267abd57047",
-    "head_url": "https://github.com/Homebrew/brew/commit/95d4938386e5b1536b3b961baa9d0267abd57047",
+    "head_date": "2026-11-12T01:28:48Z",
+    "head_message": "Merge pull request #24575 from Homebrew/sponsors-maintainers-man-completions",
+    "head_sha": "8679d30f156018b0b184c64ab21a784f64b1d880",
+    "head_url": "https://github.com/Homebrew/brew/commit/8679d30f156018b0b184c64ab21a784f64b1d880",
     "release": {
       "name": "7.0.13",
       "published_at": "2026-11-09T08:34:38Z",
@@ -13,13 +13,13 @@
     },
     "repo": "Homebrew/brew"
   },
-  "checked_at": "2026-11-11T01:00:06+00:00",
+  "checked_at": "2026-11-12T03:38:20+00:00",
   "core": {
     "default_branch": "main",
-    "head_date": "2026-11-11T00:36:14Z",
-    "head_message": "Merge pull request #324726 from Homebrew/bump-workmux-0.1.282",
-    "head_sha": "a0e81476182f50c666089733b9437bf86b825607",
-    "head_url": "https://github.com/Homebrew/homebrew-core/commit/a0e81476182f50c666089733b9437bf86b825607",
+    "head_date": "2026-11-12T03:29:13Z",
+    "head_message": "Merge pull request #324971 from Homebrew/bump-mise-2026.11.7",
+    "head_sha": "653239ba3f2c0ab40a6eab52d230cee7ebcfb994",
+    "head_url": "https://github.com/Homebrew/homebrew-core/commit/653239ba3f2c0ab40a6eab52d230cee7ebcfb994",
     "release": null,
     "repo": "Homebrew/homebrew-core"
   }
