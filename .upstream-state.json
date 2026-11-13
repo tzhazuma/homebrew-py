@@ -1,10 +1,10 @@
 {
   "brew": {
     "default_branch": "main",
-    "head_date": "2026-11-12T01:28:48Z",
-    "head_message": "Merge pull request #24575 from Homebrew/sponsors-maintainers-man-completions",
-    "head_sha": "8679d30f156018b0b184c64ab21a784f64b1d880",
-    "head_url": "https://github.com/Homebrew/brew/commit/8679d30f156018b0b184c64ab21a784f64b1d880",
+    "head_date": "2026-11-12T18:31:55Z",
+    "head_message": "Merge pull request #24585 from Homebrew/issue_24584_preserve_tags",
+    "head_sha": "53c5856230b72e866ee4da77cfb9d39880291a99",
+    "head_url": "https://github.com/Homebrew/brew/commit/53c5856230b72e866ee4da77cfb9d39880291a99",
     "release": {
       "name": "7.0.13",
       "published_at": "2026-11-09T08:34:38Z",
@@ -13,13 +13,13 @@
     },
     "repo": "Homebrew/brew"
   },
-  "checked_at": "2026-11-12T03:38:20+00:00",
+  "checked_at": "2026-11-13T07:09:57+00:00",
   "core": {
     "default_branch": "main",
-    "head_date": "2026-11-12T03:29:13Z",
-    "head_message": "Merge pull request #324971 from Homebrew/bump-mise-2026.11.7",
-    "head_sha": "653239ba3f2c0ab40a6eab52d230cee7ebcfb994",
-    "head_url": "https://github.com/Homebrew/homebrew-core/commit/653239ba3f2c0ab40a6eab52d230cee7ebcfb994",
+    "head_date": "2026-11-13T06:47:35Z",
+    "head_message": "Merge pull request #324593 from Homebrew/bump-dotnet-11.0.100",
+    "head_sha": "0d09f4cf0876c1ef7753796434f4366f39e8bca2",
+    "head_url": "https://github.com/Homebrew/homebrew-core/commit/0d09f4cf0876c1ef7753796434f4366f39e8bca2",
     "release": null,
     "repo": "Homebrew/homebrew-core"
   }

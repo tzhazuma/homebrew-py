@@ -49,6 +49,7 @@ def test_version_comparison() -> None:
     assert compare_versions("1.10", "1.9") > 0
     assert compare_versions("2.0", "2.0") == 0
     assert compare_versions("1.0.0", "1.0") == 0
+    assert compare_versions("1.0.0", "1.0rc1") > 0
     assert compare_versions("1.0.0", "1.0", missing_numeric_zero=False) > 0
     assert Version("5.3.20") > Version("5.3.9")
     assert Version("20260817.0") > Version("20260801.0")
@@ -284,7 +285,7 @@ def test_version_homebrew_bounded_table_and_hash_consistency() -> None:
     ]
     expected = [
         [0, 0, 1, -1, -1, -1, -1],
-        [0, 0, 0, 0, 0, 0, -1],
+        [0, 0, 1, -1, -1, -1, -1],
         [-1, -1, 0, -1, -1, -1, -1],
         [1, 1, 1, 0, 1, 1, -1],
         [1, 1, 1, -1, 0, -1, -1],

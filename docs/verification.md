@@ -32,6 +32,25 @@ Closed the documented partial areas across all owners; full suite grew from
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
 
+## Upstream sync 2026-11-13
+
+- Upstream: Homebrew/brew `8679d30f15` → `53c5856230`;
+  Homebrew/homebrew-core `653239ba3f` → `0d09f4cf08`.
+- Relevant fix: `Version#<=>` now loops while either side has tokens
+  (`while l < max || r < max`), fixing asymmetric trailing-zero comparisons.
+  Upstream regression: `Version.new("1.0.0") > Version.new("1.0rc1")`.
+- pybrew changes:
+  - fixed the same loop in `src/pybrew/version.py` and the Ruby formula-test
+    shim (`src/pybrew/formula_test.py`);
+  - `1.0.0` now compares greater than `1.0rc1` and `1.0-alpha`, matching the
+    host Homebrew 7.0.13 Ruby implementation;
+  - updated both bounded version tables and added the upstream regression
+    assertion.
+- Other changes in the range (cask `refresh_copy`, API cask without `sha256`,
+  Finder tags, package-source reuse, info display) are presentation/cask
+  internals; no further pybrew changes needed this round.
+- Full suite: **1425 passed, 6 skipped**; real install verified.
+
 ## Upstream sync 2026-11-12
 
 - Upstream: Homebrew/brew `95d4938386` → `8679d30f15`;

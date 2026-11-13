@@ -2714,7 +2714,7 @@ def test_dsl_homebrew_bounded_table_and_hash_consistency(tmp_path: Path) -> None
   versions = ["1.0", "1.0.0", "1.0-alpha", "1.0-p1", "1.0-post1", "1.0-foo", "1.0.1"]
   expected = [
     [0, 0, 1, -1, -1, -1, -1],
-    [0, 0, 0, 0, 0, 0, -1],
+    [0, 0, 1, -1, -1, -1, -1],
     [-1, -1, 0, -1, -1, -1, -1],
     [1, 1, 1, 0, 1, 1, -1],
     [1, 1, 1, -1, 0, -1, -1],

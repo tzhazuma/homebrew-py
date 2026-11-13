@@ -705,7 +705,7 @@ class FormulaTestContext
       maximum = [left.length, right.length].max
       left_index = 0
       right_index = 0
-      while left_index < maximum
+      while left_index < maximum || right_index < maximum
         left_token = left[left_index] || NullToken.new
         right_token = right[right_index] || NullToken.new
         comparison = left_token.compare(right_token)

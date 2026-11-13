@@ -496,7 +496,7 @@ def _homebrew_compare_token_lists(left: list[Token], right: list[Token]) -> int:
     length = max(len(left), len(right))
     left_index = 0
     right_index = 0
-    while left_index < length:
+    while left_index < length or right_index < length:
         left_token = left[left_index] if left_index < len(left) else NullToken()
         right_token = right[right_index] if right_index < len(right) else NullToken()
         comparison = left_token.compare(right_token)
