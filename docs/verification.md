@@ -50,6 +50,7 @@ Closed the documented partial areas across all owners; full suite grew from
   Finder tags, package-source reuse, info display) are presentation/cask
   internals; no further pybrew changes needed this round.
 - Full suite: **1425 passed, 6 skipped**; real install verified.
+- Commit `8289da7`; CI `43385933292` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Upstream sync 2026-11-12
 
