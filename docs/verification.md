@@ -44,6 +44,7 @@ Closed the documented partial areas across all owners; full suite grew from
   Cargo publish-age sandbox env, and dev/CI updates; no additional pybrew
   changes needed this round.
 - Full suite: **1426 passed, 6 skipped**; real install verified.
+- Commit `cda2960`; CI `43540487873` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Upstream sync 2026-11-13
 
