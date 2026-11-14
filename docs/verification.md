@@ -3,7 +3,7 @@
 ## Full parity batch 2026-11-05
 
 Closed the documented partial areas across all owners; full suite grew from
-1156 to **1425 passed, 6 skipped**.
+1156 to **1426 passed, 6 skipped**.
 
 - **Cask**: evaluator `zap` now captures trash/delete/rmdir/pkgutil; livecheck
   URL kwargs merge into request headers; installed caskfile falls back to JSON;
@@ -31,6 +31,19 @@ Closed the documented partial areas across all owners; full suite grew from
 - Commits `57d927e` + `54fa7c5`; CI `41973914882` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
+
+## Upstream sync 2026-11-14
+
+- Upstream: Homebrew/brew `53c5856230` → `fc51ba6b2f`;
+  Homebrew/homebrew-core `0d09f4cf08` → `148aa75dfc`.
+- Relevant fix: autoremove now keeps installed kegs that have no receipt,
+  because their dependency status is unknown.  pybrew's
+  `maintenance.autoremove` previously treated receipt-less kegs as removable;
+  it now adds them to the protected set.  Added a regression test.
+- Other changes are cask migration/analytics, trust completion behavior,
+  Cargo publish-age sandbox env, and dev/CI updates; no additional pybrew
+  changes needed this round.
+- Full suite: **1426 passed, 6 skipped**; real install verified.
 
 ## Upstream sync 2026-11-13
 

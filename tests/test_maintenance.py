@@ -172,3 +172,13 @@ def test_outdated_skips_disabled_formula_and_cask(run_cli, sample) -> None:
     proc = run_cli("outdated")
     assert proc.returncode == 0, proc.stderr
     assert "hello" not in proc.stdout
+
+
+def test_autoremove_keeps_keg_without_receipt(run_cli, sample) -> None:
+    assert run_cli("install", "hello-dep", bottle_tag=sample.tag).returncode == 0
+    receipt = sample.prefix / "Cellar" / "dep" / "2.0" / "INSTALL_RECEIPT.json"
+    receipt.unlink()
+    proc = run_cli("autoremove")
+    assert proc.returncode == 0, proc.stderr
+    assert (sample.prefix / "Cellar" / "dep" / "2.0").is_dir()
+    assert "dep" not in proc.stdout.split()

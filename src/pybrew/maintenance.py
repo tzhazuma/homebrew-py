@@ -187,9 +187,12 @@ def autoremove(config: Config, dry_run: bool = False) -> list[str]:
         receipt = read_receipt(config.keg_path(name, versions[-1]))
         if receipt:
             receipts[name] = receipt
+    # Kegs without a receipt have unknown dependency status.  Homebrew keeps
+    # them rather than guessing that they are unused.
     needed = {
         name for name, receipt in receipts.items() if not receipt.get("installed_as_dependency")
     }
+    needed.update(name for name in installed if name not in receipts)
     changed = True
     while changed:
         changed = False

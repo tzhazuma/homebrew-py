@@ -1,10 +1,10 @@
 {
   "brew": {
     "default_branch": "main",
-    "head_date": "2026-11-12T18:31:55Z",
-    "head_message": "Merge pull request #24585 from Homebrew/issue_24584_preserve_tags",
-    "head_sha": "53c5856230b72e866ee4da77cfb9d39880291a99",
-    "head_url": "https://github.com/Homebrew/brew/commit/53c5856230b72e866ee4da77cfb9d39880291a99",
+    "head_date": "2026-11-13T14:35:00Z",
+    "head_message": "Merge pull request #24597 from hyuraku/autoremove-keep-kegs-without-receipt",
+    "head_sha": "fc51ba6b2f144ecc94a7bf3f0b7b95c8477a5738",
+    "head_url": "https://github.com/Homebrew/brew/commit/fc51ba6b2f144ecc94a7bf3f0b7b95c8477a5738",
     "release": {
       "name": "7.0.13",
       "published_at": "2026-11-09T08:34:38Z",
@@ -13,13 +13,13 @@
     },
     "repo": "Homebrew/brew"
   },
-  "checked_at": "2026-11-13T07:09:57+00:00",
+  "checked_at": "2026-11-14T01:19:25+00:00",
   "core": {
     "default_branch": "main",
-    "head_date": "2026-11-13T06:47:35Z",
-    "head_message": "Merge pull request #324593 from Homebrew/bump-dotnet-11.0.100",
-    "head_sha": "0d09f4cf0876c1ef7753796434f4366f39e8bca2",
-    "head_url": "https://github.com/Homebrew/homebrew-core/commit/0d09f4cf0876c1ef7753796434f4366f39e8bca2",
+    "head_date": "2026-11-13T23:48:43Z",
+    "head_message": "Merge pull request #325413 from Homebrew/bump-awscli-2.40.3",
+    "head_sha": "148aa75dfcc6edc97b198e64e746d636b4c3a75f",
+    "head_url": "https://github.com/Homebrew/homebrew-core/commit/148aa75dfcc6edc97b198e64e746d636b4c3a75f",
     "release": null,
     "repo": "Homebrew/homebrew-core"
   }
