@@ -49,6 +49,7 @@ Closed the documented partial areas across all owners; full suite grew from
   path; the cask adoption and TCC paths are outside pybrew's current bounded
   cask support. No additional shim/parser changes were needed this round.
 - Full suite: **1426 passed, 6 skipped**; real install verified.
+- Commit `c92af11`; CI `43661781726` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Upstream sync 2026-11-14
 
