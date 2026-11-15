@@ -1,10 +1,10 @@
 {
   "brew": {
     "default_branch": "main",
-    "head_date": "2026-11-13T14:35:00Z",
-    "head_message": "Merge pull request #24597 from hyuraku/autoremove-keep-kegs-without-receipt",
-    "head_sha": "fc51ba6b2f144ecc94a7bf3f0b7b95c8477a5738",
-    "head_url": "https://github.com/Homebrew/brew/commit/fc51ba6b2f144ecc94a7bf3f0b7b95c8477a5738",
+    "head_date": "2026-11-14T16:38:44Z",
+    "head_message": "Merge pull request #24607 from Homebrew/vendor-sigstore",
+    "head_sha": "1cd7b3e1341b257955f5d31106637d7696019129",
+    "head_url": "https://github.com/Homebrew/brew/commit/1cd7b3e1341b257955f5d31106637d7696019129",
     "release": {
       "name": "7.0.13",
       "published_at": "2026-11-09T08:34:38Z",
@@ -13,13 +13,13 @@
     },
     "repo": "Homebrew/brew"
   },
-  "checked_at": "2026-11-14T01:19:25+00:00",
+  "checked_at": "2026-11-15T01:02:27+00:00",
   "core": {
     "default_branch": "main",
-    "head_date": "2026-11-13T23:48:43Z",
-    "head_message": "Merge pull request #325413 from Homebrew/bump-awscli-2.40.3",
-    "head_sha": "148aa75dfcc6edc97b198e64e746d636b4c3a75f",
-    "head_url": "https://github.com/Homebrew/homebrew-core/commit/148aa75dfcc6edc97b198e64e746d636b4c3a75f",
+    "head_date": "2026-11-15T00:21:03Z",
+    "head_message": "Merge pull request #325514 from Homebrew/bump-ccusage-20.0.51",
+    "head_sha": "24556e4c7330b3031f3c63b1611925e5a33d0100",
+    "head_url": "https://github.com/Homebrew/homebrew-core/commit/24556e4c7330b3031f3c63b1611925e5a33d0100",
     "release": null,
     "repo": "Homebrew/homebrew-core"
   }

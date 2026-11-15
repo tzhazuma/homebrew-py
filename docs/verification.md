@@ -32,6 +32,24 @@ Closed the documented partial areas across all owners; full suite grew from
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
 
+## Upstream sync 2026-11-15
+
+- Upstream: Homebrew/brew `fc51ba6b2f` → `1cd7b3e134`;
+  Homebrew/homebrew-core `148aa75dfc` → `24556e4c73`.
+- Reviewed the 163-file range. Most changes are RuboCop annotations/vendor
+  updates and the new sigstore attestation plan. Package-path changes:
+  - cask `Moved#move` adoption/overwrite control-flow cleanup;
+  - `Cmd::Fetch` resolves API formulae to their source-download form before
+    enqueuing resources;
+  - `UnpackStrategy` copies external-volume paths when TCC responsibility is
+    disclaimed;
+  - `Install.install_formulae` drops unused keyword arguments now handled by
+    `FormulaInstaller`.
+- pybrew already downloads API formula sources directly in its Python fetch
+  path; the cask adoption and TCC paths are outside pybrew's current bounded
+  cask support. No additional shim/parser changes were needed this round.
+- Full suite: **1426 passed, 6 skipped**; real install verified.
+
 ## Upstream sync 2026-11-14
 
 - Upstream: Homebrew/brew `53c5856230` → `fc51ba6b2f`;
