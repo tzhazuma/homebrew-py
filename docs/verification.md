@@ -46,6 +46,7 @@ Closed the documented partial areas across all owners; full suite grew from
 - Upstream exploration PR Homebrew/brew#24362 remains **closed**; maintainer
   replied “Not interested in this, sorry.” No resubmission.
 - Full suite: **1426 passed, 6 skipped**; real install verified.
+- Commit `7aa3b90`; CI `43784614946` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Upstream sync 2026-11-15
 
