@@ -139,23 +139,23 @@
       "pkgconf"
     ],
     "dependencies": [
-      "curl",
       "gettext",
       "pcre2"
     ],
     "desc": "Distributed revision control system",
-    "homebrew_api_sha256": "5884e345d5e79ae925821bc8b753a7c1a56ffef130aa479e64940a6888af0092",
+    "homebrew_api_sha256": "d7659666a0827d341f9322372333a04facd85d359404abcf5e994a71241fc835",
     "homepage": "https://git-scm.com",
     "keg_only": false,
     "license": "GPL-2.0-only AND GPL-2.0-or-later AND LGPL-2.1-or-later AND BSD-3-Clause AND MIT",
     "name": "git",
-    "revision": 2,
-    "ruby_source_sha256": "5884e345d5e79ae925821bc8b753a7c1a56ffef130aa479e64940a6888af0092",
+    "revision": 0,
+    "ruby_source_sha256": "d7659666a0827d341f9322372333a04facd85d359404abcf5e994a71241fc835",
     "test_dependencies": [],
     "uses_from_macos": [
+      "curl",
       "expat"
     ],
-    "version": "2.56.0"
+    "version": "2.56.1"
   },
   "hello": {
     "bottle_tags_in_source": null,

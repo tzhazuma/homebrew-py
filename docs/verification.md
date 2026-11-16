@@ -32,6 +32,21 @@ Closed the documented partial areas across all owners; full suite grew from
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
 
+## Weekly maintenance 2026-11-16
+
+- Upstream: Homebrew/brew `1cd7b3e134` → `7d562e1c8f`;
+  Homebrew/homebrew-core `24556e4c73` → `0d406593ad`.
+- Refreshed the six requested fixtures from homebrew-core at
+  `0d406593ad`: hello, git, curl, python@3.12, openssl@3, libslirp.
+  Only `git.rb` changed: version 2.56.0 revision 2 → **2.56.1 revision 0**.
+  Updated its expected metadata/dependencies/checksum; full corpus check passes.
+- Reviewed weekly Ruby refactors (`Formulary::FromAPI` extraction,
+  `Utils::Curl::Responses`, install steps/list/info changes). These are internal
+  reorganizations with no pybrew shim/parser change required.
+- Upstream exploration PR Homebrew/brew#24362 remains **closed**; maintainer
+  replied “Not interested in this, sorry.” No resubmission.
+- Full suite: **1426 passed, 6 skipped**; real install verified.
+
 ## Upstream sync 2026-11-15
 
 - Upstream: Homebrew/brew `fc51ba6b2f` → `1cd7b3e134`;
