@@ -13,13 +13,13 @@
     },
     "repo": "Homebrew/brew"
   },
-  "checked_at": "2026-11-16T01:00:19+00:00",
+  "checked_at": "2026-11-16T07:44:26+00:00",
   "core": {
     "default_branch": "main",
-    "head_date": "2026-11-15T22:32:23Z",
-    "head_message": "Merge pull request #325727 from Homebrew/bump-qsv-29.0.0",
-    "head_sha": "0d406593ad16e61d853778fa6827f50178660217",
-    "head_url": "https://github.com/Homebrew/homebrew-core/commit/0d406593ad16e61d853778fa6827f50178660217",
+    "head_date": "2026-11-16T06:58:11Z",
+    "head_message": "Merge pull request #325788 from Homebrew/bump-act-0.2.98",
+    "head_sha": "3c186c7456091f79daffd058b27b8bcd76132f88",
+    "head_url": "https://github.com/Homebrew/homebrew-core/commit/3c186c7456091f79daffd058b27b8bcd76132f88",
     "release": null,
     "repo": "Homebrew/homebrew-core"
   }
