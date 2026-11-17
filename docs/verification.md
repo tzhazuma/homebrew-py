@@ -45,6 +45,7 @@ Closed the documented partial areas across all owners; full suite grew from
   attestation work is optional supply-chain verification outside the current
   install path. No parser/shim change required.
 - Full suite: **1426 passed, 6 skipped**; real install verified.
+- Commit `d289ab0`; CI `44025822743` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Weekly maintenance 2026-11-16
 
