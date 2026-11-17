@@ -1,25 +1,20 @@
 {
   "brew": {
     "default_branch": "main",
-    "head_date": "2026-11-16T00:29:54Z",
-    "head_message": "Merge pull request #24631 from Homebrew/sponsors-maintainers-man-completions",
-    "head_sha": "7d562e1c8f8d233c822eb029c33a6ce1a4a147d6",
-    "head_url": "https://github.com/Homebrew/brew/commit/7d562e1c8f8d233c822eb029c33a6ce1a4a147d6",
-    "release": {
-      "name": "7.0.13",
-      "published_at": "2026-11-09T08:34:38Z",
-      "tag": "7.0.13",
-      "url": "https://github.com/Homebrew/brew/releases/tag/7.0.13"
-    },
+    "head_date": "2026-11-16T16:47:33Z",
+    "head_message": "Merge pull request #24629 from Homebrew/disk-usage-string-walk",
+    "head_sha": "b63354cf393a1779a8e0d7ab6a52eed05c61171d",
+    "head_url": "https://github.com/Homebrew/brew/commit/b63354cf393a1779a8e0d7ab6a52eed05c61171d",
+    "release": null,
     "repo": "Homebrew/brew"
   },
-  "checked_at": "2026-11-16T07:44:26+00:00",
+  "checked_at": "2026-11-17T05:31:50+00:00",
   "core": {
     "default_branch": "main",
-    "head_date": "2026-11-16T06:58:11Z",
-    "head_message": "Merge pull request #325788 from Homebrew/bump-act-0.2.98",
-    "head_sha": "3c186c7456091f79daffd058b27b8bcd76132f88",
-    "head_url": "https://github.com/Homebrew/homebrew-core/commit/3c186c7456091f79daffd058b27b8bcd76132f88",
+    "head_date": "2026-11-17T04:21:36Z",
+    "head_message": "Merge pull request #326029 from Homebrew/pkgconf-head",
+    "head_sha": "1b1c05e58e551a40872b44cc8396b0dd861547d9",
+    "head_url": "https://github.com/Homebrew/homebrew-core/commit/1b1c05e58e551a40872b44cc8396b0dd861547d9",
     "release": null,
     "repo": "Homebrew/homebrew-core"
   }

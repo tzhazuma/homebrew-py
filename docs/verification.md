@@ -32,6 +32,20 @@ Closed the documented partial areas across all owners; full suite grew from
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
 
+## Upstream sync 2026-11-17
+
+- Upstream: Homebrew/brew `7d562e1c8f` → `b63354cf39`;
+  Homebrew/homebrew-core `0d406593ad` → `1b1c05e58e`.
+- New release: **Homebrew 7.0.14** (2026-11-16), replacing 7.0.13 in the
+  baseline. Release notes cover typed option APIs, cask/info unification,
+  cask migrations/analytics, version comparison, and bottle manifest checksums.
+- Relevant package-path additions: per-bottle `manifest_sha256` metadata and
+  sigstore attestation scaffolding. pybrew downloads bottle blobs directly by
+  their archive SHA-256 and does not need the OCI manifest checksum; the
+  attestation work is optional supply-chain verification outside the current
+  install path. No parser/shim change required.
+- Full suite: **1426 passed, 6 skipped**; real install verified.
+
 ## Weekly maintenance 2026-11-16
 
 - Upstream: Homebrew/brew `1cd7b3e134` → `7d562e1c8f`;
