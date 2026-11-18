@@ -32,6 +32,17 @@ Closed the documented partial areas across all owners; full suite grew from
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
 
+## Upstream sync 2026-11-18
+
+- Upstream: Homebrew/brew `b63354cf39` → `b43c73f823`;
+  Homebrew/homebrew-core `1b1c05e58e` → `156bc81a26`.
+- Large internal refactor: one-line method bodies, `Formula.all(core_names:)`,
+  direct `formula.prefix`, faster `uses`/description cache API paths, sigstore
+  verifier, and sudo/system-command consolidation. No Formula DSL or cask
+  language additions were introduced.
+- pybrew's public parser/shim behavior is unchanged; no code change required.
+- Full suite: **1426 passed, 6 skipped**; real install verified.
+
 ## Upstream sync 2026-11-17
 
 - Upstream: Homebrew/brew `7d562e1c8f` → `b63354cf39`;

@@ -1,20 +1,25 @@
 {
   "brew": {
     "default_branch": "main",
-    "head_date": "2026-11-16T16:47:33Z",
-    "head_message": "Merge pull request #24629 from Homebrew/disk-usage-string-walk",
-    "head_sha": "b63354cf393a1779a8e0d7ab6a52eed05c61171d",
-    "head_url": "https://github.com/Homebrew/brew/commit/b63354cf393a1779a8e0d7ab6a52eed05c61171d",
-    "release": null,
+    "head_date": "2026-11-17T17:10:22Z",
+    "head_message": "Merge pull request #24645 from Homebrew/own-sigstore-verifier",
+    "head_sha": "b43c73f8231d0308a0ce047bd8ad6e8dc6309f24",
+    "head_url": "https://github.com/Homebrew/brew/commit/b43c73f8231d0308a0ce047bd8ad6e8dc6309f24",
+    "release": {
+      "name": "7.0.14",
+      "published_at": "2026-11-16T09:31:45Z",
+      "tag": "7.0.14",
+      "url": "https://github.com/Homebrew/brew/releases/tag/7.0.14"
+    },
     "repo": "Homebrew/brew"
   },
-  "checked_at": "2026-11-17T05:31:50+00:00",
+  "checked_at": "2026-11-18T01:00:21+00:00",
   "core": {
     "default_branch": "main",
-    "head_date": "2026-11-17T04:21:36Z",
-    "head_message": "Merge pull request #326029 from Homebrew/pkgconf-head",
-    "head_sha": "1b1c05e58e551a40872b44cc8396b0dd861547d9",
-    "head_url": "https://github.com/Homebrew/homebrew-core/commit/1b1c05e58e551a40872b44cc8396b0dd861547d9",
+    "head_date": "2026-11-18T00:37:55Z",
+    "head_message": "Merge pull request #326241 from Homebrew/bump-wal-g-3.0.10",
+    "head_sha": "156bc81a267a4e0160c401b37bb5f5a1da4ba780",
+    "head_url": "https://github.com/Homebrew/homebrew-core/commit/156bc81a267a4e0160c401b37bb5f5a1da4ba780",
     "release": null,
     "repo": "Homebrew/homebrew-core"
   }
