@@ -42,6 +42,7 @@ Closed the documented partial areas across all owners; full suite grew from
   language additions were introduced.
 - pybrew's public parser/shim behavior is unchanged; no code change required.
 - Full suite: **1426 passed, 6 skipped**; real install verified.
+- Commit `ba6470d`; CI `44212589203` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Upstream sync 2026-11-17
 
