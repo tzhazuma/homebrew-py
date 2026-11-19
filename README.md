@@ -9,7 +9,7 @@ Formula 解析、依赖解析、Cellar、bottle 安装、链接/卸载和 receip
 > **状态：v0.1 原型（可运行、可测试）**
 >
 > - 1426 个测试通过（另有 6 个 opt-in 测试跳过；`pytest -q`）
-> - 对齐上游 Homebrew **7.0.14**（brew `b43c73f823`，homebrew-core `156bc81a26`）
+> - 对齐上游 Homebrew **7.0.15**（brew `3e47189a70`，homebrew-core `9223d9ce00`）
 > - 15 个真实 homebrew-core 公式（bash、git、curl、openssl@3、python@3.12 等）与
 >   `brew info --json=v2` 的元数据逐项对比通过
 > - 使用真实 `hello 2.12.3` Formula 完成 autotools 源码构建并运行成功

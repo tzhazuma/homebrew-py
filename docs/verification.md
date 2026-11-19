@@ -32,6 +32,20 @@ Closed the documented partial areas across all owners; full suite grew from
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
 
+## Upstream sync 2026-11-19
+
+- Upstream: Homebrew/brew `b43c73f823` → `3e47189a70`;
+  Homebrew/homebrew-core `156bc81a26` → `9223d9ce00`.
+- New release: **Homebrew 7.0.15** (2026-11-19), replacing 7.0.14 in the
+  baseline.
+- Relevant changes are mostly dry-run UX: bottle download sizes in install /
+  upgrade summaries, source-build counts and headings, cask `--all-platforms`
+  supported-platform filtering, and `prefix/libexec` cleanup handling. No
+  Formula DSL or Ruby shim API change.
+- pybrew's existing dry-run and cleanup paths are independent Python
+  implementations; no code change required this round.
+- Full suite: **1426 passed, 6 skipped**; real install verified.
+
 ## Upstream sync 2026-11-18
 
 - Upstream: Homebrew/brew `b63354cf39` → `b43c73f823`;
