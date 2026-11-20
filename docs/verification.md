@@ -51,6 +51,7 @@ Closed the documented partial areas across all owners; full suite grew from
 - The rest of the range is the large typed-keyword/RuboCop refactor; no further
   parser changes needed.
 - Full suite: **1427 passed, 6 skipped**; real install verified.
+- Commit `c440a19`; CI `44651431816` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Upstream sync 2026-11-19
 
