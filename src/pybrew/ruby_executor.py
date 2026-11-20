@@ -3382,6 +3382,26 @@ class PybrewDependencyRef
     []
   end
 
+  def opt_prefix
+    Pathname.new(File.join(PybrewFormulaRef.homebrew_prefix, "opt", @name))
+  end
+
+  def opt_bin
+    opt_prefix + "bin"
+  end
+
+  def opt_lib
+    opt_prefix + "lib"
+  end
+
+  def opt_include
+    opt_prefix + "include"
+  end
+
+  def opt_libexec
+    opt_prefix + "libexec"
+  end
+
   def to_s
     @name
   end
@@ -5651,14 +5671,30 @@ class PybrewFormulaRef
     @build ||= PybrewBuild.new
   end
 
-  def deps
-    Array(@info["dependencies"]).map do |dependency|
+  def deps(name = nil)
+    all = Array(@info["dependencies"]).map do |dependency|
       if dependency.is_a?(Hash)
         PybrewDependencyRef.new(dependency["name"], dependency["tags"])
       else
         PybrewDependencyRef.new(dependency)
       end
     end
+    return all if name.nil?
+
+    pattern = name.is_a?(Regexp) ? name : /^#{Regexp.escape(name.to_s)}(?:@\d[\d.]*)?$/
+    all.select do |dependency|
+      dependency.name.match?(pattern) ||
+        dependency.name.split("/").last.match?(pattern)
+    end
+  end
+
+  def dep(name)
+    matches = deps(name).uniq(&:name)
+    return matches.first if matches.length == 1
+
+    found = matches.map(&:name).join(", ")
+    found = "none" if found.empty?
+    raise "`#{full_name}` must declare exactly one dependency matching #{name.inspect}; found #{found}."
   end
 
   def dependency_category(key)
@@ -14872,6 +14908,61 @@ class PybrewTestContext < PybrewInstallContext
 
   def formula
     @test_formula
+  end
+
+  # Run a helper process for the duration of a test block, terminating and
+  # reaping it afterwards (Homebrew FormulaAssertions#with_test_process).
+  def with_test_process(executable, *args, signal: "TERM", **spawn_options)
+    pid = Process.spawn([executable.to_s, executable.to_s], *args, **spawn_options)
+    target = signal.start_with?("-") ? -pid : pid
+    begin
+      yield pid
+    ensure
+      reaped = begin
+        !Process.wait(pid, Process::WNOHANG).nil?
+      rescue Errno::ECHILD
+        true
+      end
+      unless reaped
+        signal_name = signal.delete_prefix("-").delete_prefix("SIG")
+        begin
+          Process.kill(signal_name, target)
+        rescue Errno::ESRCH, Errno::EPERM
+          target = pid
+          begin
+            Process.kill(signal_name, pid)
+          rescue Errno::ESRCH, Errno::EPERM
+            nil
+          end
+        end
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 5
+        until reaped
+          begin
+            reaped = !Process.wait(pid, Process::WNOHANG).nil?
+          rescue Errno::ECHILD
+            reaped = true
+          end
+          break if reaped
+
+          remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          break if remaining <= 0
+
+          sleep [0.1, remaining].min
+        end
+        unless reaped
+          begin
+            Process.kill("KILL", target)
+          rescue Errno::ESRCH, Errno::EPERM
+            nil
+          end
+          begin
+            Process.wait(pid)
+          rescue Errno::ECHILD
+            nil
+          end
+        end
+      end
+    end
   end
 
   def shell_output(command, expected_status = 0, stderr: false, env: nil, chdir: nil)

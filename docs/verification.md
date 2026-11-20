@@ -3,7 +3,7 @@
 ## Full parity batch 2026-11-05
 
 Closed the documented partial areas across all owners; full suite grew from
-1156 to **1426 passed, 6 skipped**.
+1156 to **1427 passed, 6 skipped**.
 
 - **Cask**: evaluator `zap` now captures trash/delete/rmdir/pkgutil; livecheck
   URL kwargs merge into request headers; installed caskfile falls back to JSON;
@@ -31,6 +31,26 @@ Closed the documented partial areas across all owners; full suite grew from
 - Commits `57d927e` + `54fa7c5`; CI `41973914882` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
+
+## Upstream sync 2026-11-20
+
+- Upstream: Homebrew/brew `3e47189a70` → `b39ed2c195`;
+  Homebrew/homebrew-core `9223d9ce00` → `1985de8283`.
+- New public Formula/Dependency APIs:
+  - `Formula#deps(name = nil)` with optionally-versioned/regexp filtering;
+  - `Formula#dep(name)` returning exactly one match;
+  - `Dependency#opt_prefix/opt_bin/opt_lib/opt_include/opt_libexec`;
+  - `FormulaAssertions#with_test_process` for background test helpers.
+- pybrew changes:
+  - Ruby shim `Formula#deps` now accepts an optional name/regexp and
+    `Formula#dep` enforces a single match;
+  - `PybrewDependencyRef` exposes the five `opt_*` paths;
+  - added `with_test_process` to both the install-test and formula-test Ruby
+    contexts, terminating/reaping the child;
+  - added a formula-test regression for the background helper.
+- The rest of the range is the large typed-keyword/RuboCop refactor; no further
+  parser changes needed.
+- Full suite: **1427 passed, 6 skipped**; real install verified.
 
 ## Upstream sync 2026-11-19
 

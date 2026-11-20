@@ -318,6 +318,21 @@ end
 
 
 @requires_ruby
+def test_with_test_process_reaps_background_process(tmp_path: Path) -> None:
+    source = """do
+  with_test_process("/bin/sleep", "10") do |pid|
+    assert_operator pid, :>, 0
+  end
+  assert true
+end
+"""
+    formula, config = _installed_formula(tmp_path, source)
+    result = run_formula_test(formula, config, ruby=_REAL_RUBY)
+
+    assert result.success is True
+
+
+@requires_ruby
 def test_output_assertion_failure_is_reported(tmp_path: Path) -> None:
     formula, config = _installed_formula(
         tmp_path, 'do\n  assert_output "expected-output", "actual-output"\nend'

@@ -1696,6 +1696,61 @@ class FormulaTestContext
   # ``stderr: true`` returns the captured standard error instead.
   # ``env:`` adds/overrides environment variables for the child only and
   # ``chdir:`` runs it in another directory.
+  # Homebrew FormulaAssertions#with_test_process: run a helper for the
+  # duration of the block, then terminate and reap it.
+  def with_test_process(executable, *args, signal: "TERM", **spawn_options)
+    pid = Process.spawn([executable.to_s, executable.to_s], *args, **spawn_options)
+    target = signal.start_with?("-") ? -pid : pid
+    begin
+      yield pid
+    ensure
+      reaped = begin
+        !Process.wait(pid, Process::WNOHANG).nil?
+      rescue Errno::ECHILD
+        true
+      end
+      unless reaped
+        signal_name = signal.delete_prefix("-").delete_prefix("SIG")
+        begin
+          Process.kill(signal_name, target)
+        rescue Errno::ESRCH, Errno::EPERM
+          target = pid
+          begin
+            Process.kill(signal_name, pid)
+          rescue Errno::ESRCH, Errno::EPERM
+            nil
+          end
+        end
+        deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + 5
+        until reaped
+          begin
+            reaped = !Process.wait(pid, Process::WNOHANG).nil?
+          rescue Errno::ECHILD
+            reaped = true
+          end
+          break if reaped
+
+          remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          break if remaining <= 0
+
+          sleep [0.1, remaining].min
+        end
+        unless reaped
+          begin
+            Process.kill("KILL", target)
+          rescue Errno::ESRCH, Errno::EPERM
+            nil
+          end
+          begin
+            Process.wait(pid)
+          rescue Errno::ECHILD
+            nil
+          end
+        end
+      end
+    end
+  end
+
   def shell_output(command, expected_status = 0, stderr: false, env: nil, chdir: nil)
     command = resolve_command(command)
     stdout, stderr_text, status = run_shell(command, nil, env: env, chdir: chdir)

@@ -1,10 +1,10 @@
 {
   "brew": {
     "default_branch": "main",
-    "head_date": "2026-11-19T01:25:46Z",
-    "head_message": "Merge pull request #24682 from Homebrew/bump-portable-ruby-4.0.10",
-    "head_sha": "3e47189a707c739ee1278a28a3b845f5834574e6",
-    "head_url": "https://github.com/Homebrew/brew/commit/3e47189a707c739ee1278a28a3b845f5834574e6",
+    "head_date": "2026-11-19T18:04:14Z",
+    "head_message": "Merge pull request #24694 from Homebrew/arithmetic-env-values",
+    "head_sha": "b39ed2c1958182c9fc90fa87366d4510021ecf75",
+    "head_url": "https://github.com/Homebrew/brew/commit/b39ed2c1958182c9fc90fa87366d4510021ecf75",
     "release": {
       "name": "7.0.15",
       "published_at": "2026-11-19T01:53:22Z",
@@ -13,13 +13,13 @@
     },
     "repo": "Homebrew/brew"
   },
-  "checked_at": "2026-11-19T07:27:36+00:00",
+  "checked_at": "2026-11-20T01:00:06+00:00",
   "core": {
     "default_branch": "main",
-    "head_date": "2026-11-19T06:12:20Z",
-    "head_message": "Merge pull request #326521 from Homebrew/bump-libnfs-8.1.0",
-    "head_sha": "9223d9ce00fb27d1f1d11f6ca06269f8fcb6cbb7",
-    "head_url": "https://github.com/Homebrew/homebrew-core/commit/9223d9ce00fb27d1f1d11f6ca06269f8fcb6cbb7",
+    "head_date": "2026-11-20T00:24:31Z",
+    "head_message": "Merge pull request #326734 from Homebrew/bump-maki-0.7.3",
+    "head_sha": "1985de828309fb51c176f1faf5aaf83e72eadae8",
+    "head_url": "https://github.com/Homebrew/homebrew-core/commit/1985de828309fb51c176f1faf5aaf83e72eadae8",
     "release": null,
     "repo": "Homebrew/homebrew-core"
   }

@@ -822,6 +822,16 @@ def test_formula_object_metadata_paths_and_dependencies(
     ref.runtime_formula_dependencies(stop_at_untrusted: true).map { |dep| dep.name }.join(",")
   )
   (prefix/"formula-dep-untrusted").write ref.deps.first.untrusted?.to_s
+  dep_ref = ref.dep("dep-runtime")
+  (prefix/"formula-dep-paths").write [
+    dep_ref.name,
+    dep_ref.opt_prefix.to_s,
+    dep_ref.opt_bin.to_s,
+    dep_ref.opt_lib.to_s,
+    dep_ref.opt_include.to_s,
+    dep_ref.opt_libexec.to_s,
+    ref.deps(/^dep-runtime/).length,
+  ].join("|")
   (prefix/"formula-recursive").write(
     ref.recursive_dependencies.map { |dep| dep.name }.join(",")
   )
@@ -874,6 +884,14 @@ def test_formula_object_metadata_paths_and_dependencies(
     assert (keg / "formula-runtime-kw").read_text() == "dep-runtime"
     assert (keg / "formula-runtime-formula").read_text() == "dep-runtime"
     assert (keg / "formula-dep-untrusted").read_text() == "false"
+    dep_parts = (keg / "formula-dep-paths").read_text().split("|")
+    assert dep_parts[0] == "dep-runtime"
+    assert dep_parts[1] == str(prefix / "opt" / "dep-runtime")
+    assert dep_parts[2] == str(prefix / "opt" / "dep-runtime" / "bin")
+    assert dep_parts[3] == str(prefix / "opt" / "dep-runtime" / "lib")
+    assert dep_parts[4] == str(prefix / "opt" / "dep-runtime" / "include")
+    assert dep_parts[5] == str(prefix / "opt" / "dep-runtime" / "libexec")
+    assert dep_parts[6] == "1"
     assert (keg / "formula-recursive").read_text() == (
         "dep-runtime,dep-build,dep-test,dep-optional"
     )
