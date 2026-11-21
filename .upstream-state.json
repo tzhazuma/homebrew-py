@@ -1,10 +1,10 @@
 {
   "brew": {
     "default_branch": "main",
-    "head_date": "2026-11-19T18:04:14Z",
-    "head_message": "Merge pull request #24694 from Homebrew/arithmetic-env-values",
-    "head_sha": "b39ed2c1958182c9fc90fa87366d4510021ecf75",
-    "head_url": "https://github.com/Homebrew/brew/commit/b39ed2c1958182c9fc90fa87366d4510021ecf75",
+    "head_date": "2026-11-20T22:14:16Z",
+    "head_message": "Merge pull request #24721 from dduugg/type-check-splat-calls",
+    "head_sha": "e40c695f619441e4c13b6cf51f8f0484ea091dd5",
+    "head_url": "https://github.com/Homebrew/brew/commit/e40c695f619441e4c13b6cf51f8f0484ea091dd5",
     "release": {
       "name": "7.0.15",
       "published_at": "2026-11-19T01:53:22Z",
@@ -13,13 +13,13 @@
     },
     "repo": "Homebrew/brew"
   },
-  "checked_at": "2026-11-20T01:00:06+00:00",
+  "checked_at": "2026-11-21T01:00:08+00:00",
   "core": {
     "default_branch": "main",
-    "head_date": "2026-11-20T00:24:31Z",
-    "head_message": "Merge pull request #326734 from Homebrew/bump-maki-0.7.3",
-    "head_sha": "1985de828309fb51c176f1faf5aaf83e72eadae8",
-    "head_url": "https://github.com/Homebrew/homebrew-core/commit/1985de828309fb51c176f1faf5aaf83e72eadae8",
+    "head_date": "2026-11-21T00:17:05Z",
+    "head_message": "Merge pull request #326948 from Homebrew/bump-tidemail-1.10.1",
+    "head_sha": "0897c8f82bf1db4582264343110714f6233912c0",
+    "head_url": "https://github.com/Homebrew/homebrew-core/commit/0897c8f82bf1db4582264343110714f6233912c0",
     "release": null,
     "repo": "Homebrew/homebrew-core"
   }

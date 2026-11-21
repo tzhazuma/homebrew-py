@@ -32,6 +32,20 @@ Closed the documented partial areas across all owners; full suite grew from
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
 
+## Upstream sync 2026-11-21
+
+- Upstream: Homebrew/brew `b39ed2c195` → `e40c695f61`;
+  Homebrew/homebrew-core `1985de8283` → `0897c8f82b`.
+- Large DSL extraction: homepage/deprecate-disable/on-system/livecheck and
+  `depends_on` moved into shared modules used by Formula, SoftwareSpec and
+  Cask. No new user-facing DSL syntax.
+- `Version` gained the `StringToken` pre-release/lettered-patch ordering,
+  `eql?`/`hash` changes, and Erlang `R16B-2` token normalization.
+- pybrew's existing `compare_versions` was checked against Homebrew 7.0.15 for
+  a full matrix (`1.0`, `1.0a/b/p1`, `1.0-alpha`, `1.0.0-rc1`, `R16B-2`,
+  `R16B2`) and matches every comparison; no further code change was needed.
+- Full suite: **1427 passed, 6 skipped**; real install verified.
+
 ## Upstream sync 2026-11-20
 
 - Upstream: Homebrew/brew `3e47189a70` → `b39ed2c195`;
