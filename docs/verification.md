@@ -45,6 +45,7 @@ Closed the documented partial areas across all owners; full suite grew from
   a full matrix (`1.0`, `1.0a/b/p1`, `1.0-alpha`, `1.0.0-rc1`, `R16B-2`,
   `R16B2`) and matches every comparison; no further code change was needed.
 - Full suite: **1427 passed, 6 skipped**; real install verified.
+- Commit `2b61d43`; CI `44847980919` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Upstream sync 2026-11-20
 
