@@ -5973,6 +5973,30 @@ class PybrewFormulaRef
     Pathname.new(@info["homebrew_prefix"].to_s) + "var/log" + name
   end
 
+  def build_options_log
+    logs/"00.options.out"
+  end
+
+  def logged_build_options
+    path = build_options_log
+    return [] unless path.file?
+
+    name, *flags = path.read.split
+    name == full_name ? flags : []
+  rescue Errno::ENOENT
+    []
+  end
+
+  def incompatible?
+    false
+  end
+
+  def installed_runtime_dependency_names
+    runtime_dependencies.map do |dependency|
+      dependency.name.split("/").last
+    end
+  end
+
   def opt_elisp
     opt_prefix + "share/emacs/site-lisp" + name
   end

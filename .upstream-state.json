@@ -1,10 +1,10 @@
 {
   "brew": {
     "default_branch": "main",
-    "head_date": "2026-11-20T22:14:16Z",
-    "head_message": "Merge pull request #24721 from dduugg/type-check-splat-calls",
-    "head_sha": "e40c695f619441e4c13b6cf51f8f0484ea091dd5",
-    "head_url": "https://github.com/Homebrew/brew/commit/e40c695f619441e4c13b6cf51f8f0484ea091dd5",
+    "head_date": "2026-11-22T20:14:27Z",
+    "head_message": "Merge pull request #24735 from Homebrew/simplify-ternaries-and-interpolation",
+    "head_sha": "7de9ab657487a5fc579bfe14350bc6787fe86442",
+    "head_url": "https://github.com/Homebrew/brew/commit/7de9ab657487a5fc579bfe14350bc6787fe86442",
     "release": {
       "name": "7.0.15",
       "published_at": "2026-11-19T01:53:22Z",
@@ -13,13 +13,13 @@
     },
     "repo": "Homebrew/brew"
   },
-  "checked_at": "2026-11-21T01:00:08+00:00",
+  "checked_at": "2026-11-23T01:01:28+00:00",
   "core": {
     "default_branch": "main",
-    "head_date": "2026-11-21T00:17:05Z",
-    "head_message": "Merge pull request #326948 from Homebrew/bump-tidemail-1.10.1",
-    "head_sha": "0897c8f82bf1db4582264343110714f6233912c0",
-    "head_url": "https://github.com/Homebrew/homebrew-core/commit/0897c8f82bf1db4582264343110714f6233912c0",
+    "head_date": "2026-11-23T00:44:18Z",
+    "head_message": "Merge pull request #327258 from Homebrew/bump-gitoxide-0.62.0",
+    "head_sha": "a8e00c7f2680d9c00bce08ffc63e10eb0db156ab",
+    "head_url": "https://github.com/Homebrew/homebrew-core/commit/a8e00c7f2680d9c00bce08ffc63e10eb0db156ab",
     "release": null,
     "repo": "Homebrew/homebrew-core"
   }

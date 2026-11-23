@@ -116,13 +116,13 @@
       "zstd"
     ],
     "desc": "Get a file from an HTTP, HTTPS or FTP server",
-    "homebrew_api_sha256": "33e932ab597435e4b7013abdcea8c1737e12db3fe77e4cf475d15fc831a1cf9a",
+    "homebrew_api_sha256": "31d148bdb8d9c67aa2c88f3c938c512624d0948f2140d149292e2ee3d5afcdea",
     "homepage": "https://curl.se",
     "keg_only": true,
     "license": "curl",
     "name": "curl",
     "revision": 0,
-    "ruby_source_sha256": "33e932ab597435e4b7013abdcea8c1737e12db3fe77e4cf475d15fc831a1cf9a",
+    "ruby_source_sha256": "31d148bdb8d9c67aa2c88f3c938c512624d0948f2140d149292e2ee3d5afcdea",
     "test_dependencies": [
       "pkgconf"
     ],
@@ -243,13 +243,13 @@
       "xz"
     ],
     "desc": "Interpreted, interactive, object-oriented programming language",
-    "homebrew_api_sha256": "c4f505d395c0b49bb4fb3b3ba4aa6394c46c3dcdb364a9ad11f9cb22c17e5ce9",
+    "homebrew_api_sha256": "fbbba2c0729d6e978f4063da260aa9a69c175400d60e4eea56758987a9d3cc08",
     "homepage": "https://www.python.org/",
     "keg_only": false,
     "license": "Python-2.0",
     "name": "python@3.12",
     "revision": 0,
-    "ruby_source_sha256": "c4f505d395c0b49bb4fb3b3ba4aa6394c46c3dcdb364a9ad11f9cb22c17e5ce9",
+    "ruby_source_sha256": "fbbba2c0729d6e978f4063da260aa9a69c175400d60e4eea56758987a9d3cc08",
     "test_dependencies": [],
     "uses_from_macos": [
       "bzip2",

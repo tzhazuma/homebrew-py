@@ -32,6 +32,20 @@ Closed the documented partial areas across all owners; full suite grew from
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
 
+## Weekly maintenance 2026-11-23
+
+- Upstream: Homebrew/brew `e40c695f61` → `7de9ab6574` (through the 11-22
+  `62a9ad2642` sync); Homebrew/homebrew-core `0897c8f82b` → `a8e00c7f26`.
+- Refreshed the six requested fixtures from homebrew-core `a8e00c7f26`:
+  hello, git, curl, python@3.12, openssl@3, libslirp. Only curl and
+  python@3.12 changed; updated their fixture checksums in `expected.json`.
+- New Formula APIs in the range: `installed_runtime_dependency_names`,
+  `incompatible?`, `build_options_log`, and `logged_build_options`. Implemented
+  them in the Ruby shim and extended the formula-object regression test.
+- Upstream PR Homebrew/brew#24362 remains **closed**; last maintainer reply is
+  still “Not interested in this, sorry.” No resubmission.
+- Full suite: **1427 passed, 6 skipped**; real install verified.
+
 ## Upstream sync 2026-11-21
 
 - Upstream: Homebrew/brew `b39ed2c195` → `e40c695f61`;

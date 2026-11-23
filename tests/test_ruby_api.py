@@ -823,6 +823,8 @@ def test_formula_object_metadata_paths_and_dependencies(
   )
   (prefix/"formula-dep-untrusted").write ref.deps.first.untrusted?.to_s
   dep_ref = ref.dep("dep-runtime")
+  (prefix/"formula-installed-deps").write ref.installed_runtime_dependency_names.join(",")
+  (prefix/"formula-incompatible").write ref.incompatible?.to_s
   (prefix/"formula-dep-paths").write [
     dep_ref.name,
     dep_ref.opt_prefix.to_s,
@@ -884,6 +886,8 @@ def test_formula_object_metadata_paths_and_dependencies(
     assert (keg / "formula-runtime-kw").read_text() == "dep-runtime"
     assert (keg / "formula-runtime-formula").read_text() == "dep-runtime"
     assert (keg / "formula-dep-untrusted").read_text() == "false"
+    assert (keg / "formula-installed-deps").read_text() == "dep-runtime"
+    assert (keg / "formula-incompatible").read_text() == "false"
     dep_parts = (keg / "formula-dep-paths").read_text().split("|")
     assert dep_parts[0] == "dep-runtime"
     assert dep_parts[1] == str(prefix / "opt" / "dep-runtime")
