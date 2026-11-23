@@ -13,13 +13,13 @@
     },
     "repo": "Homebrew/brew"
   },
-  "checked_at": "2026-11-23T01:01:28+00:00",
+  "checked_at": "2026-11-23T08:42:38+00:00",
   "core": {
     "default_branch": "main",
-    "head_date": "2026-11-23T00:44:18Z",
-    "head_message": "Merge pull request #327258 from Homebrew/bump-gitoxide-0.62.0",
-    "head_sha": "a8e00c7f2680d9c00bce08ffc63e10eb0db156ab",
-    "head_url": "https://github.com/Homebrew/homebrew-core/commit/a8e00c7f2680d9c00bce08ffc63e10eb0db156ab",
+    "head_date": "2026-11-23T08:34:04Z",
+    "head_message": "Merge pull request #327333 from Homebrew/bump-auto-editor-31.10.0",
+    "head_sha": "5d148843d74688ba8a8d4ab403285d4c2a3cce3f",
+    "head_url": "https://github.com/Homebrew/homebrew-core/commit/5d148843d74688ba8a8d4ab403285d4c2a3cce3f",
     "release": null,
     "repo": "Homebrew/homebrew-core"
   }
