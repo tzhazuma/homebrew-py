@@ -32,6 +32,22 @@ Closed the documented partial areas across all owners; full suite grew from
 - Inventory of the remaining 0 partial areas: `docs/parity-backlog.md`.
 
 
+## Upstream sync 2026-11-24/25
+
+- Upstream: Homebrew/brew `7de9ab6574` → `6973e0be90`;
+  Homebrew/homebrew-core `a8e00c7f26` → `52e20cf221`.
+- New release: **Homebrew 7.0.16** (2026-11-23), replacing 7.0.15 in the
+  baseline. Release notes include shared formula DSL helpers, offline installed
+  prefix resolution, API service preservation, and cask/info fixes.
+- Relevant package-path changes:
+  - tap Git redirects now update installed formula/cask receipts;
+  - cleanup's cask handling was consolidated and legacy cask download cleanup
+    removed;
+  - `brew fetch --verbose` prints successful download locations;
+  - API cache envelope validation/delay reporting hardened.
+- No new Formula DSL syntax; pybrew's existing parser/shim remains compatible.
+- Full suite: **1427 passed, 6 skipped**; real install verified.
+
 ## Weekly maintenance 2026-11-23
 
 - Upstream: Homebrew/brew `e40c695f61` → `7de9ab6574` (through the 11-22

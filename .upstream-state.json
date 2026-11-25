@@ -1,25 +1,25 @@
 {
   "brew": {
     "default_branch": "main",
-    "head_date": "2026-11-22T20:14:27Z",
-    "head_message": "Merge pull request #24735 from Homebrew/simplify-ternaries-and-interpolation",
-    "head_sha": "7de9ab657487a5fc579bfe14350bc6787fe86442",
-    "head_url": "https://github.com/Homebrew/brew/commit/7de9ab657487a5fc579bfe14350bc6787fe86442",
+    "head_date": "2026-11-24T16:24:02Z",
+    "head_message": "Merge pull request #24765 from Homebrew/untap-cask-token-collision",
+    "head_sha": "6973e0be90cdc54a0cd12da71a534ad6db8d5cc7",
+    "head_url": "https://github.com/Homebrew/brew/commit/6973e0be90cdc54a0cd12da71a534ad6db8d5cc7",
     "release": {
-      "name": "7.0.15",
-      "published_at": "2026-11-19T01:53:22Z",
-      "tag": "7.0.15",
-      "url": "https://github.com/Homebrew/brew/releases/tag/7.0.15"
+      "name": "7.0.16",
+      "published_at": "2026-11-23T12:58:56Z",
+      "tag": "7.0.16",
+      "url": "https://github.com/Homebrew/brew/releases/tag/7.0.16"
     },
     "repo": "Homebrew/brew"
   },
-  "checked_at": "2026-11-23T08:42:38+00:00",
+  "checked_at": "2026-11-25T01:02:01+00:00",
   "core": {
     "default_branch": "main",
-    "head_date": "2026-11-23T08:34:04Z",
-    "head_message": "Merge pull request #327333 from Homebrew/bump-auto-editor-31.10.0",
-    "head_sha": "5d148843d74688ba8a8d4ab403285d4c2a3cce3f",
-    "head_url": "https://github.com/Homebrew/homebrew-core/commit/5d148843d74688ba8a8d4ab403285d4c2a3cce3f",
+    "head_date": "2026-11-25T00:49:35Z",
+    "head_message": "Merge pull request #327510 from Homebrew/bump-zstd-1.6.0",
+    "head_sha": "52e20cf22183237fe0ceebcd25007b44afc9f846",
+    "head_url": "https://github.com/Homebrew/homebrew-core/commit/52e20cf22183237fe0ceebcd25007b44afc9f846",
     "release": null,
     "repo": "Homebrew/homebrew-core"
   }
