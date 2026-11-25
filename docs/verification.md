@@ -47,6 +47,7 @@ Closed the documented partial areas across all owners; full suite grew from
   - API cache envelope validation/delay reporting hardened.
 - No new Formula DSL syntax; pybrew's existing parser/shim remains compatible.
 - Full suite: **1427 passed, 6 skipped**; real install verified.
+- Commit `2ffdb0d`; CI `45527060280` green on Ubuntu 22.04 py3.9, Ubuntu latest py3.12 and macOS py3.12.
 
 ## Weekly maintenance 2026-11-23
 
